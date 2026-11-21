@@ -67,13 +67,19 @@ export function createDemoData() {
       { board_id: ids.board, user_id: ids.currentUser, role: "admin" },
       { board_id: ids.board, user_id: "20000000-0000-4000-8000-000000000002", role: "member" },
       { board_id: ids.board, user_id: "20000000-0000-4000-8000-000000000003", role: "member" },
-      { board_id: ids.board, user_id: "20000000-0000-4000-8000-000000000004", role: "member" }
+      { board_id: ids.board, user_id: "20000000-0000-4000-8000-000000000004", role: "member" },
+      { board_id: "30000000-0000-4000-8000-000000000002", user_id: ids.currentUser, role: "admin" },
+      { board_id: "30000000-0000-4000-8000-000000000002", user_id: "20000000-0000-4000-8000-000000000002", role: "member" }
     ],
     lists: [
       { id: ids.backlog, board_id: ids.board, name: "To do", position: 1 },
       { id: ids.progress, board_id: ids.board, name: "In progress", position: 2 },
       { id: ids.review, board_id: ids.board, name: "In review", position: 3 },
-      { id: ids.done, board_id: ids.board, name: "Done", position: 4 }
+      { id: ids.done, board_id: ids.board, name: "Done", position: 4 },
+      { id: "40000000-0000-4000-8000-000000000005", board_id: "30000000-0000-4000-8000-000000000002", name: "To do", position: 1 },
+      { id: "40000000-0000-4000-8000-000000000006", board_id: "30000000-0000-4000-8000-000000000002", name: "In progress", position: 2 },
+      { id: "40000000-0000-4000-8000-000000000007", board_id: "30000000-0000-4000-8000-000000000002", name: "In review", position: 3 },
+      { id: "40000000-0000-4000-8000-000000000008", board_id: "30000000-0000-4000-8000-000000000002", name: "Done", position: 4 }
     ],
     tasks: [
       {
