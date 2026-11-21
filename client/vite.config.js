@@ -15,7 +15,7 @@ export default defineConfig({
         target: API_TARGET,
         changeOrigin: true,
       },
-      "/socket.io": {
+      "/ws": {
         target: API_TARGET,
         changeOrigin: true,
         ws: true,
