@@ -122,7 +122,12 @@ campusforge-teams/
 │   └── src/
 │       ├── App.jsx
 │       ├── index.css
-│       └── main.jsx
+│       ├── main.jsx
+│       ├── components/
+│       │   ├── BoardView.jsx
+│       │   └── TaskDialog.jsx
+│       └── data/
+│           └── demoData.js
 │
 └── server/
     ├── Cargo.toml
@@ -195,6 +200,22 @@ Run the Rust backend in release mode:
 npm start
 ```
 
+## 🖥️ Frontend Milestone
+
+The first frontend milestone is implemented with the selected React + Vite stack.
+
+- Overview dashboard with project and task summaries.
+- Project directory and Kanban board with drag-and-drop task movement.
+- Create, edit, and delete task flows with priority, due date, list, and assignee fields.
+- Task comments and a recent activity timeline.
+- Workspace team directory, task search, and filters.
+- Responsive layout for desktop, tablet, and mobile screens.
+- Browser-local demo persistence so interactions can be explored before the API is ready.
+
+The frontend uses sample records shaped around the planned relational entities: `workspaces`, `workspace_members`, `users`, `boards`, `board_members`, `lists`, `tasks`, `task_assignees`, `comments`, and `activity_events`. This is a UI prototype data layer, not a replacement for PostgreSQL.
+
+**Not yet connected:** login/registration, invitations, backend CRUD, server-side authorization, cross-user updates, and native WebSocket events.
+
 ## 🔒 Security Considerations
 
 - Store passwords using Argon2 password hashing.
@@ -226,7 +247,9 @@ AI-assisted tools may be used to understand concepts, explore implementation app
 
 **Status:** Initial development.
 
-The repository currently contains the initial React dashboard and a minimal Axum health endpoint. Database connectivity, authentication, application APIs, WebSocket collaboration, automated tests, and deployment are not yet complete.
+The repository now contains a responsive React workspace frontend with dashboard, project list, Kanban board, task editor, comments, team directory, activity feed, search, filters, drag-and-drop interactions, and browser-local demo persistence. The Rust server still exposes only a minimal health endpoint. PostgreSQL connectivity, authentication, application APIs, server persistence, WebSocket collaboration, automated tests, and deployment are not yet complete.
+
+**Frontend demo limitation:** Changes made in the browser preview are saved in local storage on that browser only. The current UI does not yet authenticate users or sync changes across devices/team members.
 
 ## 🎓 Challenge Information
 
