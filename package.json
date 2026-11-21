@@ -6,9 +6,11 @@
   "scripts": {
     "dev": "concurrently -k -n client,server -c blue,green \"npm:dev:client\" \"npm:dev:server\"",
     "dev:client": "npm --prefix client run dev",
-    "dev:server": "npm --prefix server run dev",
-    "build": "npm --prefix client run build",
-    "start": "npm --prefix server start"
+    "dev:server": "cargo run --manifest-path server/Cargo.toml",
+    "build": "npm --prefix client run build && cargo build --release --manifest-path server/Cargo.toml",
+    "build:client": "npm --prefix client run build",
+    "build:server": "cargo build --release --manifest-path server/Cargo.toml",
+    "start": "cargo run --release --manifest-path server/Cargo.toml"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"
