@@ -9,6 +9,7 @@ import {
 } from "@dnd-kit/core";
 import {
   SortableContext,
+  useDroppable,
   useSortable,
   verticalListSortingStrategy
 } from "@dnd-kit/sortable";
@@ -78,10 +79,9 @@ function SortableTask({ task, users, assigneeIds, onOpen }) {
 }
 
 function BoardColumn({ list, tasks, users, assigneesByTask, onOpenTask, onAddTask }) {
-  const { setNodeRef, isOver } = useSortable({
+  const { setNodeRef, isOver } = useDroppable({
     id: "list:" + list.id,
-    data: { type: "column", listId: list.id },
-    disabled: true
+    data: { type: "column", listId: list.id }
   });
 
   return (
