@@ -216,6 +216,18 @@ The frontend uses sample records shaped around the planned relational entities: 
 
 **Not yet connected:** login/registration, invitations, backend CRUD, server-side authorization, cross-user updates, and native WebSocket events.
 
+## 🎨 UI Design System
+
+The frontend uses a Cal.com-inspired neutral SaaS visual language adapted for CampusForge Teams. The full design reference and reusable tokens are documented in the root `DESIGN.md`.
+
+- Theme implementation: `client/src/styles/cal-theme.css`.
+- Theme entry point: imported by `client/src/main.jsx` after the base stylesheet.
+- Typography: Inter for display and interface text; JetBrains Mono is available for code-oriented UI.
+- Visual rules: white canvas, black primary actions, subtle gray surfaces and borders, 8–12px control/card radii, and restrained semantic colors for task status.
+- No additional runtime UI library is required. Existing React components, navigation, drag-and-drop, dialogs, and local demo behavior are retained.
+
+The Cal.com reference is an independent visual analysis and is not affiliated with or endorsed by Cal.com; source attribution is recorded in `DESIGN.md`.
+
 ## 🔒 Security Considerations
 
 - Store passwords using Argon2 password hashing.
