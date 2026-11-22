@@ -975,3 +975,65 @@ dialog.feature-modal::backdrop {
 }
 
 /* The sign-in form is the only content on the authentication page. */
+
+
+/* Expandable notification preferences, matching the workspace's disclosure menus. */
+.feature-preferences-panel.is-collapsed .feature-preferences-heading { margin-bottom: 0; }
+.feature-preferences-panel.is-expanded .feature-preferences-heading { margin-bottom: 14px; }
+.feature-preferences-toggle {
+  display: flex;
+  width: 100%;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 0;
+  border: 0;
+  border-radius: 8px;
+  color: #263229;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: color .16s ease, background .16s ease;
+}
+.feature-preferences-toggle:hover { color: #556b4c; background: #fbfcfa; }
+.feature-preferences-toggle:focus-visible {
+  outline: 3px solid rgba(103, 125, 89, .25);
+  outline-offset: 3px;
+}
+.feature-preferences-label {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  color: #19221c;
+  font-size: 13px;
+  font-weight: 750;
+  letter-spacing: -.2px;
+}
+.feature-preferences-label svg { flex: 0 0 auto; color: #65745f; }
+.feature-preferences-toggle > svg:last-child {
+  flex: 0 0 auto;
+  color: #667560;
+  transition: transform .22s ease;
+}
+.feature-preferences-toggle[aria-expanded="false"] > svg:last-child { transform: rotate(-90deg); }
+.feature-preferences-content {
+  display: grid;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition: grid-template-rows .25s ease, opacity .2s ease;
+}
+.feature-preferences-content.is-collapsed {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  pointer-events: none;
+}
+.feature-preferences-content-inner { min-height: 0; overflow: hidden; }
+@media (prefers-reduced-motion: reduce) {
+  .feature-preferences-toggle,
+  .feature-preferences-toggle > svg:last-child,
+  .feature-preferences-content {
+    transition: none !important;
+  }
+}
