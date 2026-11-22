@@ -146,7 +146,8 @@ function WorkloadPanel({ metrics, title = "Team workload" }) {
 
 export function DashboardOverview({ data, currentUser, onOpenBoard, onOpenTask, onCreateTask, onNavigate }) {
   const metrics = getWorkspaceMetrics(data);
-  const recentTasks = [...metrics.openTasks].sort((a, b) => (a.due_date || "9999").localeCompare(b.due_date || "9999")).slice(0, 4);
+  const myTaskIds = new Set(metrics.assignments.filter((assignment) => assignment.user_id === data.current_user_id).map((assignment) => assignment.task_id));
+  const recentTasks = metrics.openTasks.filter((task) => myTaskIds.has(task.id)).sort((a, b) => (a.due_date || "9999").localeCompare(b.due_date || "9999")).slice(0, 4);
   const events = [...metrics.events].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 4);
   const firstName = (currentUser?.full_name || "there").split(/\s+/)[0];
   const today = new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric" }).format(new Date());
