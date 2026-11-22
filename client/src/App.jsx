@@ -528,6 +528,8 @@ export default function App() {
   const [defaultListId, setDefaultListId] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notice, setNotice] = useState("");
+  const [logoutError, setLogoutError] = useState("");
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [realtimeVersion, setRealtimeVersion] = useState(0);
 
@@ -746,17 +748,29 @@ export default function App() {
   }
 
   async function logout() {
+    if (isLoggingOut) return;
+
+    setIsLoggingOut(true);
+    setLogoutError("");
     try {
+      // The server must confirm that it cleared the HttpOnly cookie before
+      // the UI reports a signed-out state.
       await authApi.logout();
-    } catch {
-      // Clear the local workspace view even when the API is unreachable.
+      clearStoredWorkspaceId();
+      setIsAuthenticated(false);
+      setData(null);
+      setActiveView("Overview");
+      setActiveBoardId("");
+      setNotice("");
+    } catch (error) {
+      // Keep the current workspace visible: the HttpOnly cookie may still be valid.
+      setLogoutError(
+        "Sign-out failed. Your session is still active. Please retry. " +
+        (error.message || "Check your connection and try again.")
+      );
+    } finally {
+      setIsLoggingOut(false);
     }
-    clearStoredWorkspaceId();
-    setIsAuthenticated(false);
-    setData(null);
-    setActiveView("Overview");
-    setActiveBoardId("");
-    setNotice("");
   }
 
   function openBoard(board) {
@@ -979,7 +993,21 @@ export default function App() {
             <section className="surface-panel settings-panel">
               <div className="settings-row"><div><strong>Signed-in account</strong><p>{currentUser?.full_name || "Workspace member"} · {currentUser?.email || ""}</p></div><span className="connection-badge"><i /> Authenticated</span></div>
               <div className="settings-row"><div><strong>Workspace data</strong><p>Boards, tasks, assignments, comments, and activity are loaded from the CampusForge API and saved in PostgreSQL.</p></div><span className="connection-badge"><i /> Connected</span></div>
-              <div className="settings-row"><div><strong>Session</strong><p>Sign out on this device. Your saved workspace data remains on the server.</p></div><button className="secondary-button danger-outline" type="button" onClick={logout}><LogOut size={15} /> Sign out</button></div>
+              <div className="settings-row">
+                <div>
+                  <strong>Session</strong>
+                  <p>Sign out on this device. Your saved workspace data remains on the server.</p>
+                  {logoutError && <p className="auth-error logout-error" role="alert">{logoutError}</p>}
+                </div>
+                <button
+                  className="secondary-button danger-outline"
+                  type="button"
+                  onClick={logout}
+                  disabled={isLoggingOut}
+                >
+                  <LogOut size={15} /> {isLoggingOut ? "Signing out..." : logoutError ? "Retry sign out" : "Sign out"}
+                </button>
+              </div>
             </section>
           </div>
         );
@@ -1018,9 +1046,12 @@ export default function App() {
           <p className="eyebrow">WORKSPACE CONNECTION</p>
           <h1>We couldn't load your workspace.</h1>
           <p>{loadError || "The API did not return workspace data."}</p>
+          {logoutError && <p className="auth-error logout-error" role="alert">{logoutError}</p>}
           <div className="auth-form">
             <button className="primary-button auth-submit" type="button" onClick={retryWorkspaceLoad}>Try again</button>
-            <button className="secondary-button" type="button" onClick={logout}>Sign out</button>
+            <button className="secondary-button" type="button" onClick={logout} disabled={isLoggingOut}>
+              {isLoggingOut ? "Signing out..." : logoutError ? "Retry sign out" : "Sign out"}
+            </button>
           </div>
         </section>
       </main>
