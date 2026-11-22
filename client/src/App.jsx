@@ -654,7 +654,7 @@ export default function App() {
       if (retryTimer) window.clearTimeout(retryTimer);
       socket?.close();
     };
-  }, [token]);
+  }, [token, data?.current_workspace_id]);
 
   useEffect(() => {
     if (!token || !data) {
