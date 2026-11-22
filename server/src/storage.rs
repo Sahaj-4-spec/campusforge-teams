@@ -94,6 +94,36 @@ impl StorageService {
         }
     }
 
+    pub async fn put_file(&self, key: &str, source: &Path, content_type: &str) -> Result<(), String> {
+        Self::validate_key(key)?;
+        match &self.backend {
+            Backend::Local { directory } => {
+                let destination = directory.join(key);
+                if let Some(parent) = destination.parent() {
+                    tokio::fs::create_dir_all(parent).await.map_err(|error| error.to_string())?;
+                }
+                if let Err(error) = tokio::fs::copy(source, &destination).await {
+                    let _ = tokio::fs::remove_file(&destination).await;
+                    return Err(error.to_string());
+                }
+                Ok(())
+            }
+            Backend::S3 { client, bucket } => {
+                let body = ByteStream::from_path(source).await
+                    .map_err(|error| format!("Could not stream upload file: {error}"))?;
+                client.put_object()
+                    .bucket(bucket)
+                    .key(key)
+                    .content_type(content_type)
+                    .body(body)
+                    .send()
+                    .await
+                    .map_err(|error| format!("Object storage upload failed: {error}"))?;
+                Ok(())
+            }
+        }
+    }
+
     pub async fn get(&self, key: &str) -> Result<Vec<u8>, String> {
         Self::validate_key(key)?;
         match &self.backend {
