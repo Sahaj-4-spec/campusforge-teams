@@ -1109,3 +1109,63 @@ a:focus-visible {
     transition-duration: .01ms !important;
   }
 }
+
+
+/* Authenticated application entry */
+.auth-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 40px 20px 72px;
+  position: relative;
+  background: #f7f7f6;
+}
+.auth-card {
+  width: min(100%, 440px);
+  padding: 34px;
+  background: #fff;
+  border: 1px solid #e8e8e6;
+  border-radius: 18px;
+  box-shadow: 0 18px 60px rgba(0,0,0,.06);
+}
+.auth-brand { display: inline-flex; margin-bottom: 42px; }
+.auth-intro { margin-bottom: 28px; }
+.auth-sparkle {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin-bottom: 14px;
+  color: #5852a3;
+  background: #f0efff;
+  border-radius: 10px;
+}
+.auth-intro h1 { margin: 6px 0 9px; font-size: clamp(27px, 6vw, 34px); line-height: 1.12; letter-spacing: -.045em; }
+.auth-intro > p:last-child { color: #777; line-height: 1.55; margin: 0; }
+.auth-form { display: grid; gap: 17px; }
+.auth-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 46px;
+  padding: 0 12px;
+  border: 1px solid #e3e3e1;
+  border-radius: 9px;
+  color: #858585;
+  background: #fff;
+}
+.auth-input-wrap:focus-within { border-color: #777; box-shadow: 0 0 0 3px rgba(0,0,0,.045); }
+.auth-input-wrap input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: #171717; }
+.auth-password-toggle { display: inline-grid; place-items: center; border: 0; padding: 4px; background: transparent; color: #777; cursor: pointer; }
+.auth-submit { width: 100%; min-height: 46px; justify-content: center; margin-top: 4px; }
+.auth-submit:disabled { opacity: .65; cursor: wait; }
+.auth-error { margin: 0; color: #b42318; font-size: 13px; line-height: 1.45; }
+.auth-switch { display: flex; justify-content: center; flex-wrap: wrap; gap: 5px; margin: 22px 0 0; color: #777; font-size: 13px; }
+.auth-switch button { border: 0; padding: 0; background: transparent; color: #171717; font-weight: 650; cursor: pointer; }
+.auth-security { margin: 23px 0 0; color: #999; text-align: center; font-size: 11px; line-height: 1.5; }
+.auth-side-note { position: absolute; bottom: 25px; display: flex; gap: 8px; align-items: center; color: #888; font-size: 12px; }
+.auth-side-note span { width: 6px; height: 6px; border-radius: 50%; background: #31a56b; }
+@media (max-width: 520px) {
+  .auth-card { padding: 27px 21px; border-radius: 14px; }
+  .auth-brand { margin-bottom: 32px; }
+}
