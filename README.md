@@ -145,7 +145,7 @@ campusforge-teams/
         └── main.rs
 ```
 
-The backend is currently split into Axum routing/API handlers, authentication, database setup, and shared state modules. The frontend is split into the workspace shell, reusable board/task dialogs, authentication screen, and a shared API client. WebSocket event handling and invitation modules remain planned work.
+The backend is split into Axum API, authentication, invitation, column-management, database, real-time, and shared-state modules. The frontend includes the workspace shell, board/task dialogs, authentication, invitation controls, and a shared API client.
 
 ## ⚙️ Prerequisites
 
@@ -227,7 +227,7 @@ The frontend milestone is connected to the authenticated Rust API.
 
 The frontend uses sample records shaped around the planned relational entities: `workspaces`, `workspace_members`, `users`, `boards`, `board_members`, `lists`, `tasks`, `task_assignees`, `comments`, and `activity_events`. This is a UI prototype data layer, not a replacement for PostgreSQL.
 
-**Connected:** account registration/sign-in, authenticated workspace loading, project creation, task CRUD, assignee persistence, comments, database-backed task reordering, and workspace-scoped WebSocket event delivery. **Still pending:** invitation management, list creation and administration, granular per-board permissions, real Neon acceptance tests, and full browser end-to-end tests.
+**Connected:** account registration/sign-in, authenticated workspace loading, project creation, task CRUD, assignee persistence, comments, database-backed task reordering, column creation/rename/deletion, invitation creation/acceptance/revocation, workspace owner/admin checks, and workspace-scoped WebSocket event delivery. **Still pending:** automated browser end-to-end tests, live two-browser WebSocket acceptance tests, full workspace switching, and granular per-board permissions.
 
 ## 🎨 UI Design System
 
@@ -270,9 +270,9 @@ AI-assisted tools may be used to understand concepts, explore implementation app
 
 ## 🚧 Current Project Status
 
-**Status:** Core frontend/API integration is implemented; database-backed acceptance testing is pending.
+**Status:** Core frontend/API integration and local/hosted database wiring are implemented. Full production acceptance testing is still required.
 
-The React client now authenticates against the Rust API and loads workspace records from PostgreSQL. Task creation, editing, deletion, assignments, comments, project creation, and drag-and-drop ordering call protected Axum endpoints; they no longer rely on browser-local demo records. New accounts receive a starter workspace and project board when the workspace endpoint is first loaded. Authenticated WebSocket sessions receive workspace-scoped events after committed mutations, and the frontend reloads the snapshot when remote changes arrive.
+The React client authenticates against the Rust API and loads workspace records from PostgreSQL. Task creation, editing, deletion, assignments, comments, project creation, column management, invitation workflows, and drag-and-drop ordering call protected Axum endpoints; they no longer rely on browser-local demo records. New accounts receive a starter workspace and project board when the workspace endpoint is first loaded. Authenticated WebSocket sessions receive workspace-scoped events after committed mutations, and the frontend reloads the snapshot when remote changes arrive.
 
 **Not yet complete:** automated browser end-to-end tests, live multi-user WebSocket acceptance testing, full workspace switching, and granular per-board permissions. GitHub Actions checks the frontend build and Rust backend; dependency audits and CodeQL analysis are also configured. The production API has connected to PostgreSQL and applied SQLx migrations. The real-time broadcast channel is process-local, so the current single-instance deployment is intentional; multiple API instances require shared pub/sub before scaling horizontally.
 
