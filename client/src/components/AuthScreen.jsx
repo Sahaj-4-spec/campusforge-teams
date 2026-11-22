@@ -209,33 +209,7 @@ export default function AuthScreen({ onAuthenticated }) {
         <p className="auth-security"><ShieldCheck size={14} /> Protected sign-in. Your CampusForge session expires after 24 hours.</p>
       </section>
 
-      <aside className="auth-side-panel">
-        <div className="auth-side-grid" aria-hidden="true" />
-        <div className="auth-side-orbit auth-orbit-one" aria-hidden="true" />
-        <div className="auth-side-orbit auth-orbit-two" aria-hidden="true" />
-        <div className="auth-panel-top">
-          <img src="/campusforge-mark.svg" alt="" />
-          <span>BUILT FOR SHARED MOMENTUM</span>
-        </div>
-        <div className="auth-panel-copy">
-          <div className="auth-panel-pill"><Sparkles size={13} /> YOUR TEAM'S NEXT CHAPTER</div>
-          <h2>{isRegister ? "Make great work happen together." : "Hello, there."}</h2>
-          <p>Bring ideas, projects, and people together. Keep every task visible and every team moving forward.</p>
-          <div className="auth-panel-features">
-            <span><i>01</i> Clear project spaces</span>
-            <span><i>02</i> Shared team momentum</span>
-            <span><i>03</i> Progress everyone can see</span>
-          </div>
-          <button className="auth-panel-cta" type="button" onClick={switchMode}>
-            {isRegister ? "Back to sign in" : "Create your account"}
-            <ArrowRight size={17} />
-          </button>
-        </div>
-        <div className="auth-panel-footer">
-          <span><span className="auth-live-dot" /> YOUR WORKSPACE STARTS HERE</span>
-          <span>PLAN · BUILD · GROW</span>
-        </div>
-      </aside>
+aside>
     </main>
   );
 }
