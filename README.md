@@ -141,7 +141,7 @@ campusforge-teams/
         └── main.rs
 ```
 
-As implementation progresses, the backend will be expanded into modules for database access, models, routes, handlers, middleware, validation, and WebSocket events. The frontend will be expanded with reusable components, pages, context providers, hooks, and API services.
+The backend is currently split into Axum routing/API handlers, authentication, database setup, and shared state modules. The frontend is split into the workspace shell, reusable board/task dialogs, authentication screen, and a shared API client. WebSocket event handling and invitation modules remain planned work.
 
 ## ⚙️ Prerequisites
 
@@ -210,19 +210,19 @@ npm start
 
 ## 🖥️ Frontend Milestone
 
-The first frontend milestone is implemented with the selected React + Vite stack.
+The frontend milestone is connected to the authenticated Rust API.
 
-- Overview dashboard with project and task summaries.
-- Project directory and Kanban board with drag-and-drop task movement.
+- Overview dashboard with project and task summaries loaded from PostgreSQL.
+- Project directory and Kanban boards, including creation of a project with four starter columns.
 - Create, edit, and delete task flows with priority, due date, list, and assignee fields.
-- Task comments and a recent activity timeline.
+- Task comments and a recent activity timeline loaded from the API.
 - Workspace team directory, task search, and filters.
 - Responsive layout for desktop, tablet, and mobile screens.
-- Browser-local demo persistence so interactions can be explored before the API is ready.
+- JWT-backed sign-in and registration; the browser stores the session token and sends it with API requests.
 
 The frontend uses sample records shaped around the planned relational entities: `workspaces`, `workspace_members`, `users`, `boards`, `board_members`, `lists`, `tasks`, `task_assignees`, `comments`, and `activity_events`. This is a UI prototype data layer, not a replacement for PostgreSQL.
 
-**Connected:** account registration/sign-in, authenticated workspace loading, task CRUD, assignee persistence, comments, and database-backed task reordering. **Still pending:** invitations, board/list creation and administration, granular per-board permissions, native WebSocket synchronization, and full automated integration tests.
+**Connected:** account registration/sign-in, authenticated workspace loading, project creation, task CRUD, assignee persistence, comments, and database-backed task reordering. **Still pending:** invitation management, list creation and administration, granular per-board permissions, native WebSocket synchronization, and full automated integration tests.
 
 ## 🎨 UI Design System
 
@@ -232,7 +232,7 @@ The frontend uses a Cal.com-inspired neutral SaaS visual language adapted for Ca
 - Theme entry point: imported by `client/src/main.jsx` after the base stylesheet.
 - Typography: Inter for display and interface text; JetBrains Mono is available for code-oriented UI.
 - Visual rules: white canvas, black primary actions, subtle gray surfaces and borders, 8–12px control/card radii, and restrained semantic colors for task status.
-- No additional runtime UI library is required. Existing React components, navigation, drag-and-drop, dialogs, and local demo behavior are retained.
+- No additional runtime UI library is required. Existing React components, navigation, drag-and-drop, and dialogs now use authenticated API-backed data.
 
 The Cal.com reference is an independent visual analysis and is not affiliated with or endorsed by Cal.com; source attribution is recorded in `DESIGN.md`.
 
@@ -265,11 +265,11 @@ AI-assisted tools may be used to understand concepts, explore implementation app
 
 ## 🚧 Current Project Status
 
-**Status:** Core frontend/API integration is in progress.
+**Status:** Core frontend/API integration is implemented; database-backed acceptance testing is pending.
 
 The React client now authenticates against the Rust API and loads workspace records from PostgreSQL. Task creation, editing, deletion, assignments, comments, and drag-and-drop ordering call protected Axum endpoints; they no longer rely on browser-local demo records. New accounts receive a starter workspace and project board when the workspace endpoint is first loaded.
 
-**Not yet complete:** board/list management, invitation acceptance, granular role administration, WebSocket live collaboration, automated end-to-end tests, and deployment configuration validation. The code must pass CI and be tested against a real Neon database before it is considered ready for production.
+**Not yet complete:** list management, invitation acceptance, granular role administration, WebSocket live collaboration, automated end-to-end tests, and deployment configuration validation. CI has passed for the frontend production build and Rust compile check. The API still needs acceptance testing against a real Neon database before the application can be considered production-ready.
 
 ## 🎓 Challenge Information
 
