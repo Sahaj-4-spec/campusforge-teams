@@ -10,7 +10,7 @@ import {
   Sparkles,
   UserRound
 } from "lucide-react";
-import { authApi, storeToken } from "../lib/api.js";
+import { authApi } from "../lib/api.js";
 
 function GoogleIcon() {
   return (
@@ -50,14 +50,9 @@ export default function AuthScreen({ onAuthenticated }) {
   const isRegister = mode === "register";
 
   useEffect(() => {
-    const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-    const oauthToken = fragment.get("oauth_token");
-
-    if (oauthToken) {
+    // Remove legacy token fragments from the address bar without reading or storing them.
+    if (window.location.hash.includes("oauth_token=")) {
       window.history.replaceState({}, "", window.location.pathname + window.location.search);
-      storeToken(oauthToken);
-      onAuthenticated(oauthToken);
-      return;
     }
 
     const query = new URLSearchParams(window.location.search);
@@ -72,18 +67,19 @@ export default function AuthScreen({ onAuthenticated }) {
       );
       setError(oauthError);
     }
-  }, [onAuthenticated]);
+  }, []);
 
   async function submit(event) {
     event.preventDefault();
     setError("");
     setBusy(true);
     try {
-      const result = isRegister
-        ? await authApi.register({ full_name: fullName.trim(), email: email.trim(), password })
-        : await authApi.login({ email: email.trim(), password });
-      storeToken(result.token);
-      onAuthenticated(result.token);
+      if (isRegister) {
+        await authApi.register({ full_name: fullName.trim(), email: email.trim(), password });
+      } else {
+        await authApi.login({ email: email.trim(), password });
+      }
+      onAuthenticated();
     } catch (requestError) {
       setError(requestError.message || "Unable to authenticate. Please try again.");
     } finally {
