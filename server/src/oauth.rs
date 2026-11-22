@@ -224,7 +224,7 @@ async fn start(
     };
     let config = match provider.config() {
         Ok(config) => config,
-        Err(message) => return frontend_redirect(None, Some(message)),
+        Err(message) => return frontend_redirect(None, Some(message)).into_response(),
     };
     let redirect_uri = match callback_uri(provider) {
         Ok(uri) => uri,
@@ -260,12 +260,12 @@ async fn start(
     .await
     {
         tracing::error!(%error, "Could not save OAuth state");
-        return frontend_redirect(None, Some("Sign-in is temporarily unavailable."));
+        return frontend_redirect(None, Some("Sign-in is temporarily unavailable.")).into_response();
     }
 
     let mut authorization_url = match Url::parse(config.authorization_endpoint) {
         Ok(url) => url,
-        Err(_) => return frontend_redirect(None, Some("Sign-in is temporarily unavailable.")),
+        Err(_) => return frontend_redirect(None, Some("Sign-in is temporarily unavailable.")).into_response(),
     };
 
     authorization_url
