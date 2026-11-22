@@ -614,13 +614,28 @@ async fn files_upload(
     };
 
     let storage_key = Uuid::new_v4().to_string();
+    // Persist cleanup ownership before the external object write. If the process
+    // stops or the provider times out after accepting the PUT, the outbox can
+    // still remove the object after this upload intent expires.
+    sqlx::query(
+        "INSERT INTO object_deletion_outbox(storage_key, next_attempt_at)
+         VALUES ($1, NOW() + INTERVAL '30 minutes')
+         ON CONFLICT (storage_key) DO NOTHING",
+    )
+    .bind(&storage_key)
+    .execute(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not register upload cleanup intent"))?;
+
     state.storage.put_file(&storage_key, &temporary.path, normalized_media_type, &checksum, size_bytes as u64)
         .await
         .map_err(|error| {
-            tracing::error!(%error, "Could not store workspace file");
+            tracing::error!(%error, "Could not store workspace file; cleanup intent retained");
             fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not store uploaded file")
         })?;
 
+    let mut upload_tx = state.db.begin().await
+        .map_err(|error| internal(error, "Could not begin file metadata transaction"))?;
     let file = sqlx::query_as::<_, WorkspaceFile>(
         "INSERT INTO workspace_files
             (workspace_id, board_id, task_id, uploaded_by, original_name, storage_key, media_type, size_bytes, checksum_sha256)
@@ -637,18 +652,17 @@ async fn files_upload(
     .bind(normalized_media_type)
     .bind(size_bytes)
     .bind(&checksum)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *upload_tx)
     .await
-    .map_err(|error| {
-        let storage = state.storage.clone();
-        let key = storage_key.clone();
-        tokio::spawn(async move {
-            if let Err(cleanup_error) = storage.delete(&key).await {
-                tracing::error!(%cleanup_error, "Could not clean up file after metadata insert failed");
-            }
-        });
-        internal(error, "Could not save uploaded file metadata")
-    })?;
+    .map_err(|error| internal(error, "Could not save uploaded file metadata"))?;
+
+    sqlx::query("DELETE FROM object_deletion_outbox WHERE storage_key=$1")
+        .bind(&storage_key)
+        .execute(&mut *upload_tx)
+        .await
+        .map_err(|error| internal(error, "Could not finalize upload cleanup intent"))?;
+    upload_tx.commit().await
+        .map_err(|error| internal(error, "Could not commit uploaded file metadata"))?;
 
     state.publish_workspace_event(workspace_id, board_id, "file_uploaded", format!("uploaded {}", file.original_name));
     Ok((StatusCode::CREATED, Json(file)))
