@@ -1,6 +1,13 @@
 const WORKSPACE_KEY = "campusforge-active-workspace";
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 
+// Remove JWTs saved by older CampusForge builds before using cookie-based sessions.
+try {
+  window.localStorage.removeItem("campusforge-auth-token");
+} catch {
+  // Storage may be unavailable in strict browser privacy modes.
+}
+
 export function getStoredWorkspaceId() {
   return window.localStorage.getItem(WORKSPACE_KEY);
 }
