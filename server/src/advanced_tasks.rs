@@ -11,7 +11,7 @@ use sqlx::FromRow;
 use tokio::time::{interval, Duration as TokioDuration};
 use uuid::Uuid;
 
-use crate::{auth::AuthUser, state::AppState};
+use crate::{auth::{AuthUser, WorkspaceUser}, state::AppState};
 
 #[derive(Debug, Serialize)]
 struct ErrorBody { error: String }
@@ -387,22 +387,16 @@ async fn checklist_delete(
 struct LabelInput { name:String, color:Option<String> }
 
 async fn labels_list(
-    State(state):State<AppState>,AuthUser(user_id):AuthUser,
+    State(state):State<AppState>,WorkspaceUser(user_id,workspace_id):WorkspaceUser,
 )->ApiResult<Json<Vec<TaskLabel>>>{
-    let workspace_id:Uuid=sqlx::query_scalar("SELECT workspace_id FROM workspace_members WHERE user_id=$1 ORDER BY joined_at DESC LIMIT 1")
-        .bind(user_id).fetch_optional(&state.db).await.map_err(|error|internal(error,"Could not find workspace"))?
-        .ok_or_else(||fail(StatusCode::NOT_FOUND,"Workspace not found"))?;
     let rows=sqlx::query_as::<_,TaskLabel>("SELECT id,workspace_id,name,color FROM labels WHERE workspace_id=$1 ORDER BY name")
         .bind(workspace_id).fetch_all(&state.db).await.map_err(|error|internal(error,"Could not load labels"))?;
     Ok(Json(rows))
 }
 
 async fn label_create(
-    State(state):State<AppState>,AuthUser(user_id):AuthUser,Json(input):Json<LabelInput>,
+    State(state):State<AppState>,WorkspaceUser(user_id,workspace_id):WorkspaceUser,Json(input):Json<LabelInput>,
 )->ApiResult<(StatusCode,Json<TaskLabel>)>{
-    let workspace_id:Uuid=sqlx::query_scalar("SELECT workspace_id FROM workspace_members WHERE user_id=$1 ORDER BY joined_at DESC LIMIT 1")
-        .bind(user_id).fetch_optional(&state.db).await.map_err(|error|internal(error,"Could not find workspace"))?
-        .ok_or_else(||fail(StatusCode::NOT_FOUND,"Workspace not found"))?;
     let name=input.name.trim();
     let color=input.color.as_deref().unwrap_or("#7771d9");
     if name.is_empty()||name.chars().count()>50||!color.starts_with('#')||color.len()!=7||
