@@ -10,7 +10,7 @@ CampusForge Teams is a project management and collaboration platform being built
 
 This project is being developed as part of the **ALTA BUILDER 30 Challenge — Track A (Full-Stack Product)**.
 
-> **Development status:** The React dashboard is connected to an authenticated Rust/Axum API for workspace loading, task creation/editing/deletion, task assignment, comments, and persisted drag-and-drop ordering. Authentication uses Argon2 password hashing and 24-hour JWT sessions. PostgreSQL access and SQLx migrations are implemented. Board creation, invitations, richer role administration, and real-time WebSocket synchronization remain to be completed and tested.
+> **Development status:** The React dashboard is connected to an authenticated Rust/Axum API for workspace loading, task creation/editing/deletion, task assignment, comments, and persisted drag-and-drop ordering. Authentication uses Argon2 password hashing and 24-hour JWT sessions. PostgreSQL access and SQLx migrations are implemented. Project creation and workspace-scoped WebSocket event delivery are implemented. Invitations, richer role administration, and live end-to-end WebSocket acceptance testing remain.
 
 ---
 
@@ -219,10 +219,11 @@ The frontend milestone is connected to the authenticated Rust API.
 - Workspace team directory, task search, and filters.
 - Responsive layout for desktop, tablet, and mobile screens.
 - JWT-backed sign-in and registration; the browser stores the session token and sends it with API requests.
+- Authenticated workspace WebSocket connection with reconnect handling and workspace snapshot refreshes after remote changes.
 
 The frontend uses sample records shaped around the planned relational entities: `workspaces`, `workspace_members`, `users`, `boards`, `board_members`, `lists`, `tasks`, `task_assignees`, `comments`, and `activity_events`. This is a UI prototype data layer, not a replacement for PostgreSQL.
 
-**Connected:** account registration/sign-in, authenticated workspace loading, project creation, task CRUD, assignee persistence, comments, and database-backed task reordering. **Still pending:** invitation management, list creation and administration, granular per-board permissions, native WebSocket synchronization, and full automated integration tests.
+**Connected:** account registration/sign-in, authenticated workspace loading, project creation, task CRUD, assignee persistence, comments, database-backed task reordering, and workspace-scoped WebSocket event delivery. **Still pending:** invitation management, list creation and administration, granular per-board permissions, real Neon acceptance tests, and full browser end-to-end tests.
 
 ## 🎨 UI Design System
 
@@ -267,9 +268,9 @@ AI-assisted tools may be used to understand concepts, explore implementation app
 
 **Status:** Core frontend/API integration is implemented; database-backed acceptance testing is pending.
 
-The React client now authenticates against the Rust API and loads workspace records from PostgreSQL. Task creation, editing, deletion, assignments, comments, and drag-and-drop ordering call protected Axum endpoints; they no longer rely on browser-local demo records. New accounts receive a starter workspace and project board when the workspace endpoint is first loaded.
+The React client now authenticates against the Rust API and loads workspace records from PostgreSQL. Task creation, editing, deletion, assignments, comments, project creation, and drag-and-drop ordering call protected Axum endpoints; they no longer rely on browser-local demo records. New accounts receive a starter workspace and project board when the workspace endpoint is first loaded. Authenticated WebSocket sessions receive workspace-scoped events after committed mutations, and the frontend reloads the snapshot when remote changes arrive.
 
-**Not yet complete:** list management, invitation acceptance, granular role administration, WebSocket live collaboration, automated end-to-end tests, and deployment configuration validation. CI has passed for the frontend production build and Rust compile check. The API still needs acceptance testing against a real Neon database before the application can be considered production-ready.
+**Not yet complete:** list management, invitation acceptance, granular role administration, automated browser end-to-end tests, and deployment configuration validation. CI has passed for the frontend production build and Rust compile check. The API and WebSocket flows still need acceptance testing against a real Neon database and two browser sessions before the application can be considered production-ready.
 
 ## 🎓 Challenge Information
 
