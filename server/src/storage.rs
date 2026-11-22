@@ -144,7 +144,11 @@ impl StorageService {
         Self::validate_key(key)?;
         match &self.backend {
             Backend::Local { directory } => {
-                tokio::fs::remove_file(directory.join(key)).await.map_err(|error| error.to_string())
+                match tokio::fs::remove_file(directory.join(key)).await {
+                    Ok(()) => Ok(()),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    Err(error) => Err(error.to_string()),
+                }
             }
             Backend::S3 { client, bucket } => {
                 client.delete_object().bucket(bucket).key(key).send().await
