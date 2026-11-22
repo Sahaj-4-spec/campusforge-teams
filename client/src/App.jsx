@@ -454,7 +454,7 @@ function AppSidebar({ activeView, activeBoardId, onNavigate, onOpenBoard, onCrea
   return (
     <aside className="sidebar">
       <a className="brand" href="#" onClick={(event) => { event.preventDefault(); onNavigate("Overview"); }} aria-label="CampusForge Teams home">
-        <span className="brand-mark"><Zap size={21} fill="currentColor" /></span>
+        <span className="brand-mark"><img src="/campusforge-mark.svg" alt="" /></span>
         <span className="brand-name">CampusForge<small>TEAMS WORKSPACE</small></span>
       </a>
       <div className="workspace-switcher">
