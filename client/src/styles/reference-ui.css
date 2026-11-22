@@ -218,3 +218,63 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .ref-health-status { grid-column: 2 / 3; grid-row: 1 / 2; }
   .ref-week-chart { gap: 7px; }
 }
+
+/* Reliable independent scrolling for the workspace shell */
+.app-shell {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sidebar {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #dce4d6 transparent;
+}
+
+.sidebar > * {
+  flex-shrink: 0;
+}
+
+.main-content {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #dce4d6 transparent;
+  -webkit-overflow-scrolling: touch;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+}
+
+@media (max-width: 640px) {
+  .sidebar {
+    height: 64px;
+    overflow: visible;
+  }
+
+  .main-content {
+    height: 100vh;
+    height: 100dvh;
+    padding-bottom: 66px;
+  }
+
+  .page-content {
+    min-height: calc(100dvh - 126px);
+  }
+}
