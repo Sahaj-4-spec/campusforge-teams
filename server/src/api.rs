@@ -85,6 +85,8 @@ struct TaskRow {
     description: String,
     priority: String,
     due_date: Option<String>,
+    parent_task_id: Option<Uuid>,
+    estimated_minutes: Option<i32>,
     position: i32,
     created_by: Uuid,
     created_at: DateTime<Utc>,
@@ -267,7 +269,7 @@ async fn get_workspace(
     .map_err(|cause| internal_error(cause, "Could not load lists"))?;
 
     let tasks = sqlx::query_as::<_, TaskRow>(
-        "SELECT t.id, l.board_id, t.list_id, t.title, COALESCE(t.description, '') AS description,          t.priority, CASE WHEN t.due_at IS NULL THEN NULL          ELSE to_char(t.due_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') END AS due_date,          t.position, t.created_by, t.created_at, t.updated_at          FROM tasks t JOIN lists l ON l.id = t.list_id          JOIN boards b ON b.id = l.board_id          WHERE b.workspace_id = $1 ORDER BY l.board_id, t.list_id, t.position",
+        "SELECT t.id, l.board_id, t.list_id, t.title, COALESCE(t.description, '') AS description,          t.priority, CASE WHEN t.due_at IS NULL THEN NULL          ELSE to_char(t.due_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') END AS due_date,          t.parent_task_id, t.estimated_minutes, t.position, t.created_by, t.created_at, t.updated_at          FROM tasks t JOIN lists l ON l.id = t.list_id          JOIN boards b ON b.id = l.board_id          WHERE b.workspace_id = $1 ORDER BY l.board_id, t.list_id, t.position",
     )
     .bind(workspace.id)
     .fetch_all(&state.db)
@@ -433,6 +435,39 @@ async fn add_activity(
     .bind(actor_id)
     .bind(event_type)
     .bind(description)
+    .execute(&mut **tx)
+    .await?;
+
+    let notification_type = match event_type {
+        "comment_added" => "comment",
+        "task_created" => "task_assigned",
+        _ => "project_update",
+    };
+    let title = match event_type {
+        "comment_added" => "New task comment",
+        "task_created" => "New task created",
+        "task_moved" => "Task moved",
+        "task_updated" => "Task updated",
+        _ => "Workspace update",
+    };
+    let resource_type = if task_id.is_some() { "task" } else { "project" };
+    sqlx::query(
+        "INSERT INTO notifications
+            (workspace_id, recipient_user_id, actor_user_id, notification_type, title, body, resource_type, resource_id)
+         SELECT wm.workspace_id, wm.user_id, $2, $3, $4, $5, $6, $7
+         FROM workspace_members wm
+         LEFT JOIN notification_preferences np
+           ON np.user_id = wm.user_id AND np.notification_type = $3
+         WHERE wm.workspace_id = $1 AND wm.user_id <> $2
+           AND COALESCE(np.in_app_enabled, TRUE)",
+    )
+    .bind(workspace_id)
+    .bind(actor_id)
+    .bind(notification_type)
+    .bind(title)
+    .bind(&description)
+    .bind(resource_type)
+    .bind(task_id)
     .execute(&mut **tx)
     .await?;
     Ok(())
