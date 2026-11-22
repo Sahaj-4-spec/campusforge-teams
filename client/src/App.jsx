@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   BarChart3,
@@ -532,6 +532,7 @@ export default function App() {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [realtimeVersion, setRealtimeVersion] = useState(0);
+  const workspaceGeneration = useRef(0);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -541,6 +542,7 @@ export default function App() {
     }
 
     let cancelled = false;
+    const requestGeneration = workspaceGeneration.current;
     setLoading(true);
     setLoadError("");
     const pendingInvite = new URLSearchParams(window.location.search).get("invite");
@@ -556,7 +558,7 @@ export default function App() {
 
     workspaceRequest
       .then((workspace) => {
-        if (cancelled) return;
+        if (cancelled || requestGeneration !== workspaceGeneration.current) return;
         setStoredWorkspaceId(workspace.current_workspace_id);
         setData(workspace);
         setActiveBoardId((current) =>
@@ -568,10 +570,21 @@ export default function App() {
       .catch((error) => {
         if (cancelled) return;
         if (error.status === 401) {
+          clearStoredWorkspaceId();
           setIsAuthenticated(false);
           setData(null);
         } else {
-          setLoadError(error.message || "Unable to load your workspace.");
+          if (error.status === 403 && getStoredWorkspaceId()) {
+            clearStoredWorkspaceId();
+            workspaceApi.get(null).then((workspace) => {
+              if (cancelled || requestGeneration !== workspaceGeneration.current) return;
+              setStoredWorkspaceId(workspace.current_workspace_id);
+              setData(workspace);
+              setActiveBoardId(workspace.boards[0]?.id || "");
+            }).catch((fallbackError) => {
+              if (!cancelled && requestGeneration === workspaceGeneration.current) setLoadError(fallbackError.message || "Unable to load an accessible workspace.");
+            });
+          } else setLoadError(error.message || "Unable to load your workspace.");
         }
       })
       .finally(() => {
@@ -616,15 +629,18 @@ export default function App() {
             notificationApi.list()
               .then((result) => { if (!stopped) setUnreadNotifications(result.unread_count || 0); })
               .catch(() => {});
-            workspaceApi.get(getStoredWorkspaceId())
+            const requestGeneration = workspaceGeneration.current;
+            const requestedWorkspaceId = data?.current_workspace_id;
+            workspaceApi.get(requestedWorkspaceId)
               .then((snapshot) => {
-                if (!stopped) {
+                if (!stopped && requestGeneration === workspaceGeneration.current && snapshot.current_workspace_id === requestedWorkspaceId) {
                   setStoredWorkspaceId(snapshot.current_workspace_id);
                   setData(snapshot);
                 }
               })
               .catch((error) => {
                 if (error.status === 401 && !stopped) {
+                  clearStoredWorkspaceId();
                   setIsAuthenticated(false);
                   setData(null);
                 }
@@ -713,7 +729,10 @@ export default function App() {
   }, [boardTasks, search]);
 
   async function refreshWorkspace() {
-    const workspace = await workspaceApi.get(getStoredWorkspaceId());
+    const requestGeneration = workspaceGeneration.current;
+    const requestedWorkspaceId = data?.current_workspace_id || getStoredWorkspaceId();
+    const workspace = await workspaceApi.get(requestedWorkspaceId);
+    if (requestGeneration !== workspaceGeneration.current || workspace.current_workspace_id !== requestedWorkspaceId) return workspace;
     setData(workspace);
     if (!workspace.boards.some((board) => board.id === activeBoardId)) {
       setActiveBoardId(workspace.boards[0]?.id || "");
@@ -723,9 +742,11 @@ export default function App() {
 
   async function switchWorkspace(workspaceId) {
     if (!workspaceId || workspaceId === data?.current_workspace_id) return;
+    const requestGeneration = ++workspaceGeneration.current;
     setLoading(true);
     try {
       const workspace = await workspaceApi.get(workspaceId);
+      if (requestGeneration !== workspaceGeneration.current) return;
       setStoredWorkspaceId(workspace.current_workspace_id);
       setData(workspace);
       setActiveBoardId(workspace.boards[0]?.id || "");
@@ -794,7 +815,7 @@ export default function App() {
 
   async function saveBoard(values) {
     try {
-      await boardApi.create(values);
+      await boardApi.create(values, data.current_workspace_id);
       const workspace = await refreshWorkspace();
       const newestBoard = [...workspace.boards].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
       setBoardDialogOpen(false);
@@ -1105,6 +1126,7 @@ export default function App() {
           <div className="mobile-nav-overlay">
             <div className="mobile-nav-card">
               <div className="mobile-nav-heading"><strong>CampusForge</strong><button type="button" onClick={() => setMobileMenuOpen(false)} aria-label="Close navigation"><X size={18} /></button></div>
+              <label className="mobile-workspace-select">Current workspace<select aria-label="Switch workspace" value={data.current_workspace_id || ""} onChange={(event) => switchWorkspace(event.target.value)} disabled={(data.workspaces || []).length < 2}>{(data.workspaces || []).map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select></label>
               {navigation.map(({ id, label, icon: Icon }) => <button key={id} type="button" className="nav-item" onClick={() => navigate(id)}><Icon size={18} />{label}</button>)}
               <button type="button" className="nav-item" onClick={() => navigate("Projects")}><FolderKanban size={18} />Projects</button>
             </div>
