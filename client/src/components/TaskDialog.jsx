@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CalendarDays, MessageCircle, Trash2, X } from "lucide-react";
+import TaskAdvancedPanel from "./TaskAdvancedPanel.jsx";
 
 function formatCommentDate(value) {
   if (!value) return "";
@@ -23,7 +24,10 @@ export default function TaskDialog({
   onClose,
   onSave,
   onDelete,
-  onAddComment
+  onAddComment,
+  allTasks = [],
+  onAdvancedChanged,
+  refreshKey = 0
 }) {
   const [form, setForm] = useState({
     title: "",
@@ -31,32 +35,48 @@ export default function TaskDialog({
     priority: "medium",
     due_date: "",
     list_id: defaultListId || "",
-    assignee_id: ""
+    assignee_id: "",
+    estimated_minutes: ""
   });
   const [commentDraft, setCommentDraft] = useState("");
+  const dialogWasOpen = useRef(false);
+  const lastTaskIdentity = useRef(null);
 
   useEffect(() => {
-    if (task) {
-      setForm({
-        title: task.title || "",
-        description: task.description || "",
-        priority: task.priority || "medium",
-        due_date: task.due_date || "",
-        list_id: task.list_id || defaultListId || "",
-        assignee_id: assigneeIds[0] || ""
-      });
-    } else {
-      setForm({
-        title: "",
-        description: "",
-        priority: "medium",
-        due_date: "",
-        list_id: defaultListId || (lists[0] && lists[0].id) || "",
-        assignee_id: ""
-      });
+    if (!open) {
+      dialogWasOpen.current = false;
+      lastTaskIdentity.current = null;
+      return;
     }
-    setCommentDraft("");
-  }, [task, open, defaultListId, lists, assigneeIds]);
+
+    const identity = task?.id || "__new_task__";
+    if (!dialogWasOpen.current || lastTaskIdentity.current !== identity) {
+      if (task) {
+        setForm({
+          title: task.title || "",
+          description: task.description || "",
+          priority: task.priority || "medium",
+          due_date: task.due_date || "",
+          list_id: task.list_id || defaultListId || "",
+          assignee_id: assigneeIds[0] || "",
+          estimated_minutes: task.estimated_minutes ? String(task.estimated_minutes) : ""
+        });
+      } else {
+        setForm({
+          title: "",
+          description: "",
+          priority: "medium",
+          due_date: "",
+          list_id: defaultListId || (lists[0] && lists[0].id) || "",
+          assignee_id: "",
+          estimated_minutes: ""
+        });
+      }
+      setCommentDraft("");
+      lastTaskIdentity.current = identity;
+    }
+    dialogWasOpen.current = true;
+  }, [open, task?.id]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -83,7 +103,8 @@ export default function TaskDialog({
       priority: form.priority,
       due_date: form.due_date || null,
       list_id: form.list_id,
-      assignee_id: form.assignee_id || null
+      assignee_id: form.assignee_id || null,
+      estimated_minutes: form.estimated_minutes ? Number(form.estimated_minutes) : null
     });
   }
 
@@ -173,6 +194,10 @@ export default function TaskDialog({
                 ))}
               </select>
             </label>
+            <label className="field-group">
+              <span>Estimated time (minutes)</span>
+              <input type="number" name="estimated_minutes" min="1" max="100000" value={form.estimated_minutes} onChange={updateField} placeholder="e.g. 90" />
+            </label>
           </div>
 
           <div className="dialog-actions">
@@ -187,6 +212,8 @@ export default function TaskDialog({
             </div>
           </div>
         </form>
+
+        {task && <TaskAdvancedPanel task={task} lists={lists} tasks={allTasks} onChanged={onAdvancedChanged} refreshKey={refreshKey} />}
 
         {task && (
           <section className="comments-section" aria-label="Task comments">

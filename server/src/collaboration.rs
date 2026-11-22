@@ -1,0 +1,1232 @@
+use axum::{
+    extract::{DefaultBodyLimit, Multipart, Path, Query, State},
+    http::{header, HeaderValue, StatusCode},
+    response::Response,
+    routing::{delete, get, patch, post},
+    Json, Router,
+};
+use chrono::{Duration, NaiveDate, Utc};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use sqlx::FromRow;
+use std::path::PathBuf;
+use tokio::io::AsyncWriteExt;
+use tokio::time::{interval, Duration as TokioDuration};
+use uuid::Uuid;
+
+use crate::{auth::{AuthUser, WorkspaceUser}, state::AppState};
+
+const MAX_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
+
+struct TemporaryUpload {
+    path: PathBuf,
+}
+
+#[cfg(unix)]
+fn create_private_upload_file(path: &PathBuf) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)
+}
+
+#[cfg(not(unix))]
+fn create_private_upload_file(path: &PathBuf) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new().write(true).create_new(true).open(path)
+}
+
+impl Drop for TemporaryUpload {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct ErrorBody {
+    error: String,
+}
+
+type ApiResult<T> = Result<T, (StatusCode, Json<ErrorBody>)>;
+
+fn fail(status: StatusCode, message: impl Into<String>) -> (StatusCode, Json<ErrorBody>) {
+    (status, Json(ErrorBody { error: message.into() }))
+}
+
+fn internal<E: std::fmt::Display>(error: E, context: &'static str) -> (StatusCode, Json<ErrorBody>) {
+    tracing::error!(%error, "{context}");
+    fail(StatusCode::INTERNAL_SERVER_ERROR, "The request could not be completed")
+}
+
+async fn board_in_workspace(state: &AppState, board_id: Uuid, workspace_id: Uuid) -> ApiResult<()> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM boards WHERE id = $1 AND workspace_id = $2)",
+    )
+    .bind(board_id)
+    .bind(workspace_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not verify project access"))?;
+    if exists { Ok(()) } else { Err(fail(StatusCode::NOT_FOUND, "Project not found in this workspace")) }
+}
+
+async fn task_in_workspace(state: &AppState, task_id: Uuid, workspace_id: Uuid) -> ApiResult<()> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+            SELECT 1 FROM tasks t
+            JOIN lists l ON l.id = t.list_id
+            JOIN boards b ON b.id = l.board_id
+            WHERE t.id = $1 AND b.workspace_id = $2
+        )",
+    )
+    .bind(task_id)
+    .bind(workspace_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not verify task access"))?;
+    if exists { Ok(()) } else { Err(fail(StatusCode::NOT_FOUND, "Task not found in this workspace")) }
+}
+
+#[derive(Debug, Serialize, FromRow)]
+struct CalendarEvent {
+    id: Uuid,
+    workspace_id: Uuid,
+    board_id: Option<Uuid>,
+    created_by: Uuid,
+    title: String,
+    description: Option<String>,
+    event_type: String,
+    start_at: chrono::DateTime<Utc>,
+    end_at: chrono::DateTime<Utc>,
+    time_zone: String,
+    all_day: bool,
+    created_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+struct CalendarTask {
+    id: Uuid,
+    board_id: Uuid,
+    title: String,
+    due_date: String,
+    priority: String,
+    list_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CalendarRange {
+    from: Option<NaiveDate>,
+    to: Option<NaiveDate>,
+    start_at: Option<chrono::DateTime<Utc>>,
+    end_at: Option<chrono::DateTime<Utc>>,
+}
+
+async fn calendar_list(
+    State(state): State<AppState>,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
+    Query(range): Query<CalendarRange>,
+) -> ApiResult<Json<Value>> {
+    let today = Utc::now().date_naive();
+    let from = range.from.unwrap_or(today - Duration::days(30));
+    let to = range.to.unwrap_or(today + Duration::days(60));
+    if to < from || (to - from).num_days() > 400 {
+        return Err(fail(StatusCode::BAD_REQUEST, "Calendar range must be within 400 days"));
+    }
+    let next_day = to.succ_opt()
+        .ok_or_else(|| fail(StatusCode::BAD_REQUEST, "Calendar end date is out of range"))?;
+    let task_start = from.and_hms_opt(0, 0, 0).unwrap().and_utc();
+    let task_end = next_day.and_hms_opt(0, 0, 0).unwrap().and_utc();
+    let start = range.start_at.unwrap_or(task_start);
+    let end = range.end_at.unwrap_or(task_end);
+    if end <= start || end - start > Duration::days(401) {
+        return Err(fail(StatusCode::BAD_REQUEST, "Calendar instant range is invalid or exceeds 401 days"));
+    }
+
+    let events = sqlx::query_as::<_, CalendarEvent>(
+        "SELECT id, workspace_id, board_id, created_by, title, description, event_type,
+                start_at, end_at, time_zone, all_day, created_at
+         FROM calendar_events
+         WHERE workspace_id = $1 AND start_at < $3 AND end_at > $2
+         ORDER BY start_at",
+    )
+    .bind(workspace_id)
+    .bind(start)
+    .bind(end)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not load calendar events"))?;
+
+    let tasks = sqlx::query_as::<_, CalendarTask>(
+        "SELECT t.id, b.id AS board_id, t.title, to_char(t.due_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS due_date, t.priority, l.name AS list_name
+         FROM tasks t
+         JOIN lists l ON l.id = t.list_id
+         JOIN boards b ON b.id = l.board_id
+         WHERE b.workspace_id = $1 AND t.due_at >= $2 AND t.due_at < $3
+         ORDER BY t.due_at",
+    )
+    .bind(workspace_id)
+    .bind(task_start)
+    .bind(task_end)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not load task deadlines"))?;
+
+    Ok(Json(json!({ "events": events, "tasks": tasks, "from": from, "to": to })))
+}
+
+#[derive(Debug, Deserialize)]
+struct CalendarEventInput {
+    board_id: Option<Uuid>,
+    title: String,
+    description: Option<String>,
+    event_type: String,
+    start_at: chrono::DateTime<Utc>,
+    end_at: chrono::DateTime<Utc>,
+    time_zone: Option<String>,
+    all_day: Option<bool>,
+}
+
+fn validate_calendar_input(input: &CalendarEventInput) -> ApiResult<()> {
+    let title = input.title.trim();
+    if title.is_empty() || title.chars().count() > 180 {
+        return Err(fail(StatusCode::BAD_REQUEST, "Event title must be between 1 and 180 characters"));
+    }
+    if input.description.as_ref().is_some_and(|value| value.chars().count() > 4000) {
+        return Err(fail(StatusCode::BAD_REQUEST, "Event description is too long"));
+    }
+    if input.end_at <= input.start_at {
+        return Err(fail(StatusCode::BAD_REQUEST, "Event end must be after its start"));
+    }
+    if !["meeting", "milestone", "exam", "submission", "focus_block"].contains(&input.event_type.as_str()) {
+        return Err(fail(StatusCode::BAD_REQUEST, "Event type is invalid"));
+    }
+    if input.time_zone.as_ref().is_some_and(|zone| zone.trim().is_empty() || zone.len() > 80) {
+        return Err(fail(StatusCode::BAD_REQUEST, "Time zone is invalid"));
+    }
+    Ok(())
+}
+
+async fn calendar_create(
+    State(state): State<AppState>,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
+    Json(input): Json<CalendarEventInput>,
+) -> ApiResult<(StatusCode, Json<CalendarEvent>)> {
+    validate_calendar_input(&input)?;
+    if let Some(board_id) = input.board_id {
+        board_in_workspace(&state, board_id, workspace_id).await?;
+    }
+    let event = sqlx::query_as::<_, CalendarEvent>(
+        "INSERT INTO calendar_events
+            (workspace_id, board_id, created_by, title, description, event_type, start_at, end_at, time_zone, all_day)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         RETURNING id, workspace_id, board_id, created_by, title, description, event_type,
+                   start_at, end_at, time_zone, all_day, created_at",
+    )
+    .bind(workspace_id)
+    .bind(input.board_id)
+    .bind(user_id)
+    .bind(input.title.trim())
+    .bind(input.description.as_deref().map(str::trim).filter(|value| !value.is_empty()))
+    .bind(&input.event_type)
+    .bind(input.start_at)
+    .bind(input.end_at)
+    .bind(input.time_zone.as_deref().unwrap_or("UTC"))
+    .bind(input.all_day.unwrap_or(false))
+    .fetch_one(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not create calendar event"))?;
+
+    state.publish_workspace_event(workspace_id, event.board_id, "calendar_event_created", format!("created calendar event {}", event.title));
+    Ok((StatusCode::CREATED, Json(event)))
+}
+
+async fn calendar_update(
+    State(state): State<AppState>,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
+    Path(event_id): Path<Uuid>,
+    Json(input): Json<CalendarEventInput>,
+) -> ApiResult<StatusCode> {
+    validate_calendar_input(&input)?;
+    if let Some(board_id) = input.board_id {
+        board_in_workspace(&state, board_id, workspace_id).await?;
+    }
+    let result = sqlx::query(
+        "UPDATE calendar_events SET board_id=$1, title=$2, description=$3, event_type=$4,
+            start_at=$5, end_at=$6, time_zone=$7, all_day=$8, updated_at=NOW()
+         WHERE id=$9 AND workspace_id=$10",
+    )
+    .bind(input.board_id)
+    .bind(input.title.trim())
+    .bind(input.description.as_deref().map(str::trim).filter(|value| !value.is_empty()))
+    .bind(input.event_type)
+    .bind(input.start_at)
+    .bind(input.end_at)
+    .bind(input.time_zone.as_deref().unwrap_or("UTC"))
+    .bind(input.all_day.unwrap_or(false))
+    .bind(event_id)
+    .bind(workspace_id)
+    .execute(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not update calendar event"))?;
+    if result.rows_affected() == 0 {
+        return Err(fail(StatusCode::NOT_FOUND, "Calendar event not found"));
+    }
+    state.publish_workspace_event(workspace_id, input.board_id, "calendar_event_updated", "updated a calendar event");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn calendar_delete(
+    State(state): State<AppState>,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
+    Path(event_id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    let result = sqlx::query("DELETE FROM calendar_events WHERE id=$1 AND workspace_id=$2")
+        .bind(event_id)
+        .bind(workspace_id)
+        .execute(&state.db)
+        .await
+        .map_err(|error| internal(error, "Could not delete calendar event"))?;
+    if result.rows_affected() == 0 {
+        return Err(fail(StatusCode::NOT_FOUND, "Calendar event not found"));
+    }
+    state.publish_workspace_event(workspace_id, None, "calendar_event_deleted", "deleted a calendar event");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Serialize, FromRow)]
+struct NotificationRow {
+    id: Uuid,
+    workspace_id: Uuid,
+    actor_user_id: Option<Uuid>,
+    notification_type: String,
+    title: String,
+    body: String,
+    resource_type: Option<String>,
+    resource_id: Option<Uuid>,
+    read_at: Option<chrono::DateTime<Utc>>,
+    created_at: chrono::DateTime<Utc>,
+}
+
+async fn notifications_list(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+) -> ApiResult<Json<Value>> {
+    let mut transaction = state.db.begin().await
+        .map_err(|error| internal(error, "Could not begin notification read"))?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| internal(error, "Could not set notification snapshot"))?;
+    let rows = sqlx::query_as::<_, NotificationRow>(
+        "SELECT n.id, n.workspace_id, n.actor_user_id, n.notification_type, n.title, n.body,
+                n.resource_type, n.resource_id, n.read_at, n.created_at
+         FROM notifications n
+         JOIN workspace_members wm
+           ON wm.workspace_id=n.workspace_id AND wm.user_id=n.recipient_user_id
+         WHERE n.recipient_user_id=$1
+           AND COALESCE((
+                SELECT np.in_app_enabled
+                  FROM notification_preferences np
+                 WHERE np.user_id=n.recipient_user_id
+                   AND np.notification_type=n.notification_type
+           ), TRUE)
+         ORDER BY n.created_at DESC LIMIT 100",
+    )
+    .bind(user_id)
+    .fetch_all(&mut *transaction)
+    .await
+    .map_err(|error| internal(error, "Could not load notifications"))?;
+    let unread: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM notifications n
+         JOIN workspace_members wm
+           ON wm.workspace_id=n.workspace_id AND wm.user_id=n.recipient_user_id
+         WHERE n.recipient_user_id=$1 AND n.read_at IS NULL
+           AND COALESCE((
+                SELECT np.in_app_enabled
+                  FROM notification_preferences np
+                 WHERE np.user_id=n.recipient_user_id
+                   AND np.notification_type=n.notification_type
+           ), TRUE)",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(|error| internal(error, "Could not count unread notifications"))?;
+    transaction.commit().await
+        .map_err(|error| internal(error, "Could not finish notification read"))?;
+    Ok(Json(json!({ "items": rows, "unread_count": unread })))
+}
+
+async fn notification_read(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+    Path(notification_id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    let result = sqlx::query(
+        "UPDATE notifications n
+            SET read_at=COALESCE(n.read_at,NOW())
+           FROM workspace_members wm
+          WHERE n.id=$1 AND n.recipient_user_id=$2
+            AND wm.workspace_id=n.workspace_id AND wm.user_id=$2
+            AND COALESCE((
+                SELECT np.in_app_enabled FROM notification_preferences np
+                 WHERE np.user_id=n.recipient_user_id
+                   AND np.notification_type=n.notification_type
+            ), TRUE)"
+    )
+        .bind(notification_id)
+        .bind(user_id)
+        .execute(&state.db)
+        .await
+        .map_err(|error| internal(error, "Could not mark notification as read"))?;
+    if result.rows_affected() == 0 {
+        return Err(fail(StatusCode::NOT_FOUND, "Notification not found"));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn notifications_read_all(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+) -> ApiResult<StatusCode> {
+    sqlx::query(
+        "UPDATE notifications n SET read_at=NOW()
+           FROM workspace_members wm
+          WHERE n.recipient_user_id=$1 AND wm.user_id=$1
+            AND wm.workspace_id=n.workspace_id AND n.read_at IS NULL
+            AND COALESCE((
+                SELECT np.in_app_enabled FROM notification_preferences np
+                 WHERE np.user_id=n.recipient_user_id
+                   AND np.notification_type=n.notification_type
+            ), TRUE)"
+    )
+        .bind(user_id)
+        .execute(&state.db)
+        .await
+        .map_err(|error| internal(error, "Could not mark notifications as read"))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Serialize, FromRow)]
+struct NotificationPreference {
+    notification_type: String,
+    in_app_enabled: bool,
+    email_enabled: bool,
+}
+
+async fn notification_preferences(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+) -> ApiResult<Json<Value>> {
+    let rows = sqlx::query_as::<_, NotificationPreference>(
+        "SELECT notification_type, in_app_enabled, email_enabled
+         FROM notification_preferences WHERE user_id=$1 ORDER BY notification_type",
+    )
+    .bind(user_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not load notification preferences"))?;
+    Ok(Json(json!({
+        "items": rows,
+        "email_delivery_available": crate::notifications::email_delivery_available()
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct PreferenceInput {
+    notification_type: String,
+    in_app_enabled: bool,
+    email_enabled: Option<bool>,
+}
+
+async fn notification_preference_update(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+    Json(input): Json<PreferenceInput>,
+) -> ApiResult<StatusCode> {
+    let kind = input.notification_type.trim();
+    if kind.is_empty() || kind.len() > 60 {
+        return Err(fail(StatusCode::BAD_REQUEST, "Notification category is invalid"));
+    }
+    if input.email_enabled == Some(true) && !crate::notifications::email_delivery_available() {
+        return Err(fail(StatusCode::SERVICE_UNAVAILABLE, "Email delivery is not configured on this server"));
+    }
+    let mut transaction = state.db.begin().await
+        .map_err(|error| internal(error, "Could not begin notification preference update"))?;
+    sqlx::query(
+        "INSERT INTO notification_preferences (user_id, notification_type, in_app_enabled, email_enabled)
+         VALUES ($1,$2,$3,COALESCE($4,FALSE))
+         ON CONFLICT (user_id, notification_type)
+         DO UPDATE SET
+            in_app_enabled=EXCLUDED.in_app_enabled,
+            email_enabled=COALESCE($4,notification_preferences.email_enabled),
+            updated_at=NOW()",
+    )
+    .bind(user_id)
+    .bind(kind)
+    .bind(input.in_app_enabled)
+    .bind(input.email_enabled)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| internal(error, "Could not update notification preference"))?;
+    if input.email_enabled == Some(false) {
+        sqlx::query(
+            "UPDATE notification_email_outbox outbox
+                SET status='suppressed',
+                    locked_at=NULL,
+                    last_error='Recipient disabled email notifications',
+                    updated_at=NOW()
+               FROM notifications n
+              WHERE outbox.notification_id=n.id
+                AND outbox.recipient_user_id=$1
+                AND n.notification_type=$2
+                AND outbox.status IN ('queued','processing')",
+        )
+        .bind(user_id)
+        .bind(kind)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| internal(error, "Could not suppress queued notification emails"))?;
+    }
+    transaction.commit().await
+        .map_err(|error| internal(error, "Could not commit notification preference update"))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Serialize, FromRow)]
+struct WorkspaceFile {
+    id: Uuid,
+    workspace_id: Uuid,
+    board_id: Option<Uuid>,
+    task_id: Option<Uuid>,
+    uploaded_by: Uuid,
+    original_name: String,
+    media_type: String,
+    size_bytes: i64,
+    checksum_sha256: String,
+    created_at: chrono::DateTime<Utc>,
+}
+
+async fn files_list(
+    State(state): State<AppState>,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
+) -> ApiResult<Json<Vec<WorkspaceFile>>> {
+    let rows = sqlx::query_as::<_, WorkspaceFile>(
+        "SELECT id, workspace_id, board_id, task_id, uploaded_by, original_name, media_type,
+                size_bytes, checksum_sha256, created_at
+         FROM workspace_files WHERE workspace_id=$1 AND is_deleting=FALSE ORDER BY created_at DESC",
+    )
+    .bind(workspace_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not load workspace files"))?;
+    Ok(Json(rows))
+}
+
+async fn files_upload(
+    State(state): State<AppState>,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
+    mut multipart: Multipart,
+) -> ApiResult<(StatusCode, Json<WorkspaceFile>)> {
+    let mut board_id: Option<Uuid> = None;
+    let mut task_id: Option<Uuid> = None;
+    let mut original_name = String::new();
+    let mut media_type = "application/octet-stream".to_string();
+    let mut temp_upload: Option<TemporaryUpload> = None;
+    let mut size_bytes: i64 = 0;
+    let mut checksum = String::new();
+
+    while let Some(mut field) = multipart.next_field().await
+        .map_err(|error| fail(StatusCode::BAD_REQUEST, format!("Invalid upload form: {error}")))? {
+        let field_name = field.name().unwrap_or("").to_owned();
+        match field_name.as_str() {
+            "board_id" => {
+                let value = field.text().await.map_err(|_| fail(StatusCode::BAD_REQUEST, "Invalid project reference"))?;
+                board_id = Some(Uuid::parse_str(value.trim()).map_err(|_| fail(StatusCode::BAD_REQUEST, "Invalid project reference"))?);
+            }
+            "task_id" => {
+                let value = field.text().await.map_err(|_| fail(StatusCode::BAD_REQUEST, "Invalid task reference"))?;
+                task_id = Some(Uuid::parse_str(value.trim()).map_err(|_| fail(StatusCode::BAD_REQUEST, "Invalid task reference"))?);
+            }
+            "file" => {
+                if temp_upload.is_some() {
+                    return Err(fail(StatusCode::BAD_REQUEST, "Upload one file at a time"));
+                }
+                original_name = field.file_name().unwrap_or("upload.bin").to_owned();
+                media_type = field.content_type().unwrap_or("application/octet-stream").to_owned();
+
+                let temporary = TemporaryUpload {
+                    path: std::env::temp_dir().join(format!("campusforge-upload-{}", Uuid::new_v4())),
+                };
+                let output_file = create_private_upload_file(&temporary.path)
+                    .map_err(|error| internal(error, "Could not create private temporary upload"))?;
+                let mut output = tokio::fs::File::from_std(output_file);
+                let mut hasher = Sha256::new();
+                let mut total_bytes: usize = 0;
+
+                while let Some(chunk) = field.chunk().await
+                    .map_err(|_| fail(StatusCode::BAD_REQUEST, "Could not read uploaded file"))? {
+                    total_bytes = total_bytes.saturating_add(chunk.len());
+                    if total_bytes > MAX_UPLOAD_BYTES {
+                        return Err(fail(StatusCode::BAD_REQUEST, "Files must not exceed 10 MB"));
+                    }
+                    hasher.update(&chunk);
+                    output.write_all(&chunk)
+                        .await
+                        .map_err(|error| internal(error, "Could not write temporary upload"))?;
+                }
+
+                if total_bytes == 0 {
+                    return Err(fail(StatusCode::BAD_REQUEST, "Files must not be empty"));
+                }
+                output.flush()
+                    .await
+                    .map_err(|error| internal(error, "Could not finish temporary upload"))?;
+                drop(output);
+
+                size_bytes = total_bytes as i64;
+                checksum = format!("{:x}", hasher.finalize());
+                temp_upload = Some(temporary);
+            }
+            _ => {}
+        }
+    }
+
+    if board_id.is_some() && task_id.is_some() {
+        return Err(fail(StatusCode::BAD_REQUEST, "Attach a file to a project or a task, not both"));
+    }
+    if let Some(board_id) = board_id {
+        board_in_workspace(&state, board_id, workspace_id).await?;
+    }
+    if let Some(task_id) = task_id {
+        task_in_workspace(&state, task_id, workspace_id).await?;
+    }
+    let temporary = temp_upload.as_ref()
+        .ok_or_else(|| fail(StatusCode::BAD_REQUEST, "Choose a file to upload"))?;
+    if original_name.trim().is_empty() || original_name.chars().count() > 240 || media_type.len() > 160 {
+        return Err(fail(StatusCode::BAD_REQUEST, "File name or media type is invalid"));
+    }
+
+    let extension = original_name
+        .rsplit_once('.')
+        .map(|(_, extension)| extension.to_ascii_lowercase())
+        .unwrap_or_default();
+    let normalized_media_type = match extension.as_str() {
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "zip" => "application/zip",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "doc" => "application/msword",
+        "xls" => "application/vnd.ms-excel",
+        "ppt" => "application/vnd.ms-powerpoint",
+        "txt" | "md" | "csv" | "json" | "rs" | "py" | "js" | "ts" | "jsx" | "tsx" |
+        "java" | "c" | "cpp" | "h" | "css" | "sql" | "go" | "html" | "xml" | "yaml" | "yml" =>
+            "text/plain; charset=utf-8",
+        _ => return Err(fail(StatusCode::BAD_REQUEST, "This file type is not supported")),
+    };
+
+    let storage_key = Uuid::new_v4().to_string();
+    // Persist cleanup ownership before the external object write. If the process
+    // stops or the provider times out after accepting the PUT, the outbox can
+    // still remove the object after this upload intent expires.
+    sqlx::query(
+        "INSERT INTO object_deletion_outbox(storage_key, next_attempt_at)
+         VALUES ($1, NOW() + INTERVAL '30 minutes')
+         ON CONFLICT (storage_key) DO NOTHING",
+    )
+    .bind(&storage_key)
+    .execute(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not register upload cleanup intent"))?;
+
+    state.storage.put_file(&storage_key, &temporary.path, normalized_media_type, &checksum, size_bytes as u64)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "Could not store workspace file; cleanup intent retained");
+            fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not store uploaded file")
+        })?;
+
+    let mut upload_tx = state.db.begin().await
+        .map_err(|error| internal(error, "Could not begin file metadata transaction"))?;
+    let file = sqlx::query_as::<_, WorkspaceFile>(
+        "INSERT INTO workspace_files
+            (workspace_id, board_id, task_id, uploaded_by, original_name, storage_key, media_type, size_bytes, checksum_sha256)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         RETURNING id, workspace_id, board_id, task_id, uploaded_by, original_name, media_type,
+                   size_bytes, checksum_sha256, created_at",
+    )
+    .bind(workspace_id)
+    .bind(board_id)
+    .bind(task_id)
+    .bind(user_id)
+    .bind(original_name.trim())
+    .bind(&storage_key)
+    .bind(normalized_media_type)
+    .bind(size_bytes)
+    .bind(&checksum)
+    .fetch_one(&mut *upload_tx)
+    .await
+    .map_err(|error| internal(error, "Could not save uploaded file metadata"))?;
+
+    sqlx::query("DELETE FROM object_deletion_outbox WHERE storage_key=$1")
+        .bind(&storage_key)
+        .execute(&mut *upload_tx)
+        .await
+        .map_err(|error| internal(error, "Could not finalize upload cleanup intent"))?;
+    upload_tx.commit().await
+        .map_err(|error| internal(error, "Could not commit uploaded file metadata"))?;
+
+    state.publish_workspace_event(workspace_id, board_id, "file_uploaded", format!("uploaded {}", file.original_name));
+    Ok((StatusCode::CREATED, Json(file)))
+}
+
+async fn file_download(
+    State(state): State<AppState>,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
+    Path(file_id): Path<Uuid>,
+) -> ApiResult<Response<axum::body::Body>> {
+    let row: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT storage_key, original_name, media_type FROM workspace_files WHERE id=$1 AND workspace_id=$2 AND is_deleting=FALSE",
+    )
+    .bind(file_id)
+    .bind(workspace_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not load file metadata"))?;
+    let Some((storage_key, original_name, media_type)) = row else {
+        return Err(fail(StatusCode::NOT_FOUND, "File not found"));
+    };
+
+    let bytes = state.storage.get(&storage_key).await.map_err(|error| {
+        tracing::error!(%error, "Could not read workspace file");
+        fail(StatusCode::NOT_FOUND, "Stored file is unavailable")
+    })?;
+    let safe_name: String = original_name.chars()
+        .map(|character| if character.is_ascii_alphanumeric() || "._- ".contains(character) { character } else { '_' })
+        .collect();
+    let content_type = HeaderValue::from_str(&media_type)
+        .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"));
+    let disposition = HeaderValue::from_str(&format!("attachment; filename=\"{}\"", safe_name))
+        .unwrap_or_else(|_| HeaderValue::from_static("attachment; filename=\"download\""));
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CONTENT_DISPOSITION, disposition)
+        .header("x-content-type-options", "nosniff")
+        .header(header::CACHE_CONTROL, "no-store")
+        .body(axum::body::Body::from(bytes))
+        .map_err(|error| internal(error, "Could not prepare file download"))
+}
+
+async fn file_delete(
+    State(state): State<AppState>,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
+    Path(file_id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    let existing: Option<bool> = sqlx::query_scalar(
+        "SELECT is_deleting FROM workspace_files
+         WHERE id=$1 AND workspace_id=$2 AND uploaded_by=$3",
+    )
+    .bind(file_id)
+    .bind(workspace_id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not load file metadata"))?;
+    let Some(is_deleting) = existing else {
+        return Err(fail(StatusCode::NOT_FOUND, "File not found or you did not upload it"));
+    };
+    if is_deleting {
+        return Ok(StatusCode::ACCEPTED);
+    }
+
+    sqlx::query(
+        "UPDATE workspace_files
+            SET is_deleting=TRUE, delete_after=NOW(), delete_error=NULL
+          WHERE id=$1 AND workspace_id=$2 AND uploaded_by=$3 AND is_deleting=FALSE",
+    )
+    .bind(file_id)
+    .bind(workspace_id)
+    .bind(user_id)
+    .execute(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not schedule file deletion"))?;
+
+    state.publish_workspace_event(workspace_id, None, "file_deletion_queued", "queued workspace file deletion");
+    Ok(StatusCode::ACCEPTED)
+}
+
+#[derive(Debug, Serialize, FromRow)]
+struct ChatMessage {
+    id: Uuid,
+    workspace_id: Uuid,
+    board_id: Option<Uuid>,
+    author_id: Uuid,
+    author_name: String,
+    body: String,
+    created_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatQuery {
+    board_id: Option<Uuid>,
+}
+
+async fn chat_list(
+    State(state): State<AppState>,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
+    Query(query): Query<ChatQuery>,
+) -> ApiResult<Json<Vec<ChatMessage>>> {
+    if let Some(board_id) = query.board_id {
+        board_in_workspace(&state, board_id, workspace_id).await?;
+    }
+    let rows = sqlx::query_as::<_, ChatMessage>(
+        "SELECT m.id, m.workspace_id, m.board_id, m.author_id, u.full_name AS author_name,
+                m.body, m.created_at
+         FROM chat_messages m JOIN users u ON u.id=m.author_id
+         WHERE m.workspace_id=$1 AND (
+             ($2::uuid IS NULL AND m.board_id IS NULL) OR m.board_id=$2
+         )
+         ORDER BY m.created_at DESC LIMIT 100",
+    )
+    .bind(workspace_id)
+    .bind(query.board_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not load team chat"))?;
+    Ok(Json(rows.into_iter().rev().collect()))
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatInput {
+    board_id: Option<Uuid>,
+    body: String,
+}
+
+async fn chat_send(
+    State(state): State<AppState>,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
+    Json(input): Json<ChatInput>,
+) -> ApiResult<(StatusCode, Json<ChatMessage>)> {
+    let body = input.body.trim();
+    if body.is_empty() || body.chars().count() > 4000 {
+        return Err(fail(StatusCode::BAD_REQUEST, "Message must be between 1 and 4000 characters"));
+    }
+    if let Some(board_id) = input.board_id {
+        board_in_workspace(&state, board_id, workspace_id).await?;
+    }
+    let message = sqlx::query_as::<_, ChatMessage>(
+        "INSERT INTO chat_messages (workspace_id, board_id, author_id, body)
+         VALUES ($1,$2,$3,$4)
+         RETURNING id, workspace_id, board_id, author_id,
+            (SELECT full_name FROM users WHERE id=$3) AS author_name, body, created_at",
+    )
+    .bind(workspace_id)
+    .bind(input.board_id)
+    .bind(user_id)
+    .bind(body)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not send team message"))?;
+    state.publish_workspace_event(workspace_id, input.board_id, "chat_message_created", "sent a team message");
+    Ok((StatusCode::CREATED, Json(message)))
+}
+
+#[derive(Debug, Serialize, FromRow)]
+struct MeetingNote {
+    id: Uuid,
+    workspace_id: Uuid,
+    board_id: Option<Uuid>,
+    created_by: Uuid,
+    title: String,
+    meeting_at: Option<chrono::DateTime<Utc>>,
+    attendees: String,
+    agenda: String,
+    notes: String,
+    action_items: String,
+    created_at: chrono::DateTime<Utc>,
+    updated_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MeetingNoteInput {
+    board_id: Option<Uuid>,
+    title: String,
+    meeting_at: Option<chrono::DateTime<Utc>>,
+    attendees: Option<String>,
+    agenda: Option<String>,
+    notes: Option<String>,
+    action_items: Option<String>,
+}
+
+fn validate_meeting_note(input: &MeetingNoteInput) -> ApiResult<()> {
+    if input.title.trim().is_empty() || input.title.chars().count() > 180 {
+        return Err(fail(StatusCode::BAD_REQUEST, "Meeting title must be between 1 and 180 characters"));
+    }
+    for value in [&input.attendees, &input.agenda, &input.notes, &input.action_items] {
+        if value.as_ref().is_some_and(|text| text.chars().count() > 12000) {
+            return Err(fail(StatusCode::BAD_REQUEST, "Meeting notes are too long"));
+        }
+    }
+    Ok(())
+}
+
+async fn meeting_notes_list(
+    State(state): State<AppState>,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
+) -> ApiResult<Json<Vec<MeetingNote>>> {
+    let rows = sqlx::query_as::<_, MeetingNote>(
+        "SELECT id, workspace_id, board_id, created_by, title, meeting_at, attendees,
+                agenda, notes, action_items, created_at, updated_at
+         FROM meeting_notes WHERE workspace_id=$1 ORDER BY meeting_at DESC NULLS LAST, created_at DESC",
+    )
+    .bind(workspace_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not load meeting notes"))?;
+    Ok(Json(rows))
+}
+
+async fn meeting_note_create(
+    State(state): State<AppState>,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
+    Json(input): Json<MeetingNoteInput>,
+) -> ApiResult<(StatusCode, Json<MeetingNote>)> {
+    validate_meeting_note(&input)?;
+    if let Some(board_id) = input.board_id {
+        board_in_workspace(&state, board_id, workspace_id).await?;
+    }
+    let note = sqlx::query_as::<_, MeetingNote>(
+        "INSERT INTO meeting_notes
+            (workspace_id, board_id, created_by, title, meeting_at, attendees, agenda, notes, action_items)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         RETURNING id, workspace_id, board_id, created_by, title, meeting_at, attendees,
+                   agenda, notes, action_items, created_at, updated_at",
+    )
+    .bind(workspace_id)
+    .bind(input.board_id)
+    .bind(user_id)
+    .bind(input.title.trim())
+    .bind(input.meeting_at)
+    .bind(input.attendees.as_deref().unwrap_or(""))
+    .bind(input.agenda.as_deref().unwrap_or(""))
+    .bind(input.notes.as_deref().unwrap_or(""))
+    .bind(input.action_items.as_deref().unwrap_or(""))
+    .fetch_one(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not create meeting notes"))?;
+    state.publish_workspace_event(workspace_id, input.board_id, "meeting_notes_created", format!("created meeting notes for {}", note.title));
+    Ok((StatusCode::CREATED, Json(note)))
+}
+
+async fn meeting_note_update(
+    State(state): State<AppState>,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
+    Path(note_id): Path<Uuid>,
+    Json(input): Json<MeetingNoteInput>,
+) -> ApiResult<StatusCode> {
+    validate_meeting_note(&input)?;
+    if let Some(board_id) = input.board_id {
+        board_in_workspace(&state, board_id, workspace_id).await?;
+    }
+    let result = sqlx::query(
+        "UPDATE meeting_notes SET board_id=$1, title=$2, meeting_at=$3, attendees=$4,
+            agenda=$5, notes=$6, action_items=$7, updated_at=NOW()
+         WHERE id=$8 AND workspace_id=$9",
+    )
+    .bind(input.board_id)
+    .bind(input.title.trim())
+    .bind(input.meeting_at)
+    .bind(input.attendees.as_deref().unwrap_or(""))
+    .bind(input.agenda.as_deref().unwrap_or(""))
+    .bind(input.notes.as_deref().unwrap_or(""))
+    .bind(input.action_items.as_deref().unwrap_or(""))
+    .bind(note_id)
+    .bind(workspace_id)
+    .execute(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not update meeting notes"))?;
+    if result.rows_affected() == 0 {
+        return Err(fail(StatusCode::NOT_FOUND, "Meeting notes not found"));
+    }
+    state.publish_workspace_event(workspace_id, input.board_id, "meeting_notes_updated", "updated meeting notes");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn meeting_note_delete(
+    State(state): State<AppState>,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
+    Path(note_id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    let result = sqlx::query("DELETE FROM meeting_notes WHERE id=$1 AND workspace_id=$2 AND created_by=$3")
+        .bind(note_id)
+        .bind(workspace_id)
+        .bind(user_id)
+        .execute(&state.db)
+        .await
+        .map_err(|error| internal(error, "Could not delete meeting notes"))?;
+    if result.rows_affected() == 0 {
+        return Err(fail(StatusCode::NOT_FOUND, "Meeting notes not found or you did not create them"));
+    }
+    state.publish_workspace_event(workspace_id, None, "meeting_notes_deleted", "deleted meeting notes");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn analytics(
+    State(state): State<AppState>,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
+) -> ApiResult<Json<Value>> {
+    let (total, completed, overdue, unassigned): (i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT
+           COUNT(*)::bigint,
+           COUNT(*) FILTER (WHERE lower(l.name) IN ('done','complete','completed'))::bigint,
+           COUNT(*) FILTER (WHERE t.due_at < NOW() AND lower(l.name) NOT IN ('done','complete','completed'))::bigint,
+           COUNT(*) FILTER (WHERE NOT EXISTS(SELECT 1 FROM task_assignees ta WHERE ta.task_id=t.id))::bigint
+         FROM tasks t
+         JOIN lists l ON l.id=t.list_id
+         JOIN boards b ON b.id=l.board_id
+         WHERE b.workspace_id=$1",
+    )
+    .bind(workspace_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not calculate workspace metrics"))?;
+
+    let members = sqlx::query_as::<_, (Uuid, String, i64, i64)>(
+        "SELECT u.id, u.full_name,
+           COUNT(DISTINCT t.id) FILTER (WHERE b.id IS NOT NULL AND lower(l.name) NOT IN ('done','complete','completed'))::bigint AS open_tasks,
+           COUNT(DISTINCT t.id) FILTER (WHERE b.id IS NOT NULL AND lower(l.name) IN ('done','complete','completed'))::bigint AS completed_tasks
+         FROM workspace_members wm
+         JOIN users u ON u.id=wm.user_id
+         LEFT JOIN task_assignees ta ON ta.user_id=u.id
+         LEFT JOIN tasks t ON t.id=ta.task_id
+         LEFT JOIN lists l ON l.id=t.list_id
+         LEFT JOIN boards b ON b.id=l.board_id AND b.workspace_id=wm.workspace_id
+         WHERE wm.workspace_id=$1
+         GROUP BY u.id, u.full_name ORDER BY u.full_name",
+    )
+    .bind(workspace_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not calculate member workload"))?;
+
+    let project_rows = sqlx::query_as::<_, (Uuid, String, i64, i64)>(
+        "SELECT b.id, b.name, COUNT(t.id)::bigint,
+           COUNT(t.id) FILTER (WHERE lower(l.name) IN ('done','complete','completed'))::bigint
+         FROM boards b LEFT JOIN lists l ON l.board_id=b.id
+         LEFT JOIN tasks t ON t.list_id=l.id
+         WHERE b.workspace_id=$1 GROUP BY b.id,b.name ORDER BY b.name",
+    )
+    .bind(workspace_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not calculate project progress"))?;
+
+    Ok(Json(json!({
+        "total_tasks": total,
+        "completed_tasks": completed,
+        "completion_percent": if total > 0 { completed * 100 / total } else { 0 },
+        "overdue_tasks": overdue,
+        "unassigned_tasks": unassigned,
+        "members": members.into_iter().map(|(id, name, open, done)| json!({
+            "user_id": id, "full_name": name, "open_tasks": open, "completed_tasks": done
+        })).collect::<Vec<_>>(),
+        "projects": project_rows.into_iter().map(|(id, name, task_count, done_count)| json!({
+            "board_id": id, "name": name, "task_count": task_count, "completed_count": done_count,
+            "completion_percent": if task_count > 0 { done_count * 100 / task_count } else { 0 }
+        })).collect::<Vec<_>>()
+    })))
+}
+
+
+#[derive(Debug, FromRow)]
+struct PendingFileDeletion {
+    id: Uuid,
+    storage_key: String,
+    attempts: i32,
+}
+
+async fn cleanup_pending_files(state: &AppState) {
+    let mut transaction = match state.db.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => {
+            tracing::error!(%error, "Could not begin file cleanup batch");
+            return;
+        }
+    };
+
+    let rows = match sqlx::query_as::<_, PendingFileDeletion>(
+        "SELECT id, storage_key, delete_attempts AS attempts
+           FROM workspace_files
+          WHERE is_deleting=TRUE AND delete_after <= NOW()
+          ORDER BY delete_after, created_at
+          FOR UPDATE SKIP LOCKED
+          LIMIT 10",
+    )
+    .fetch_all(&mut *transaction)
+    .await {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::error!(%error, "Could not load pending file deletions");
+            return;
+        }
+    };
+
+    let mut changed_workspaces = Vec::new();
+    for row in rows {
+        match state.storage.delete(&row.storage_key).await {
+            Ok(()) => {
+                if let Err(error) = sqlx::query(
+                    "UPDATE workspace_files SET object_delete_confirmed=TRUE
+                      WHERE id=$1 AND is_deleting=TRUE",
+                )
+                .bind(row.id)
+                .execute(&mut *transaction)
+                .await {
+                    tracing::error!(%error, file_id=%row.id, "Could not confirm object deletion");
+                    continue;
+                }
+                match sqlx::query_scalar::<_, Uuid>(
+                    "DELETE FROM workspace_files WHERE id=$1 AND is_deleting=TRUE RETURNING workspace_id",
+                )
+                .bind(row.id)
+                .fetch_optional(&mut *transaction)
+                .await {
+                    Ok(Some(workspace_id)) => changed_workspaces.push(workspace_id),
+                    Ok(None) => {}
+                    Err(error) => tracing::error!(%error, file_id=%row.id, "Could not remove deleted file metadata"),
+                }
+            }
+            Err(error) => {
+                let backoff_seconds = (60_i64 * 2_i64.pow(row.attempts.clamp(0, 6) as u32)).min(3600);
+                if let Err(update_error) = sqlx::query(
+                    "UPDATE workspace_files
+                        SET delete_attempts=delete_attempts+1,
+                            delete_error=$2,
+                            delete_after=statement_timestamp()+make_interval(secs=>$3)
+                      WHERE id=$1 AND is_deleting=TRUE",
+                )
+                .bind(row.id)
+                .bind(error)
+                .bind(backoff_seconds as f64)
+                .execute(&mut *transaction)
+                .await {
+                    tracing::error!(%update_error, file_id=%row.id, "Could not schedule file deletion retry");
+                }
+            }
+        }
+    }
+
+    match transaction.commit().await {
+        Ok(()) => {
+            for workspace_id in changed_workspaces {
+                state.publish_workspace_event(workspace_id, None, "file_deleted", "completed workspace file deletion");
+            }
+        }
+        Err(error) => tracing::error!(%error, "Could not commit workspace file cleanup batch"),
+    }
+}
+
+#[derive(Debug, FromRow)]
+struct PendingObjectDeletion {
+    storage_key: String,
+    attempts: i32,
+}
+
+/// Object keys are copied into this outbox by a DELETE trigger on workspace_files.
+/// That trigger also runs for task, board, and workspace cascades, so metadata
+/// removal never loses the last durable reference to the object bytes.
+async fn cleanup_orphaned_objects(state: &AppState) {
+    let mut transaction = match state.db.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => {
+            tracing::error!(%error, "Could not begin orphaned-object cleanup batch");
+            return;
+        }
+    };
+
+    let rows = match sqlx::query_as::<_, PendingObjectDeletion>(
+        "SELECT storage_key, attempts
+           FROM object_deletion_outbox
+          WHERE next_attempt_at <= NOW()
+          ORDER BY next_attempt_at, created_at
+          FOR UPDATE SKIP LOCKED
+          LIMIT 20",
+    )
+    .fetch_all(&mut *transaction)
+    .await {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::error!(%error, "Could not load orphaned-object cleanup jobs");
+            return;
+        }
+    };
+
+    for row in rows {
+        match state.storage.delete(&row.storage_key).await {
+            Ok(()) => {
+                if let Err(error) = sqlx::query(
+                    "DELETE FROM object_deletion_outbox WHERE storage_key=$1",
+                )
+                .bind(&row.storage_key)
+                .execute(&mut *transaction)
+                .await {
+                    tracing::error!(%error, storage_key=%row.storage_key, "Could not clear completed object deletion");
+                }
+            }
+            Err(error) => {
+                let backoff_seconds = (60_i64 * 2_i64.pow(row.attempts.clamp(0, 8) as u32)).min(21600);
+                if let Err(update_error) = sqlx::query(
+                    "UPDATE object_deletion_outbox
+                        SET attempts=attempts+1,
+                            last_error=$2,
+                            next_attempt_at=NOW()+make_interval(secs=>$3),
+                            updated_at=NOW()
+                      WHERE storage_key=$1",
+                )
+                .bind(&row.storage_key)
+                .bind(error)
+                .bind(backoff_seconds as f64)
+                .execute(&mut *transaction)
+                .await {
+                    tracing::error!(%update_error, storage_key=%row.storage_key, "Could not schedule orphaned-object retry");
+                }
+            }
+        }
+    }
+
+    if let Err(error) = transaction.commit().await {
+        tracing::error!(%error, "Could not commit orphaned-object cleanup batch");
+    }
+}
+
+pub async fn run_file_cleanup(state: AppState) {
+    let mut ticker = interval(TokioDuration::from_secs(60));
+    loop {
+        ticker.tick().await;
+        cleanup_pending_files(&state).await;
+        cleanup_orphaned_objects(&state).await;
+    }
+}
+
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/calendar", get(calendar_list).post(calendar_create))
+        .route("/calendar/events/{event_id}", patch(calendar_update).delete(calendar_delete))
+        .route("/notifications", get(notifications_list))
+        .route("/notifications/read-all", post(notifications_read_all))
+        .route("/notifications/{notification_id}/read", patch(notification_read))
+        .route("/notification-preferences", get(notification_preferences).put(notification_preference_update))
+        .route("/files", get(files_list).post(files_upload).layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES + 1024 * 1024)))
+        .route("/files/{file_id}/download", get(file_download))
+        .route("/files/{file_id}", delete(file_delete))
+        .route("/chat/messages", get(chat_list).post(chat_send))
+        .route("/meeting-notes", get(meeting_notes_list).post(meeting_note_create))
+        .route("/meeting-notes/{note_id}", patch(meeting_note_update).delete(meeting_note_delete))
+        .route("/analytics", get(analytics))
+}

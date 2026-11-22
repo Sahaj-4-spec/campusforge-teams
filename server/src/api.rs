@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     routing::{get, patch, post},
     Json, Router,
 };
@@ -10,7 +10,7 @@ use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use std::collections::HashSet;
 use uuid::Uuid;
 
-use crate::{auth::AuthUser, state::AppState};
+use crate::{auth::{AuthUser, WorkspaceUser}, state::AppState};
 
 #[derive(Debug, Serialize)]
 struct ErrorBody {
@@ -28,7 +28,7 @@ fn internal_error<E: std::fmt::Display>(cause: E, context: &'static str) -> (Sta
     error(StatusCode::INTERNAL_SERVER_ERROR, "The request could not be completed")
 }
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Clone, Serialize, FromRow)]
 struct WorkspaceRow {
     id: Uuid,
     name: String,
@@ -85,6 +85,8 @@ struct TaskRow {
     description: String,
     priority: String,
     due_date: Option<String>,
+    parent_task_id: Option<Uuid>,
+    estimated_minutes: Option<i32>,
     position: i32,
     created_by: Uuid,
     created_at: DateTime<Utc>,
@@ -213,18 +215,35 @@ async fn ensure_default_workspace(pool: &PgPool, user_id: Uuid) -> Result<(), sq
 async fn get_workspace(
     State(state): State<AppState>,
     AuthUser(user_id): AuthUser,
+    headers: HeaderMap,
 ) -> ApiResult<Json<WorkspaceSnapshot>> {
     ensure_default_workspace(&state.db, user_id)
         .await
         .map_err(|cause| internal_error(cause, "Could not initialize the user's workspace"))?;
 
-    let workspace = sqlx::query_as::<_, WorkspaceRow>(
-        "SELECT w.id, w.name, w.description, w.created_at          FROM workspaces w          JOIN workspace_members wm ON wm.workspace_id = w.id          WHERE wm.user_id = $1 ORDER BY wm.joined_at DESC LIMIT 1",
+    let workspaces = sqlx::query_as::<_, WorkspaceRow>(
+        "SELECT w.id, w.name, w.description, w.created_at
+           FROM workspaces w
+           JOIN workspace_members wm ON wm.workspace_id = w.id
+          WHERE wm.user_id = $1
+          ORDER BY wm.joined_at DESC, w.created_at DESC",
     )
     .bind(user_id)
-    .fetch_one(&state.db)
+    .fetch_all(&state.db)
     .await
-    .map_err(|cause| internal_error(cause, "Could not load workspace"))?;
+    .map_err(|cause| internal_error(cause, "Could not list user's workspaces"))?;
+
+    let requested_workspace_id = headers.get("x-workspace-id")
+        .map(|value| value.to_str().map_err(|_| error(StatusCode::BAD_REQUEST, "Workspace selection is invalid")))
+        .transpose()?
+        .map(|value| Uuid::parse_str(value).map_err(|_| error(StatusCode::BAD_REQUEST, "Workspace selection is invalid")))
+        .transpose()?;
+    let workspace_id = requested_workspace_id
+        .or_else(|| workspaces.first().map(|workspace| workspace.id))
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "Workspace not found"))?;
+    let workspace = workspaces.iter().find(|workspace| workspace.id == workspace_id)
+        .cloned()
+        .ok_or_else(|| error(StatusCode::FORBIDDEN, "You are not a member of the selected workspace"))?;
 
     let users = sqlx::query_as::<_, UserRow>(
         "SELECT u.id, u.email, u.full_name, u.avatar_url          FROM users u JOIN workspace_members wm ON wm.user_id = u.id          WHERE wm.workspace_id = $1 ORDER BY u.full_name",
@@ -267,7 +286,7 @@ async fn get_workspace(
     .map_err(|cause| internal_error(cause, "Could not load lists"))?;
 
     let tasks = sqlx::query_as::<_, TaskRow>(
-        "SELECT t.id, l.board_id, t.list_id, t.title, COALESCE(t.description, '') AS description,          t.priority, CASE WHEN t.due_at IS NULL THEN NULL          ELSE to_char(t.due_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') END AS due_date,          t.position, t.created_by, t.created_at, t.updated_at          FROM tasks t JOIN lists l ON l.id = t.list_id          JOIN boards b ON b.id = l.board_id          WHERE b.workspace_id = $1 ORDER BY l.board_id, t.list_id, t.position",
+        "SELECT t.id, l.board_id, t.list_id, t.title, COALESCE(t.description, '') AS description,          t.priority, CASE WHEN t.due_at IS NULL THEN NULL          ELSE to_char(t.due_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') END AS due_date,          t.parent_task_id, t.estimated_minutes, t.position, t.created_by, t.created_at, t.updated_at          FROM tasks t JOIN lists l ON l.id = t.list_id          JOIN boards b ON b.id = l.board_id          WHERE b.workspace_id = $1 ORDER BY l.board_id, t.list_id, t.position",
     )
     .bind(workspace.id)
     .fetch_all(&state.db)
@@ -301,7 +320,7 @@ async fn get_workspace(
     Ok(Json(WorkspaceSnapshot {
         current_user_id: user_id,
         current_workspace_id: workspace.id,
-        workspaces: vec![workspace],
+        workspaces,
         users,
         workspace_members,
         boards,
@@ -322,7 +341,7 @@ struct BoardInput {
 
 async fn create_board(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Json(input): Json<BoardInput>,
 ) -> ApiResult<StatusCode> {
     let name = input.name.trim();
@@ -334,15 +353,16 @@ async fn create_board(
     }
 
     let mut tx = state.db.begin().await.map_err(|cause| internal_error(cause, "Could not begin project creation"))?;
-    let membership: Option<(Uuid, String)> = sqlx::query_as(
-        "SELECT workspace_id, role FROM workspace_members WHERE user_id = $1 ORDER BY joined_at DESC LIMIT 1",
+    let workspace_role: Option<String> = sqlx::query_scalar(
+        "SELECT role FROM workspace_members WHERE user_id=$1 AND workspace_id=$2",
     )
     .bind(user_id)
+    .bind(workspace_id)
     .fetch_optional(&mut *tx)
     .await
-    .map_err(|cause| internal_error(cause, "Could not find the user's workspace"))?;
-    let Some((workspace_id, workspace_role)) = membership else {
-        return Err(error(StatusCode::NOT_FOUND, "Workspace not found"));
+    .map_err(|cause| internal_error(cause, "Could not verify workspace project permissions"))?;
+    let Some(workspace_role) = workspace_role else {
+        return Err(error(StatusCode::FORBIDDEN, "You are not a member of the selected workspace"));
     };
     if workspace_role != "owner" && workspace_role != "admin" {
         return Err(error(StatusCode::FORBIDDEN, "Only workspace owners and admins can create projects"));
@@ -398,6 +418,7 @@ struct TaskInput {
     due_date: Option<NaiveDate>,
     list_id: Uuid,
     assignee_id: Option<Uuid>,
+    estimated_minutes: Option<i32>,
 }
 
 fn validate_task(input: &TaskInput) -> ApiResult<&str> {
@@ -407,6 +428,9 @@ fn validate_task(input: &TaskInput) -> ApiResult<&str> {
     }
     if input.description.as_ref().is_some_and(|value| value.chars().count() > 4000) {
         return Err(error(StatusCode::BAD_REQUEST, "Task description is too long"));
+    }
+    if input.estimated_minutes.is_some_and(|value| value < 1 || value > 100000) {
+        return Err(error(StatusCode::BAD_REQUEST, "Estimated time must be between 1 and 100000 minutes"));
     }
     let priority = input.priority.as_deref().unwrap_or("medium");
     if !["low", "medium", "high", "urgent"].contains(&priority) {
@@ -432,7 +456,60 @@ async fn add_activity(
     .bind(task_id)
     .bind(actor_id)
     .bind(event_type)
-    .bind(description)
+    .bind(&description)
+    .execute(&mut **tx)
+    .await?;
+
+    let notification_type = match event_type {
+        "comment_added" => "comment",
+        "task_created" | "task_assigned" => "task_assigned",
+        _ => "project_update",
+    };
+    let title = match event_type {
+        "comment_added" => "New task comment",
+        "task_created" => "New task created",
+        "task_assigned" => "Task assigned to you",
+        "task_moved" => "Task moved",
+        "task_updated" => "Task updated",
+        _ => "Workspace update",
+    };
+    let resource_type = if task_id.is_some() { "task" } else { "project" };
+    sqlx::query(
+        "WITH recipient_preferences AS (
+            SELECT wm.workspace_id, wm.user_id,
+                   COALESCE(np.in_app_enabled, TRUE) AS in_app_enabled,
+                   COALESCE(np.email_enabled, FALSE) AS email_enabled
+              FROM workspace_members wm
+              LEFT JOIN notification_preferences np
+                ON np.user_id = wm.user_id AND np.notification_type = $3
+             WHERE wm.workspace_id = $1 AND wm.user_id <> $2
+               AND (COALESCE(np.in_app_enabled, TRUE) OR COALESCE(np.email_enabled, FALSE))
+               AND ($3 <> 'task_assigned' OR EXISTS (
+                    SELECT 1 FROM task_assignees ta
+                     WHERE ta.task_id=$7 AND ta.user_id=wm.user_id
+               ))
+         ),
+         inserted_notifications AS (
+            INSERT INTO notifications
+                (workspace_id, recipient_user_id, actor_user_id, notification_type, title, body, resource_type, resource_id)
+            SELECT rp.workspace_id, rp.user_id, $2, $3, $4, $5, $6, $7
+              FROM recipient_preferences rp
+            RETURNING id, recipient_user_id
+         )
+         INSERT INTO notification_email_outbox (notification_id, recipient_user_id)
+         SELECT n.id, n.recipient_user_id
+           FROM inserted_notifications n
+           JOIN recipient_preferences rp ON rp.user_id = n.recipient_user_id
+          WHERE rp.email_enabled
+         ON CONFLICT (notification_id) DO NOTHING",
+    )
+    .bind(workspace_id)
+    .bind(actor_id)
+    .bind(notification_type)
+    .bind(title)
+    .bind(&description)
+    .bind(resource_type)
+    .bind(task_id)
     .execute(&mut **tx)
     .await?;
     Ok(())
@@ -490,7 +567,7 @@ async fn create_task(
         .map_err(|cause| internal_error(cause, "Could not find task position"))?;
 
     let task_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO tasks (list_id, title, description, priority, due_at, position, created_by)          VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+        "INSERT INTO tasks (list_id, title, description, priority, due_at, position, created_by, estimated_minutes)          VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id",
     )
     .bind(input.list_id)
     .bind(title)
@@ -499,6 +576,7 @@ async fn create_task(
     .bind(due_at)
     .bind(position)
     .bind(user_id)
+    .bind(input.estimated_minutes)
     .fetch_one(&mut *tx)
     .await
     .map_err(|cause| internal_error(cause, "Could not create task"))?;
@@ -565,6 +643,14 @@ async fn update_task(
         }
     }
 
+    let previous_assignee_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT user_id FROM task_assignees WHERE task_id=$1 ORDER BY user_id LIMIT 1",
+    )
+    .bind(task_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|cause| internal_error(cause, "Could not load previous task assignee"))?;
+
     if old_list_id != input.list_id {
         let position: i32 = sqlx::query_scalar(
             "SELECT COALESCE(MAX(position), 0) + 1 FROM tasks WHERE list_id = $1",
@@ -600,12 +686,13 @@ async fn update_task(
     }
 
     sqlx::query(
-        "UPDATE tasks SET title = $1, description = $2, priority = $3, due_at = $4, updated_at = NOW() WHERE id = $5",
+        "UPDATE tasks SET title = $1, description = $2, priority = $3, due_at = $4, estimated_minutes = $5, updated_at = NOW() WHERE id = $6",
     )
     .bind(title)
     .bind(description)
     .bind(priority)
     .bind(due_at)
+    .bind(input.estimated_minutes)
     .bind(task_id)
     .execute(&mut *tx)
     .await
@@ -626,12 +713,22 @@ async fn update_task(
     }
 
     let moved = old_list_id != input.list_id;
-    let description = if moved {
+    let assignment_changed = previous_assignee_id != input.assignee_id;
+    let event_type = if assignment_changed && input.assignee_id.is_some() {
+        "task_assigned"
+    } else if moved {
+        "task_moved"
+    } else {
+        "task_updated"
+    };
+    let description = if assignment_changed && input.assignee_id.is_some() {
+        format!("assigned {title}")
+    } else if moved {
         format!("moved {old_title} to another list")
     } else {
         format!("updated {title}")
     };
-    add_activity(&mut tx, workspace_id, board_id, Some(task_id), user_id, if moved { "task_moved" } else { "task_updated" }, description)
+    add_activity(&mut tx, workspace_id, board_id, Some(task_id), user_id, event_type, description)
         .await.map_err(|cause| internal_error(cause, "Could not record task activity"))?;
     tx.commit().await.map_err(|cause| internal_error(cause, "Could not save task update"))?;
     state.publish_workspace_event(

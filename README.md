@@ -58,10 +58,16 @@ CampusForge Teams is a Trello-inspired Kanban application. Team members can crea
 - Persist the new order in PostgreSQL.
 - Broadcast authorized board changes to connected members through native WebSockets.
 
-### 6. Roadmap: Deadline Risk Radar (not yet implemented)
-- Identify overdue tasks and upcoming deadlines.
-- Display project completion statistics.
-- Highlight tasks without an assigned member.
+### 6. Collaboration Suite (draft implementation branch — not deployed)
+The collaboration-suite branch adds:
+- Team calendar with month, week, and day views, task deadlines, meetings, milestones, exams, and submissions.
+- Advanced task tools: subtasks, checklists, workspace labels, same-project dependencies, estimated effort, and recurring task rules.
+- In-app notifications with read state, category preferences, and scheduled deadline reminders.
+- Shared workspace/project/task files with authenticated upload, download, and delete.
+- Server-backed productivity analytics for completion, overdue, unassigned, project progress, and member workload.
+- Workspace/project chat and structured meeting notes with agenda and action items.
+
+These capabilities are under review in [draft PR #12](https://github.com/Sahaj-4-spec/campusforge-teams/pull/12). They are not in the main branch or live hosted preview yet. File storage now has a local-development adapter and a configurable S3-compatible production adapter; a private bucket, credentials, backups, retention, and malware scanning still need to be configured and verified. Email notification delivery now has an opt-in Resend adapter and retryable outbox; it remains inactive until the sender domain and backend secrets are configured. The AI project assistant remains a future roadmap item. See [the full roadmap](docs/ROADMAP.md), [architecture decisions](docs/ARCHITECTURE.md), and [storage/email operations](docs/OPERATIONS.md).
 
 ## 🛠️ Technology Stack
 
@@ -107,7 +113,7 @@ CampusForge Teams is a Trello-inspired Kanban application. Team members can crea
 - `POST /api/tasks/:id/comments` saves discussion comments; `PATCH /api/tasks/:id/move` persists drag-and-drop order.
 - `POST /api/boards/:board_id/lists`, `PATCH /api/lists/:id`, and `DELETE /api/lists/:id` manage project columns.
 - `GET/POST /api/invitations/`, `DELETE /api/invitations/:id`, and `POST /api/invitations/accept` manage workspace invitations.
-- Protected routes require an `Authorization: Bearer <token>` header. SQLx provides asynchronous access to PostgreSQL.
+- Browser sessions use an API-issued HttpOnly cookie; protected routes also retain Bearer authentication for non-browser clients. SQLx provides asynchronous access to PostgreSQL.
 - The Vite development server proxies `/api` and `/ws` to the backend on port `5000`. For a separately hosted frontend, set `VITE_API_BASE_URL` to the API service's HTTPS origin. Invitation links use the frontend root query string (`?invite=...`) and are accepted after the invitee signs in.
 
 ## 📁 Repository Structure
@@ -188,6 +194,12 @@ Edit `.env` and replace placeholder values with your local configuration. Never 
 | `JWT_SECRET` | Secret reserved for token signing |
 | `FRONTEND_ORIGIN` | Exact frontend origin allowed by API CORS (local: `http://localhost:5173`) |
 | `VITE_API_BASE_URL` | API origin for a separately hosted frontend; leave blank locally to use the Vite proxy |
+| `CAMPUSFORGE_STORAGE_MODE` | `local` for development or `s3` for a private S3-compatible bucket |
+| `CAMPUSFORGE_UPLOAD_DIR` | Local-mode upload directory (default: `server/uploads`) |
+| `CAMPUSFORGE_S3_BUCKET` / `CAMPUSFORGE_S3_REGION` | Private bucket name and region when storage mode is `s3` |
+| `CAMPUSFORGE_S3_ENDPOINT_URL` | Optional S3-compatible endpoint for R2/MinIO-style providers |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Optional server-side credentials; use a dedicated S3 access key and secret in backend secrets |
+| `RESEND_API_KEY` / `EMAIL_FROM` | Optional server-side email provider key and verified sender; leave blank to keep email delivery disabled |
 
 > For Neon, use the pooled or direct PostgreSQL connection string supplied by your Neon project and retain `sslmode=require`. Keep secrets in environment files or the hosting provider's secret store; never commit them.
 
@@ -222,12 +234,13 @@ The frontend milestone is connected to the authenticated Rust API.
 - Task comments and a recent activity timeline loaded from the API.
 - Workspace team directory, task search, and filters.
 - Responsive layout for desktop, tablet, and mobile screens.
-- JWT-backed sign-in and registration; the browser stores the session token and sends it with API requests.
-- Authenticated workspace WebSocket connection with reconnect handling and workspace snapshot refreshes after remote changes.
+- JWT-backed sign-in and registration; the API sends the session JWT only in an HttpOnly cookie, which browser JavaScript cannot read or persist.
+- Authenticated workspace WebSocket connections use the HttpOnly cookie during the handshake; JavaScript does not send the session token.
+- Browser API requests include credentials; the server validates the frontend Origin on state-changing cookie-authenticated requests.
 
 The active React application reads workspace, project, task, assignment, comment, and activity records from the authenticated Rust API backed by PostgreSQL. `client/src/data/demoData.js` remains as an unused legacy sample-data reference and is not the active application data source.
 
-**Connected:** account registration/sign-in, authenticated workspace loading, project creation, task CRUD, assignee persistence, comments, database-backed task reordering, column creation/rename/deletion, invitation creation/acceptance/revocation, workspace owner/admin checks, and workspace-scoped WebSocket event delivery. **Still pending:** automated browser end-to-end tests, live two-browser WebSocket acceptance tests, full workspace switching, and granular per-board permissions.
+**Connected in the collaboration-suite draft branch:** calendar month/week/day views and event creation, task deadlines, subtasks/checklists/labels/dependencies/estimates/recurrence controls, notification inbox and preferences, local/S3-compatible file storage adapters, server-backed analytics, project/workspace chat with WebSocket-triggered refresh, meeting notes, and an opt-in Resend email outbox with retry/backoff. These changes are in draft PR #12 and are not live on the hosted preview. **Still pending before production:** set up and verify the private object-storage bucket and credentials, configure and test the Resend sender domain/secrets, malware scanning and retention/backup policies, full browser and multi-user acceptance tests, calendar time-zone testing, shared WebSocket pub/sub for horizontal scaling, and granular per-board permissions.
 
 ## 🎨 UI Design System
 
@@ -248,6 +261,8 @@ The Cal.com reference is an independent visual analysis and is not affiliated wi
 - Authenticate API requests and authorize workspace membership on the server; fine-grained per-board permissions are not implemented yet.
 - Validate all incoming request data.
 - Use parameterized SQL queries through SQLx.
+- Keep S3-compatible buckets private and stream file downloads only after workspace authorization.
+- Store notification email jobs in PostgreSQL and send only for categories explicitly enabled by the member.
 - Restrict CORS to the configured frontend origin.
 - Authenticate WebSocket connections and scope broadcast events to the signed-in user's current workspace.
 - Never commit `.env`, database credentials, tokens, or private user files.
@@ -270,7 +285,7 @@ AI-assisted tools may be used to understand concepts, explore implementation app
 
 ## 🚧 Current Project Status
 
-**Status:** A hosted preview is deployed. The frontend production build, Rust compilation, Rust unit tests, CodeQL analysis, and configured dependency audits passed on the last fully completed CI/security run. The latest feature commits are being rebuilt and rechecked.
+**Status:** The existing main branch has a hosted preview. The collaboration suite is being developed in draft PR #12 and is not deployed. Its CI/security checks must pass on the latest PR commit before the branch is considered ready for review.
 
 The React client authenticates against the Rust API and loads workspace records from PostgreSQL. Task creation, editing, deletion, assignments, comments, project creation, column management, invitation workflows, and drag-and-drop ordering call protected Axum endpoints; they no longer rely on browser-local demo records. New accounts receive a starter workspace and project board when the workspace endpoint is first loaded. Authenticated WebSocket sessions receive workspace-scoped events after committed mutations, and the frontend reloads the snapshot when remote changes arrive.
 
@@ -296,3 +311,21 @@ The React client authenticates against the Rust API and loads workspace records 
 <p align="center">
   <strong>CampusForge Teams — Build Together. Achieve Together.</strong>
 </p>
+
+## Social sign-in
+
+CampusForge supports email/password authentication and server-side OAuth sign-in with Google, GitHub, and Discord. The provider integration requires server environment variables for each OAuth client ID and secret. See [Social Sign-in Setup](docs/SOCIAL_AUTH_SETUP.md) for provider console setup, exact callback URLs, local configuration, and the authentication test checklist.
+
+OAuth provider secrets must remain on the Rust API server and must never be added to frontend variables or committed to Git. Social-only accounts are stored with a nullable password hash, while existing password accounts continue to use Argon2 password verification. New OAuth identities are accepted only when the provider returns a verified email address.
+
+A CodeRabbit configuration is included in the repository root to guide pull-request reviews of OAuth handlers, auth code, migrations, and the sign-in UI. The CodeRabbit GitHub App must be installed and enabled for this repository before automated PR reviews can run.
+
+## Product roadmap and architecture decisions
+
+The product roadmap and the decisions for the target data model, API boundaries, security, and release order are documented here:
+
+- [Product roadmap](docs/ROADMAP.md)
+- [Architecture and project decisions](docs/ARCHITECTURE.md)
+- [Storage and email operations](docs/OPERATIONS.md)
+
+The collaboration-suite work is in draft PR #12 and is not merged or deployed. AI project assistance remains planned, not implemented. The roadmap and operations guide record the remaining production blockers.

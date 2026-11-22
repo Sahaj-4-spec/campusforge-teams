@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="arch" x1="12" y1="7" x2="52" y2="52" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#3478F6"/>
+      <stop offset="1" stop-color="#7739E8"/>
+    </linearGradient>
+    <linearGradient id="team" x1="9" y1="40" x2="56" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#10C9E8"/>
+      <stop offset="1" stop-color="#7D3CEB"/>
+    </linearGradient>
+    <linearGradient id="spark" x1="22" y1="19" x2="42" y2="39" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8DEFFF"/>
+      <stop offset="1" stop-color="#28BFF5"/>
+    </linearGradient>
+  </defs>
+  <path d="M13.5 47V28.5C13.5 18.3 21.8 10 32 10s18.5 8.3 18.5 18.5V47" stroke="url(#arch)" stroke-width="6.5" stroke-linecap="round"/>
+  <path d="m32 17.4 3.2 6.6 7.2 3.1-7.2 3.2-3.2 6.6-3.2-6.6-7.2-3.2 7.2-3.1 3.2-6.6Z" fill="url(#spark)"/>
+  <circle cx="22.5" cy="42.5" r="5.7" fill="#16C8E8"/>
+  <circle cx="41.5" cy="42.5" r="5.7" fill="#8A45EF"/>
+  <path d="M7.5 55.5c2.8-7.3 8.2-11 15-11 3.7 0 7 1.2 9.5 3.6 2.5-2.4 5.8-3.6 9.5-3.6 6.8 0 12.2 3.7 15 11" stroke="url(#team)" stroke-width="5.5" stroke-linecap="round"/>
+</svg>

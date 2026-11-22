@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
 
-use crate::{auth::AuthUser, state::AppState};
+use crate::{auth::{AuthUser, WorkspaceUser}, state::AppState};
 
 #[derive(Debug, Serialize)]
 struct ErrorBody {
@@ -55,25 +55,20 @@ fn is_valid_email(email: &str) -> bool {
         && !domain.ends_with('.')
 }
 
-async fn admin_workspace(
+async fn can_manage_workspace(
     tx: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
-) -> Result<Option<Uuid>, sqlx::Error> {
-    let membership: Option<(Uuid, String)> = sqlx::query_as(
-        "SELECT workspace_id, role FROM workspace_members
-         WHERE user_id = $1 ORDER BY joined_at DESC LIMIT 1",
+    workspace_id: Uuid,
+) -> Result<bool, sqlx::Error> {
+    let role: Option<String> = sqlx::query_scalar(
+        "SELECT role FROM workspace_members
+         WHERE user_id=$1 AND workspace_id=$2",
     )
     .bind(user_id)
+    .bind(workspace_id)
     .fetch_optional(&mut **tx)
     .await?;
-
-    Ok(membership.and_then(|(workspace_id, role)| {
-        if role == "owner" || role == "admin" {
-            Some(workspace_id)
-        } else {
-            None
-        }
-    }))
+    Ok(matches!(role.as_deref(), Some("owner" | "admin")))
 }
 
 async fn add_activity(
@@ -122,15 +117,15 @@ struct CreatedInvitation {
 
 async fn list_invitations(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
 ) -> ApiResult<Json<Vec<InvitationRow>>> {
     let mut tx = state.db.begin().await.map_err(|cause| internal_error(cause, "Could not begin invitation lookup"))?;
-    let Some(workspace_id) = admin_workspace(&mut tx, user_id)
+    let can_manage = can_manage_workspace(&mut tx, user_id, workspace_id)
         .await
-        .map_err(|cause| internal_error(cause, "Could not verify invitation permissions"))?
-    else {
+        .map_err(|cause| internal_error(cause, "Could not verify invitation permissions"))?;
+    if !can_manage {
         return Err(error(StatusCode::FORBIDDEN, "Only workspace owners and admins can manage invitations"));
-    };
+    }
 
     let invitations = sqlx::query_as::<_, InvitationRow>(
         "SELECT id, email, role, expires_at, created_at
@@ -148,7 +143,7 @@ async fn list_invitations(
 
 async fn create_invitation(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Json(input): Json<CreateInvitationInput>,
 ) -> ApiResult<(StatusCode, Json<CreatedInvitation>)> {
     let email = input.email.trim().to_lowercase();
@@ -161,12 +156,12 @@ async fn create_invitation(
     }
 
     let mut tx = state.db.begin().await.map_err(|cause| internal_error(cause, "Could not begin invitation creation"))?;
-    let Some(workspace_id) = admin_workspace(&mut tx, user_id)
+    let can_manage = can_manage_workspace(&mut tx, user_id, workspace_id)
         .await
-        .map_err(|cause| internal_error(cause, "Could not verify invitation permissions"))?
-    else {
+        .map_err(|cause| internal_error(cause, "Could not verify invitation permissions"))?;
+    if !can_manage {
         return Err(error(StatusCode::FORBIDDEN, "Only workspace owners and admins can invite members"));
-    };
+    }
 
     let existing_member: bool = sqlx::query_scalar(
         "SELECT EXISTS(
@@ -228,16 +223,16 @@ async fn create_invitation(
 
 async fn revoke_invitation(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Path(invitation_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
     let mut tx = state.db.begin().await.map_err(|cause| internal_error(cause, "Could not begin invitation revocation"))?;
-    let Some(workspace_id) = admin_workspace(&mut tx, user_id)
+    let can_manage = can_manage_workspace(&mut tx, user_id, workspace_id)
         .await
-        .map_err(|cause| internal_error(cause, "Could not verify invitation permissions"))?
-    else {
+        .map_err(|cause| internal_error(cause, "Could not verify invitation permissions"))?;
+    if !can_manage {
         return Err(error(StatusCode::FORBIDDEN, "Only workspace owners and admins can manage invitations"));
-    };
+    }
 
     let result = sqlx::query(
         "UPDATE invitations SET revoked_at = NOW()

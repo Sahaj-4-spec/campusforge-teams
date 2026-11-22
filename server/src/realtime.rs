@@ -3,31 +3,47 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         State,
     },
-    response::IntoResponse,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     routing::get,
     Router,
 };
 use serde::Deserialize;
 use serde_json::json;
-use sqlx::PgPool;
 use std::time::Duration;
 use tokio::time::timeout;
 use uuid::Uuid;
 
-use crate::{auth::verify_token, state::AppState};
+use crate::{
+    auth::{frontend_origin_matches, session_token_from_headers, verify_token},
+    state::AppState,
+};
 
 #[derive(Debug, Deserialize)]
 struct AuthenticateMessage {
     #[serde(rename = "type")]
     message_type: String,
-    token: String,
+    workspace_id: Uuid,
 }
 
 async fn websocket_handler(
     State(state): State<AppState>,
+    headers: HeaderMap,
     websocket: WebSocketUpgrade,
-) -> impl IntoResponse {
-    websocket.on_upgrade(move |socket| handle_socket(socket, state))
+) -> Response {
+    if !frontend_origin_matches(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(token) = session_token_from_headers(&headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let (user_id, expires_at) = match verify_token(&token, &state.jwt_secret) {
+        Ok(identity) => identity,
+        Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
+    };
+    websocket
+        .on_upgrade(move |socket| handle_socket(socket, state, user_id, expires_at))
+        .into_response()
 }
 
 async fn send_error(socket: &mut WebSocket, message: &'static str) {
@@ -36,16 +52,7 @@ async fn send_error(socket: &mut WebSocket, message: &'static str) {
     let _ = socket.send(Message::Close(None)).await;
 }
 
-async fn user_workspace(pool: &PgPool, user_id: Uuid) -> Result<Option<Uuid>, sqlx::Error> {
-    sqlx::query_scalar(
-        "SELECT workspace_id FROM workspace_members          WHERE user_id = $1 ORDER BY joined_at DESC LIMIT 1",
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await
-}
-
-async fn handle_socket(mut socket: WebSocket, state: AppState) {
+async fn handle_socket(mut socket: WebSocket, state: AppState, user_id: Uuid, expires_at: usize) {
     let first_message = timeout(Duration::from_secs(10), socket.recv()).await;
     let message = match first_message {
         Ok(Some(Ok(Message::Text(text)))) => text,
@@ -63,26 +70,25 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         }
     };
 
-    let (user_id, expires_at) = match verify_token(&authentication.token, &state.jwt_secret) {
-        Ok(id) => id,
-        Err(_) => {
-            send_error(&mut socket, "Your session is invalid or has expired").await;
-            return;
-        }
-    };
-
-    let workspace_id = match user_workspace(&state.db, user_id).await {
-        Ok(Some(id)) => id,
-        Ok(None) => {
-            send_error(&mut socket, "No workspace is available for this account").await;
-            return;
-        }
+    let is_member = match sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM workspace_members WHERE user_id=$1 AND workspace_id=$2)",
+    )
+    .bind(user_id)
+    .bind(authentication.workspace_id)
+    .fetch_one(&state.db)
+    .await {
+        Ok(value) => value,
         Err(error) => {
-            tracing::error!(%error, "Could not resolve WebSocket workspace");
+            tracing::error!(%error, "Could not verify WebSocket workspace membership");
             send_error(&mut socket, "Unable to join the workspace right now").await;
             return;
         }
     };
+    if !is_member {
+        send_error(&mut socket, "You are not a member of the selected workspace").await;
+        return;
+    }
+    let workspace_id = authentication.workspace_id;
 
     let mut events = state.workspace_events.subscribe();
     let now = chrono::Utc::now().timestamp().max(0) as usize;

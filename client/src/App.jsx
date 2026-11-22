@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   BarChart3,
@@ -19,6 +19,8 @@ import {
   FolderKanban,
   LayoutDashboard,
   ListTodo,
+  FileText,
+  MessageSquare,
   LogOut,
   MoreHorizontal,
   Plus,
@@ -35,15 +37,23 @@ import TaskDialog from "./components/TaskDialog.jsx";
 import AuthScreen from "./components/AuthScreen.jsx";
 import ProjectDialog from "./components/ProjectDialog.jsx";
 import { DashboardOverview, WorkspaceTimeline, WorkspaceReports } from "./components/WorkspaceViews.jsx";
-import { boardApi, clearStoredToken, createWorkspaceSocket, getStoredToken, workspaceApi, taskApi, listApi, invitationApi } from "./lib/api.js";
+import { CalendarPage, NotificationsPage, FilesPage, ChatAndMeetingsPage } from "./components/WorkspaceFeatures.jsx";
+import {
+  authApi, boardApi, clearStoredWorkspaceId, createWorkspaceSocket,
+  getStoredWorkspaceId, setStoredWorkspaceId, workspaceApi, taskApi, listApi, invitationApi, notificationApi
+} from "./lib/api.js";
 
 const navigation = [
   { id: "Overview", label: "Dashboard", icon: LayoutDashboard },
   { id: "Projects", label: "Projects", icon: FolderKanban },
   { id: "My Tasks", label: "My tasks", icon: ListTodo },
+  { id: "Calendar", label: "Calendar", icon: CalendarDays },
+  { id: "Notifications", label: "Notifications", icon: Bell },
+  { id: "Files", label: "Files & docs", icon: FileText },
+  { id: "Chat", label: "Chat & notes", icon: MessageSquare },
   { id: "Team", label: "Team", icon: Users },
   { id: "Activity", label: "Timeline", icon: Activity },
-  { id: "Reports", label: "Reports", icon: BarChart3 }
+  { id: "Reports", label: "Analytics", icon: BarChart3 }
 ];
 
 function initials(name) {
@@ -450,17 +460,29 @@ function ProjectsPage({ data, onOpenBoard, onCreateBoard, canManageProjects }) {
   );
 }
 
-function AppSidebar({ activeView, activeBoardId, onNavigate, onOpenBoard, onCreateBoard, boards, currentUser, workspaceName, activityCount, canManageProjects }) {
+function AppSidebar({
+  activeView, activeBoardId, onNavigate, onOpenBoard, onCreateBoard, boards, currentUser,
+  workspaces, currentWorkspaceId, onWorkspaceChange, workspaceName, activityCount, canManageProjects
+}) {
   return (
     <aside className="sidebar">
       <a className="brand" href="#" onClick={(event) => { event.preventDefault(); onNavigate("Overview"); }} aria-label="CampusForge Teams home">
-        <span className="brand-mark"><Zap size={21} fill="currentColor" /></span>
+        <span className="brand-mark"><img src="/campusforge-mark.svg" alt="" /></span>
         <span className="brand-name">CampusForge<small>TEAMS WORKSPACE</small></span>
       </a>
       <div className="workspace-switcher">
         <span className="workspace-avatar">{(workspaceName || "C").slice(0, 1).toUpperCase()}</span>
-        <span><strong>{workspaceName}</strong><small>Shared workspace</small></span>
-        <ChevronDown size={15} />
+        <span className="workspace-switcher-copy"><strong>{workspaceName}</strong><small>Switch workspace</small></span>
+        <select
+          aria-label="Switch workspace"
+          value={currentWorkspaceId || ""}
+          onChange={(event) => onWorkspaceChange(event.target.value)}
+          disabled={(workspaces || []).length < 2}
+        >
+          {(workspaces || []).map((workspace) => (
+            <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
+          ))}
+        </select>
       </div>
       <div className="sidebar-section-label">WORKSPACE</div>
       <nav className="sidebar-nav" aria-label="Main navigation">
@@ -492,10 +514,10 @@ function AppSidebar({ activeView, activeBoardId, onNavigate, onOpenBoard, onCrea
 }
 
 export default function App() {
-  const [token, setToken] = useState(() => getStoredToken() || "");
+  const [isAuthenticated, setIsAuthenticated] = useState(true);
   const [data, setData] = useState(null);
   const [invitations, setInvitations] = useState([]);
-  const [loading, setLoading] = useState(() => Boolean(getStoredToken()));
+  const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [activeView, setActiveView] = useState("Overview");
   const [activeBoardId, setActiveBoardId] = useState("");
@@ -506,15 +528,21 @@ export default function App() {
   const [defaultListId, setDefaultListId] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notice, setNotice] = useState("");
+  const [logoutError, setLogoutError] = useState("");
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
+  const [realtimeVersion, setRealtimeVersion] = useState(0);
+  const workspaceGeneration = useRef(0);
 
   useEffect(() => {
-    if (!token) {
+    if (!isAuthenticated) {
       setData(null);
       setLoading(false);
       return undefined;
     }
 
     let cancelled = false;
+    const requestGeneration = workspaceGeneration.current;
     setLoading(true);
     setLoadError("");
     const pendingInvite = new URLSearchParams(window.location.search).get("invite");
@@ -524,13 +552,14 @@ export default function App() {
           inviteUrl.searchParams.delete("invite");
           window.history.replaceState({}, "", inviteUrl.toString());
           setNotice("You joined the invited workspace");
-          return workspaceApi.get();
+          return workspaceApi.get(null);
         })
-      : workspaceApi.get();
+      : workspaceApi.get(getStoredWorkspaceId());
 
     workspaceRequest
       .then((workspace) => {
-        if (cancelled) return;
+        if (cancelled || requestGeneration !== workspaceGeneration.current) return;
+        setStoredWorkspaceId(workspace.current_workspace_id);
         setData(workspace);
         setActiveBoardId((current) =>
           workspace.boards.some((board) => board.id === current)
@@ -541,11 +570,21 @@ export default function App() {
       .catch((error) => {
         if (cancelled) return;
         if (error.status === 401) {
-          clearStoredToken();
-          setToken("");
+          clearStoredWorkspaceId();
+          setIsAuthenticated(false);
           setData(null);
         } else {
-          setLoadError(error.message || "Unable to load your workspace.");
+          if (error.status === 403 && getStoredWorkspaceId()) {
+            clearStoredWorkspaceId();
+            return workspaceApi.get(null).then((workspace) => {
+              if (cancelled || requestGeneration !== workspaceGeneration.current) return;
+              setStoredWorkspaceId(workspace.current_workspace_id);
+              setData(workspace);
+              setActiveBoardId(workspace.boards[0]?.id || "");
+            }).catch((fallbackError) => {
+              if (!cancelled && requestGeneration === workspaceGeneration.current) setLoadError(fallbackError.message || "Unable to load an accessible workspace.");
+            });
+          } else setLoadError(error.message || "Unable to load your workspace.");
         }
       })
       .finally(() => {
@@ -553,10 +592,10 @@ export default function App() {
       });
 
     return () => { cancelled = true; };
-  }, [token]);
+  }, [isAuthenticated]);
 
   useEffect(() => {
-    if (!token) return undefined;
+    if (!isAuthenticated || !data?.current_workspace_id) return undefined;
 
     let stopped = false;
     let retryTimer = null;
@@ -566,7 +605,7 @@ export default function App() {
     function connect() {
       if (stopped) return;
       try {
-        socket = createWorkspaceSocket(token);
+        socket = createWorkspaceSocket();
       } catch (error) {
         setNotice("Live updates are temporarily unavailable");
         retryTimer = window.setTimeout(connect, 5000);
@@ -581,20 +620,30 @@ export default function App() {
         try {
           const payload = JSON.parse(message.data);
           if (payload.type === "error" && /session.*(invalid|expired)|sign in again/i.test(payload.error || "")) {
-            clearStoredToken();
-            setToken("");
+            clearStoredWorkspaceId();
+            setIsAuthenticated(false);
             setData(null);
             return;
           }
           if (payload.type === "workspace_event" || payload.type === "refresh_required") {
-            workspaceApi.get()
+            setRealtimeVersion((version) => version + 1);
+            notificationApi.list()
+              .then((result) => { if (!stopped) setUnreadNotifications(result.unread_count || 0); })
+              .catch(() => {});
+            const requestGeneration = workspaceGeneration.current;
+            const requestedWorkspaceId = data?.current_workspace_id;
+            workspaceApi.get(requestedWorkspaceId)
               .then((snapshot) => {
-                if (!stopped) setData(snapshot);
+                if (!stopped && requestGeneration === workspaceGeneration.current && snapshot.current_workspace_id === requestedWorkspaceId) {
+                  setStoredWorkspaceId(snapshot.current_workspace_id);
+                  setData(snapshot);
+                  setActiveBoardId((current) => snapshot.boards.some((board) => board.id === current) ? current : (snapshot.boards[0]?.id || ""));
+                }
               })
               .catch((error) => {
                 if (error.status === 401 && !stopped) {
-                  clearStoredToken();
-                  setToken("");
+                  clearStoredWorkspaceId();
+                  setIsAuthenticated(false);
                   setData(null);
                 }
               });
@@ -622,10 +671,10 @@ export default function App() {
       if (retryTimer) window.clearTimeout(retryTimer);
       socket?.close();
     };
-  }, [token]);
+  }, [isAuthenticated, data?.current_workspace_id]);
 
   useEffect(() => {
-    if (!token || !data) {
+    if (!isAuthenticated || !data) {
       setInvitations([]);
       return undefined;
     }
@@ -641,7 +690,19 @@ export default function App() {
         if (!cancelled) setNotice(error.message || "Could not load invitations");
       });
     return () => { cancelled = true; };
-  }, [token, data]);
+  }, [isAuthenticated, data]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setUnreadNotifications(0);
+      return undefined;
+    }
+    let cancelled = false;
+    notificationApi.list()
+      .then((result) => { if (!cancelled) setUnreadNotifications(result.unread_count || 0); })
+      .catch(() => { if (!cancelled) setUnreadNotifications(0); });
+    return () => { cancelled = true; };
+  }, [isAuthenticated, activeView]);
 
   useEffect(() => {
     if (!notice) return undefined;
@@ -670,7 +731,10 @@ export default function App() {
   }, [boardTasks, search]);
 
   async function refreshWorkspace() {
-    const workspace = await workspaceApi.get();
+    const requestGeneration = workspaceGeneration.current;
+    const requestedWorkspaceId = data?.current_workspace_id || getStoredWorkspaceId();
+    const workspace = await workspaceApi.get(requestedWorkspaceId);
+    if (requestGeneration !== workspaceGeneration.current || workspace.current_workspace_id !== requestedWorkspaceId) return workspace;
     setData(workspace);
     if (!workspace.boards.some((board) => board.id === activeBoardId)) {
       setActiveBoardId(workspace.boards[0]?.id || "");
@@ -678,20 +742,58 @@ export default function App() {
     return workspace;
   }
 
-  function handleAuthenticated(nextToken) {
+  async function switchWorkspace(workspaceId) {
+    if (!workspaceId || workspaceId === data?.current_workspace_id) return;
+    const requestGeneration = ++workspaceGeneration.current;
     setLoading(true);
-    setToken(nextToken);
+    try {
+      const workspace = await workspaceApi.get(workspaceId);
+      if (requestGeneration !== workspaceGeneration.current) return;
+      setStoredWorkspaceId(workspace.current_workspace_id);
+      setData(workspace);
+      setActiveBoardId(workspace.boards[0]?.id || "");
+      setActiveView("Overview");
+      setMobileMenuOpen(false);
+      setRealtimeVersion((version) => version + 1);
+      setNotice("Workspace switched");
+    } catch (error) {
+      setNotice(error.message || "Could not switch workspace");
+    } finally {
+      if (requestGeneration === workspaceGeneration.current) setLoading(false);
+    }
+  }
+
+  function handleAuthenticated() {
+    setLoading(true);
+    setIsAuthenticated(true);
     setActiveView("Overview");
     setLoadError("");
   }
 
-  function logout() {
-    clearStoredToken();
-    setToken("");
-    setData(null);
-    setActiveView("Overview");
-    setActiveBoardId("");
-    setNotice("");
+  async function logout() {
+    if (isLoggingOut) return;
+
+    setIsLoggingOut(true);
+    setLogoutError("");
+    try {
+      // The server must confirm that it cleared the HttpOnly cookie before
+      // the UI reports a signed-out state.
+      await authApi.logout();
+      clearStoredWorkspaceId();
+      setIsAuthenticated(false);
+      setData(null);
+      setActiveView("Overview");
+      setActiveBoardId("");
+      setNotice("");
+    } catch (error) {
+      // Keep the current workspace visible: the HttpOnly cookie may still be valid.
+      setLogoutError(
+        "Sign-out failed. Your session is still active. Please retry. " +
+        (error.message || "Check your connection and try again.")
+      );
+    } finally {
+      setIsLoggingOut(false);
+    }
   }
 
   function openBoard(board) {
@@ -715,7 +817,7 @@ export default function App() {
 
   async function saveBoard(values) {
     try {
-      await boardApi.create(values);
+      await boardApi.create(values, data.current_workspace_id);
       const workspace = await refreshWorkspace();
       const newestBoard = [...workspace.boards].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
       setBoardDialogOpen(false);
@@ -893,10 +995,18 @@ export default function App() {
         const canManageInvites = memberRole === "owner" || memberRole === "admin";
         return <TeamPage data={data} invitations={invitations} canManageInvites={canManageInvites} onInvite={createInvitation} onRevoke={revokeInvitation} />;
       }
+      case "Calendar":
+        return <CalendarPage data={data} onOpenTask={openTask} realtimeVersion={realtimeVersion} />;
+      case "Notifications":
+        return <NotificationsPage realtimeVersion={realtimeVersion} onChanged={() => notificationApi.list().then((result) => setUnreadNotifications(result.unread_count || 0)).catch(() => {})} />;
+      case "Files":
+        return <FilesPage data={data} realtimeVersion={realtimeVersion} />;
+      case "Chat":
+        return <ChatAndMeetingsPage data={data} realtimeVersion={realtimeVersion} />;
       case "Activity":
         return <WorkspaceTimeline data={data} />;
       case "Reports":
-        return <WorkspaceReports data={data} />;
+        return <WorkspaceReports data={data} realtimeVersion={realtimeVersion} />;
       case "Projects":
         return <ProjectsPage data={data} onOpenBoard={openBoard} onCreateBoard={openNewBoard} canManageProjects={canManageWorkspace} />;
       case "Settings":
@@ -906,7 +1016,21 @@ export default function App() {
             <section className="surface-panel settings-panel">
               <div className="settings-row"><div><strong>Signed-in account</strong><p>{currentUser?.full_name || "Workspace member"} · {currentUser?.email || ""}</p></div><span className="connection-badge"><i /> Authenticated</span></div>
               <div className="settings-row"><div><strong>Workspace data</strong><p>Boards, tasks, assignments, comments, and activity are loaded from the CampusForge API and saved in PostgreSQL.</p></div><span className="connection-badge"><i /> Connected</span></div>
-              <div className="settings-row"><div><strong>Session</strong><p>Sign out on this device. Your saved workspace data remains on the server.</p></div><button className="secondary-button danger-outline" type="button" onClick={logout}><LogOut size={15} /> Sign out</button></div>
+              <div className="settings-row">
+                <div>
+                  <strong>Session</strong>
+                  <p>Sign out on this device. Your saved workspace data remains on the server.</p>
+                  {logoutError && <p className="auth-error logout-error" role="alert">{logoutError}</p>}
+                </div>
+                <button
+                  className="secondary-button danger-outline"
+                  type="button"
+                  onClick={logout}
+                  disabled={isLoggingOut}
+                >
+                  <LogOut size={15} /> {isLoggingOut ? "Signing out..." : logoutError ? "Retry sign out" : "Sign out"}
+                </button>
+              </div>
             </section>
           </div>
         );
@@ -914,7 +1038,7 @@ export default function App() {
         return (
           <div className="page-stack">
             <div className="page-title-row"><div><p className="eyebrow">WE'RE HERE TO HELP</p><h1>Help & support</h1><p className="page-subtitle">A quick guide to your shared workspace.</p></div></div>
-            <section className="surface-panel help-panel"><h2>Working with your workspace</h2><p>Create tasks, move them between board columns, assign workspace members, add comments, and search your task list. Changes are saved to the CampusForge API and PostgreSQL.</p><p>Your session is protected by a signed access token. Workspace records are returned only to authenticated workspace members.</p></section>
+            <section className="surface-panel help-panel"><h2>Working with your workspace</h2><p>Create tasks, move them between board columns, assign workspace members, add comments, and search your task list. Changes are saved to the CampusForge API and PostgreSQL.</p><p>Your session is protected by a server-set HttpOnly cookie that JavaScript cannot read. Workspace records are returned only to authenticated workspace members.</p></section>
           </div>
         );
       case "Overview":
@@ -936,7 +1060,7 @@ export default function App() {
     return <main className="auth-screen"><section className="auth-card"><p className="eyebrow">CAMPUSFORGE TEAMS</p><h1>Loading your workspace…</h1><p>Connecting to your account and retrieving your projects.</p></section></main>;
   }
 
-  if (!token) return <AuthScreen onAuthenticated={handleAuthenticated} />;
+  if (!isAuthenticated) return <AuthScreen onAuthenticated={handleAuthenticated} />;
 
   if (loadError || !data) {
     return (
@@ -945,9 +1069,12 @@ export default function App() {
           <p className="eyebrow">WORKSPACE CONNECTION</p>
           <h1>We couldn't load your workspace.</h1>
           <p>{loadError || "The API did not return workspace data."}</p>
+          {logoutError && <p className="auth-error logout-error" role="alert">{logoutError}</p>}
           <div className="auth-form">
             <button className="primary-button auth-submit" type="button" onClick={retryWorkspaceLoad}>Try again</button>
-            <button className="secondary-button" type="button" onClick={logout}>Sign out</button>
+            <button className="secondary-button" type="button" onClick={logout} disabled={isLoggingOut}>
+              {isLoggingOut ? "Signing out..." : logoutError ? "Retry sign out" : "Sign out"}
+            </button>
           </div>
         </section>
       </main>
@@ -964,6 +1091,9 @@ export default function App() {
         activeView={activeView}
         activeBoardId={activeBoardId}
         workspaceName={workspaceName}
+        workspaces={data.workspaces}
+        currentWorkspaceId={data.current_workspace_id}
+        onWorkspaceChange={switchWorkspace}
         activityCount={data.activity_events.length}
         onNavigate={navigate}
         onOpenBoard={openBoard}
@@ -989,7 +1119,7 @@ export default function App() {
               </label>
             )}
             <span className="preview-status"><i /> Database-backed</span>
-            <button className="icon-button notification-button" type="button" aria-label="Notifications" onClick={() => navigate("Activity")}><Bell size={18} /><span className="notification-dot" /></button>
+            <button className="icon-button notification-button" type="button" aria-label={"Notifications" + (unreadNotifications ? ", " + unreadNotifications + " unread" : "")} onClick={() => navigate("Notifications")}><Bell size={18} />{unreadNotifications > 0 && <span className="notification-count-badge">{Math.min(unreadNotifications, 99)}</span>}</button>
             <Avatar name={currentUser?.full_name || "You"} />
           </div>
         </header>
@@ -998,6 +1128,7 @@ export default function App() {
           <div className="mobile-nav-overlay">
             <div className="mobile-nav-card">
               <div className="mobile-nav-heading"><strong>CampusForge</strong><button type="button" onClick={() => setMobileMenuOpen(false)} aria-label="Close navigation"><X size={18} /></button></div>
+              <label className="mobile-workspace-select">Current workspace<select aria-label="Switch workspace" value={data.current_workspace_id || ""} onChange={(event) => switchWorkspace(event.target.value)} disabled={(data.workspaces || []).length < 2}>{(data.workspaces || []).map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select></label>
               {navigation.map(({ id, label, icon: Icon }) => <button key={id} type="button" className="nav-item" onClick={() => navigate(id)}><Icon size={18} />{label}</button>)}
               <button type="button" className="nav-item" onClick={() => navigate("Projects")}><FolderKanban size={18} />Projects</button>
             </div>
@@ -1022,6 +1153,9 @@ export default function App() {
         onSave={saveTask}
         onDelete={deleteTask}
         onAddComment={addComment}
+        allTasks={data.tasks}
+        onAdvancedChanged={refreshWorkspace}
+        refreshKey={realtimeVersion}
       />
       {notice && <div className="toast-message" role="status"><CheckCircle2 size={16} />{notice}</div>}
     </div>
