@@ -28,7 +28,7 @@ AI project assistance remains an approved future roadmap item. Delivery status a
 | Database access | SQLx | Parameterized SQL, pooling, migrations |
 | Authentication | Argon2 and signed JWT sessions; Google, GitHub, Discord OAuth on the social-auth feature branch | Provider secrets remain server-side |
 | Real-time transport | Native Axum WebSockets | Not Socket.IO |
-| File bytes | Private local filesystem directory for local development | Production object storage is not configured |
+| File bytes | Storage adapter with local-development and S3-compatible backends | Production S3 bucket, credentials/IAM role, backups and malware scanning still require setup |
 | Version control | GitHub | Branch-based work, draft PRs, CI |
 
 Node.js/Express, MongoDB/Mongoose, and Socket.IO are not the selected backend architecture.
@@ -63,7 +63,7 @@ The new SQL migration is server/migrations/0004_collaboration_suite.sql.
 **Decision:** Extend existing tasks rather than introducing a separate task database.
 
 The draft branch supports:
-- Parent task references and subtask creation.
+- Parent task references and subtask creation, with a database trigger enforcing same-project parent/child scope and rejecting hierarchy cycles.
 - Ordered checklist items with completion state.
 - Workspace labels and task-label assignments.
 - Same-project dependency links with recursive cycle checks.
@@ -105,11 +105,12 @@ notification_preferences stores in-app and email flags by user/category. Email s
 Draft implementation includes:
 - Inbox and unread count.
 - Mark-one/read-all behavior.
-- Per-category in-app preferences.
+- Per-category in-app and email preferences.
 - Task/comment activity notifications.
 - Background reminders for assigned tasks due within 24 hours and tasks that have recently become overdue.
+- A PostgreSQL email outbox, optional Resend API sender, notification-specific idempotency key, and retry/backoff. The sender is inactive until RESEND_API_KEY and EMAIL_FROM are configured.
 
-Remaining: mentions, invitation-specific recipients, pagination, delivery retry/idempotency tests, retention controls, and optional email integration.
+Remaining: verify the sender domain and provider account, test actual delivery and bounce handling, add mentions, invitation-specific recipients, pagination, retention controls, and unsubscribe/suppression policy.
 
 ### ADR-008 — Shared files and documents
 
@@ -117,9 +118,9 @@ Remaining: mentions, invitation-specific recipients, pagination, delivery retry/
 
 workspace_files stores workspace, optional board/task attachment, uploader, original name, opaque server-generated storage key, media type, size, SHA-256 checksum, and timestamp.
 
-Draft implementation includes an authenticated workspace file listing, upload, download, and uploader-only delete route, with a 10 MB request limit and safe download headers.
+Draft implementation includes an authenticated workspace file listing, upload, download, and uploader-only delete route, with a 10 MB request limit, extension allowlist, normalized content types, and safe download headers. A storage adapter supports local-development disk and an S3-compatible backend using the AWS SDK for Rust. Transfers are server-mediated; the bucket remains private and the API checks authorization before reading/deleting an object.
 
-**Production blocker:** Local disk is not durable across server replacement or multiple instances. Before public use, replace it with private object storage, short-lived signed transfers or server-mediated transfers, malware scanning, file type/size policy, quotas, backups, retention/deletion, and orphan cleanup. A client-provided storage key/URL is never an authorization credential.
+**Production blocker:** The S3 adapter is code-complete but no private bucket/credentials are configured. Before public use, provision and verify the chosen private bucket, IAM policy, encryption, backups/versioning, retention/deletion, malware scanning, quotas, object/database reconciliation, and restore procedures. A client-provided storage key/URL is never an authorization credential.
 
 ### ADR-009 — AI project assistant (future)
 
@@ -142,7 +143,7 @@ Remaining: historical snapshots, date filters, export, metric definitions for re
 - chat_messages supports workspace-wide or board-specific channels with author and timestamp.
 - meeting_notes supports title, meeting time, attendees, agenda, discussion notes, and action items.
 
-Draft UI/API supports sending/listing messages and creating/listing/updating/deleting meeting notes (delete is limited to the creator). This is not yet a full messenger: direct messages, typing/presence, pins, and mention parsing are not included. Real-time message fan-out and two-browser acceptance tests remain.
+Draft UI/API supports sending/listing messages and creating/listing/updating/deleting meeting notes (delete is limited to the creator). WebSocket change events now cause connected clients to refresh the active workspace/project channel. This is not yet a full messenger: direct messages, typing/presence, pins, and mention parsing are not included. Two-browser acceptance tests and shared pub/sub for horizontal scaling remain.
 
 ## 5. API and real-time conventions
 
@@ -164,7 +165,8 @@ PostgreSQL is the source of truth. Mutations use SQLx; background jobs must be o
 - Use parameterized SQL through SQLx.
 - Keep OAuth, storage, and future AI secrets on the server.
 - Check workspace membership and referenced resource relationships on every request.
-- Keep files private; use server-generated opaque storage keys and workspace-scoped downloads.
+- Keep S3-compatible buckets private; use server-generated opaque storage keys and workspace-scoped, server-mediated downloads.
+- Keep Resend credentials and sender configuration server-side; only create email jobs for categories a member explicitly enabled.
 - Limit file sizes and return safe content-disposition and nosniff headers.
 - Do not enable email delivery without opt-in, unsubscribe, retry, and provider configuration.
 - Do not send unauthorized workspace data to future AI services.
@@ -173,6 +175,6 @@ PostgreSQL is the source of truth. Mutations use SQLx; background jobs must be o
 
 ## 7. Deployment decision
 
-PR #12 is a draft feature branch. No new collaboration-suite feature is in the live preview until it is merged and deployed by explicit authorization. Before that, the branch needs completed CI/security checks, database migration review, browser/multi-user testing, storage vendor configuration, production retention/backup design, and security review.
+PR #12 is a draft feature branch. No new collaboration-suite feature is in the live preview until it is merged and deployed by explicit authorization. Before that, the branch needs completed CI/security checks, PostgreSQL-backed migration validation, browser/multi-user testing, verified private storage bucket configuration, sender-domain/email integration testing, production retention/backup design, malware scanning, and security review.
 
-Do not merge or deploy until the user explicitly authorizes release.
+Operational configuration instructions are in docs/OPERATIONS.md. Do not merge or deploy until the user explicitly authorizes release.
