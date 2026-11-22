@@ -67,7 +67,7 @@ The collaboration-suite branch adds:
 - Server-backed productivity analytics for completion, overdue, unassigned, project progress, and member workload.
 - Workspace/project chat and structured meeting notes with agenda and action items.
 
-These capabilities are under review in [draft PR #12](https://github.com/Sahaj-4-spec/campusforge-teams/pull/12). They are not in the main branch or live hosted preview yet. Local file storage in this branch is for development only; production object storage, backups, malware scanning, and hardening remain required. The AI project assistant remains a future roadmap item. See [the full roadmap](docs/ROADMAP.md) and [architecture/project decisions](docs/ARCHITECTURE.md) for current status and limitations.
+These capabilities are under review in [draft PR #12](https://github.com/Sahaj-4-spec/campusforge-teams/pull/12). They are not in the main branch or live hosted preview yet. File storage now has a local-development adapter and a configurable S3-compatible production adapter; a private bucket, credentials, backups, retention, and malware scanning still need to be configured and verified. Email notification delivery now has an opt-in Resend adapter and retryable outbox; it remains inactive until the sender domain and backend secrets are configured. The AI project assistant remains a future roadmap item. See [the full roadmap](docs/ROADMAP.md), [architecture decisions](docs/ARCHITECTURE.md), and [storage/email operations](docs/OPERATIONS.md).
 
 ## 🛠️ Technology Stack
 
@@ -194,7 +194,12 @@ Edit `.env` and replace placeholder values with your local configuration. Never 
 | `JWT_SECRET` | Secret reserved for token signing |
 | `FRONTEND_ORIGIN` | Exact frontend origin allowed by API CORS (local: `http://localhost:5173`) |
 | `VITE_API_BASE_URL` | API origin for a separately hosted frontend; leave blank locally to use the Vite proxy |
-| `CAMPUSFORGE_UPLOAD_DIR` | Optional private local-development upload directory (default: `server/uploads`); not production object storage |
+| `CAMPUSFORGE_STORAGE_MODE` | `local` for development or `s3` for a private S3-compatible bucket |
+| `CAMPUSFORGE_UPLOAD_DIR` | Local-mode upload directory (default: `server/uploads`) |
+| `CAMPUSFORGE_S3_BUCKET` / `CAMPUSFORGE_S3_REGION` | Private bucket name and region when storage mode is `s3` |
+| `CAMPUSFORGE_S3_ENDPOINT_URL` | Optional S3-compatible endpoint for R2/MinIO-style providers |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Optional server-side credentials; prefer an IAM/workload role |
+| `RESEND_API_KEY` / `EMAIL_FROM` | Optional server-side email provider key and verified sender; leave blank to keep email delivery disabled |
 
 > For Neon, use the pooled or direct PostgreSQL connection string supplied by your Neon project and retain `sslmode=require`. Keep secrets in environment files or the hosting provider's secret store; never commit them.
 
@@ -234,7 +239,7 @@ The frontend milestone is connected to the authenticated Rust API.
 
 The active React application reads workspace, project, task, assignment, comment, and activity records from the authenticated Rust API backed by PostgreSQL. `client/src/data/demoData.js` remains as an unused legacy sample-data reference and is not the active application data source.
 
-**Connected in the collaboration-suite draft branch:** calendar month/week/day views and event creation, task deadlines, subtasks/checklists/labels/dependencies/estimates/recurrence controls, notification inbox and preferences, private local file upload/download/delete, server-backed analytics, project/workspace chat, and meeting notes. These changes are in draft PR #12 and are not live on the hosted preview. **Still pending before production:** automated browser and multi-user acceptance tests, production object storage and backup/retention, email provider setup, complete calendar/time-zone testing, chat real-time delivery, and granular per-board permissions.
+**Connected in the collaboration-suite draft branch:** calendar month/week/day views and event creation, task deadlines, subtasks/checklists/labels/dependencies/estimates/recurrence controls, notification inbox and preferences, local/S3-compatible file storage adapters, server-backed analytics, project/workspace chat with WebSocket-triggered refresh, meeting notes, and an opt-in Resend email outbox with retry/backoff. These changes are in draft PR #12 and are not live on the hosted preview. **Still pending before production:** set up and verify the private object-storage bucket and credentials, configure and test the Resend sender domain/secrets, malware scanning and retention/backup policies, full browser and multi-user acceptance tests, calendar time-zone testing, shared WebSocket pub/sub for horizontal scaling, and granular per-board permissions.
 
 ## 🎨 UI Design System
 
@@ -255,6 +260,8 @@ The Cal.com reference is an independent visual analysis and is not affiliated wi
 - Authenticate API requests and authorize workspace membership on the server; fine-grained per-board permissions are not implemented yet.
 - Validate all incoming request data.
 - Use parameterized SQL queries through SQLx.
+- Keep S3-compatible buckets private and stream file downloads only after workspace authorization.
+- Store notification email jobs in PostgreSQL and send only for categories explicitly enabled by the member.
 - Restrict CORS to the configured frontend origin.
 - Authenticate WebSocket connections and scope broadcast events to the signed-in user's current workspace.
 - Never commit `.env`, database credentials, tokens, or private user files.
@@ -318,5 +325,6 @@ The product roadmap and the decisions for the target data model, API boundaries,
 
 - [Product roadmap](docs/ROADMAP.md)
 - [Architecture and project decisions](docs/ARCHITECTURE.md)
+- [Storage and email operations](docs/OPERATIONS.md)
 
-The collaboration-suite work is in draft PR #12 and is not merged or deployed. AI project assistance remains planned, not implemented. The roadmap also records the remaining production blockers.
+The collaboration-suite work is in draft PR #12 and is not merged or deployed. AI project assistance remains planned, not implemented. The roadmap and operations guide record the remaining production blockers.
