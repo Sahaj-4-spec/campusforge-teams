@@ -727,7 +727,7 @@ async fn file_delete(
     .await
     .map_err(|error| internal(error, "Could not schedule file deletion"))?;
 
-    state.publish_workspace_event(workspace_id, "file_deletion_queued", "queued workspace file deletion");
+    state.publish_workspace_event(workspace_id, None, "file_deletion_queued", "queued workspace file deletion");
     Ok(StatusCode::ACCEPTED)
 }
 
