@@ -311,6 +311,12 @@ async fn notifications_list(
          JOIN workspace_members wm
            ON wm.workspace_id=n.workspace_id AND wm.user_id=n.recipient_user_id
          WHERE n.recipient_user_id=$1
+           AND COALESCE((
+                SELECT np.in_app_enabled
+                  FROM notification_preferences np
+                 WHERE np.user_id=n.recipient_user_id
+                   AND np.notification_type=n.notification_type
+           ), TRUE)
          ORDER BY n.created_at DESC LIMIT 100",
     )
     .bind(user_id)
@@ -321,7 +327,13 @@ async fn notifications_list(
         "SELECT COUNT(*)::bigint FROM notifications n
          JOIN workspace_members wm
            ON wm.workspace_id=n.workspace_id AND wm.user_id=n.recipient_user_id
-         WHERE n.recipient_user_id=$1 AND n.read_at IS NULL",
+         WHERE n.recipient_user_id=$1 AND n.read_at IS NULL
+           AND COALESCE((
+                SELECT np.in_app_enabled
+                  FROM notification_preferences np
+                 WHERE np.user_id=n.recipient_user_id
+                   AND np.notification_type=n.notification_type
+           ), TRUE)",
     )
     .bind(user_id)
     .fetch_one(&mut *transaction)
@@ -342,7 +354,12 @@ async fn notification_read(
             SET read_at=COALESCE(n.read_at,NOW())
            FROM workspace_members wm
           WHERE n.id=$1 AND n.recipient_user_id=$2
-            AND wm.workspace_id=n.workspace_id AND wm.user_id=$2"
+            AND wm.workspace_id=n.workspace_id AND wm.user_id=$2
+            AND COALESCE((
+                SELECT np.in_app_enabled FROM notification_preferences np
+                 WHERE np.user_id=n.recipient_user_id
+                   AND np.notification_type=n.notification_type
+            ), TRUE)"
     )
         .bind(notification_id)
         .bind(user_id)
@@ -363,7 +380,12 @@ async fn notifications_read_all(
         "UPDATE notifications n SET read_at=NOW()
            FROM workspace_members wm
           WHERE n.recipient_user_id=$1 AND wm.user_id=$1
-            AND wm.workspace_id=n.workspace_id AND n.read_at IS NULL"
+            AND wm.workspace_id=n.workspace_id AND n.read_at IS NULL
+            AND COALESCE((
+                SELECT np.in_app_enabled FROM notification_preferences np
+                 WHERE np.user_id=n.recipient_user_id
+                   AND np.notification_type=n.notification_type
+            ), TRUE)"
     )
         .bind(user_id)
         .execute(&state.db)
@@ -432,6 +454,25 @@ async fn notification_preference_update(
     .execute(&state.db)
     .await
     .map_err(|error| internal(error, "Could not update notification preference"))?;
+    if input.email_enabled == Some(false) {
+        sqlx::query(
+            "UPDATE notification_email_outbox outbox
+                SET status='suppressed',
+                    locked_at=NULL,
+                    last_error='Recipient disabled email notifications',
+                    updated_at=NOW()
+               FROM notifications n
+              WHERE outbox.notification_id=n.id
+                AND outbox.recipient_user_id=$1
+                AND n.notification_type=$2
+                AND outbox.status IN ('queued','processing')",
+        )
+        .bind(user_id)
+        .bind(kind)
+        .execute(&state.db)
+        .await
+        .map_err(|error| internal(error, "Could not suppress queued notification emails"))?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -688,6 +729,18 @@ async fn file_delete(
 
     match state.storage.delete(&storage_key).await {
         Ok(()) => {
+            let confirmed = sqlx::query(
+                "UPDATE workspace_files SET object_delete_confirmed=TRUE
+                  WHERE id=$1 AND workspace_id=$2 AND is_deleting=TRUE",
+            )
+            .bind(file_id)
+            .bind(workspace_id)
+            .execute(&state.db)
+            .await
+            .map_err(|error| internal(error, "Could not confirm object deletion"))?;
+            if confirmed.rows_affected() == 0 {
+                return Err(fail(StatusCode::CONFLICT, "File deletion is queued for cleanup"));
+            }
             let result = sqlx::query(
                 "DELETE FROM workspace_files WHERE id=$1 AND workspace_id=$2 AND is_deleting=TRUE",
             )
@@ -1042,6 +1095,16 @@ async fn cleanup_pending_files(state: &AppState) {
     for row in rows {
         match state.storage.delete(&row.storage_key).await {
             Ok(()) => {
+                if let Err(error) = sqlx::query(
+                    "UPDATE workspace_files SET object_delete_confirmed=TRUE
+                      WHERE id=$1 AND is_deleting=TRUE",
+                )
+                .bind(row.id)
+                .execute(&mut *transaction)
+                .await {
+                    tracing::error!(%error, file_id=%row.id, "Could not confirm object deletion");
+                    continue;
+                }
                 match sqlx::query_scalar::<_, Uuid>(
                     "DELETE FROM workspace_files WHERE id=$1 AND is_deleting=TRUE RETURNING workspace_id",
                 )
@@ -1083,11 +1146,85 @@ async fn cleanup_pending_files(state: &AppState) {
     }
 }
 
+#[derive(Debug, FromRow)]
+struct PendingObjectDeletion {
+    storage_key: String,
+    attempts: i32,
+}
+
+/// Object keys are copied into this outbox by a DELETE trigger on workspace_files.
+/// That trigger also runs for task, board, and workspace cascades, so metadata
+/// removal never loses the last durable reference to the object bytes.
+async fn cleanup_orphaned_objects(state: &AppState) {
+    let mut transaction = match state.db.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => {
+            tracing::error!(%error, "Could not begin orphaned-object cleanup batch");
+            return;
+        }
+    };
+
+    let rows = match sqlx::query_as::<_, PendingObjectDeletion>(
+        "SELECT storage_key, attempts
+           FROM object_deletion_outbox
+          WHERE next_attempt_at <= NOW()
+          ORDER BY next_attempt_at, created_at
+          FOR UPDATE SKIP LOCKED
+          LIMIT 20",
+    )
+    .fetch_all(&mut *transaction)
+    .await {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::error!(%error, "Could not load orphaned-object cleanup jobs");
+            return;
+        }
+    };
+
+    for row in rows {
+        match state.storage.delete(&row.storage_key).await {
+            Ok(()) => {
+                if let Err(error) = sqlx::query(
+                    "DELETE FROM object_deletion_outbox WHERE storage_key=$1",
+                )
+                .bind(&row.storage_key)
+                .execute(&mut *transaction)
+                .await {
+                    tracing::error!(%error, storage_key=%row.storage_key, "Could not clear completed object deletion");
+                }
+            }
+            Err(error) => {
+                let backoff_seconds = (60_i64 * 2_i64.pow(row.attempts.clamp(0, 8) as u32)).min(21600);
+                if let Err(update_error) = sqlx::query(
+                    "UPDATE object_deletion_outbox
+                        SET attempts=attempts+1,
+                            last_error=$2,
+                            next_attempt_at=NOW()+make_interval(secs=>$3),
+                            updated_at=NOW()
+                      WHERE storage_key=$1",
+                )
+                .bind(&row.storage_key)
+                .bind(error)
+                .bind(backoff_seconds as f64)
+                .execute(&mut *transaction)
+                .await {
+                    tracing::error!(%update_error, storage_key=%row.storage_key, "Could not schedule orphaned-object retry");
+                }
+            }
+        }
+    }
+
+    if let Err(error) = transaction.commit().await {
+        tracing::error!(%error, "Could not commit orphaned-object cleanup batch");
+    }
+}
+
 pub async fn run_file_cleanup(state: AppState) {
     let mut ticker = interval(TokioDuration::from_secs(60));
     loop {
         ticker.tick().await;
         cleanup_pending_files(&state).await;
+        cleanup_orphaned_objects(&state).await;
     }
 }
 

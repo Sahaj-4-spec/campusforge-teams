@@ -344,13 +344,8 @@ export function NotificationsPage({ onChanged, realtimeVersion = 0 }) {
   async function togglePreference(type, inAppEnabled, emailEnabled) {
     try {
       await notificationApi.updatePreference(type, inAppEnabled, emailEnabled);
-      setPreferences((current) => {
-        const found = current.some((row) => row.notification_type === type);
-        return found ? current.map((row) => row.notification_type === type
-          ? { ...row, in_app_enabled: inAppEnabled, email_enabled: emailEnabled }
-          : row)
-          : [...current, { notification_type: type, in_app_enabled: inAppEnabled, email_enabled: emailEnabled }];
-      });
+      await load();
+      onChanged?.();
     } catch (requestError) { setError(requestError.message || "Could not update preferences."); }
   }
 

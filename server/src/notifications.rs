@@ -25,6 +25,7 @@ struct EmailContent {
     recipient_email: String,
     title: String,
     body: String,
+    email_enabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -121,6 +122,20 @@ async fn update_email_job(
     }
 }
 
+async fn suppress_email_job(state: &AppState, job: &EmailJob, reason: &'static str) {
+    if let Err(error) = sqlx::query(
+        "UPDATE notification_email_outbox
+            SET status='suppressed', locked_at=NULL, last_error=$2, updated_at=NOW()
+          WHERE id=$1 AND status='processing'",
+    )
+    .bind(job.id)
+    .bind(reason)
+    .execute(&state.db)
+    .await {
+        tracing::error!(%error, job_id=%job.id, "Could not suppress notification email");
+    }
+}
+
 async fn send_one(
     state: &AppState,
     client: &Client,
@@ -129,11 +144,14 @@ async fn send_one(
     job: &EmailJob,
 ) {
     let content = sqlx::query_as::<_, EmailContent>(
-        "SELECT u.email AS recipient_email, n.title, n.body
+        "SELECT u.email AS recipient_email, n.title, n.body,
+                COALESCE(np.email_enabled,FALSE) AS email_enabled
            FROM notifications n
            JOIN users u ON u.id=n.recipient_user_id
            JOIN workspace_members wm
              ON wm.workspace_id=n.workspace_id AND wm.user_id=n.recipient_user_id
+           LEFT JOIN notification_preferences np
+             ON np.user_id=n.recipient_user_id AND np.notification_type=n.notification_type
           WHERE n.id=$1 AND n.recipient_user_id=$2",
     )
     .bind(job.notification_id)
@@ -144,7 +162,7 @@ async fn send_one(
     let content = match content {
         Ok(Some(content)) => content,
         Ok(None) => {
-            update_email_job(state, job, false, Some("Notification recipient or notification no longer exists".to_string())).await;
+            suppress_email_job(state, job, "Notification or current workspace membership no longer exists").await;
             return;
         }
         Err(error) => {
@@ -153,6 +171,11 @@ async fn send_one(
             return;
         }
     };
+
+    if !content.email_enabled {
+        suppress_email_job(state, job, "Recipient disabled email notifications").await;
+        return;
+    }
 
     let body = format!(
         "{}\n\n{}\n\nOpen CampusForge Teams to review this update.",

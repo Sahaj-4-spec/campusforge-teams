@@ -32,6 +32,7 @@ async fn applies_all_postgres_migrations_and_creates_collaboration_tables() {
         "public.notifications",
         "public.notification_preferences",
         "public.notification_email_outbox",
+        "public.object_deletion_outbox",
         "public.workspace_files",
         "public.chat_messages",
         "public.meeting_notes",
@@ -57,6 +58,24 @@ async fn applies_all_postgres_migrations_and_creates_collaboration_tables() {
     .await
     .expect("workspace file metadata schema should be readable");
     assert!(storage_key_is_opaque_and_unique);
+
+    let object_deletion_trigger_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='trg_workspace_files_queue_object_delete' AND NOT tgisinternal)",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("object deletion trigger should be installed");
+    assert!(object_deletion_trigger_exists);
+
+    let suppressed_email_jobs_supported: bool = sqlx::query_scalar(
+        "SELECT position('suppressed' in pg_get_constraintdef(oid)) > 0
+           FROM pg_constraint
+          WHERE conname='email_outbox_status_valid'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("email outbox status constraint should be readable");
+    assert!(suppressed_email_jobs_supported);
 
     pool.close().await;
 }
