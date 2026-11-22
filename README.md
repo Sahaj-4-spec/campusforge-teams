@@ -10,7 +10,7 @@ CampusForge Teams is a project management and collaboration platform being built
 
 This project is being developed as part of the **ALTA BUILDER 30 Challenge — Track A (Full-Stack Product)**.
 
-> **Development status:** The React dashboard is connected to an authenticated Rust/Axum API for workspace loading, task creation/editing/deletion, task assignment, comments, and persisted drag-and-drop ordering. Authentication uses Argon2 password hashing and 24-hour JWT sessions. PostgreSQL access and SQLx migrations are implemented. Project creation and workspace-scoped WebSocket event delivery are implemented. Invitations, richer role administration, and live end-to-end WebSocket acceptance testing remain.
+> **Development status:** The React dashboard is connected to an authenticated Rust/Axum API for workspace loading, project and task management, column management, task assignments, comments, invitations, and persisted drag-and-drop ordering. Authentication uses Argon2 password hashing and 24-hour JWT sessions. Invitation tokens are random, stored as SHA-256 hashes, email-bound, single-use, and expire after seven days. Workspace owners/admins manage projects, columns, and invitations. Browser end-to-end and multi-session WebSocket acceptance tests remain.
 
 ---
 
@@ -33,13 +33,15 @@ CampusForge Teams is planned as a Trello-inspired Kanban application. Team membe
 - User profiles with names and avatars.
 
 ### 2. Project and Board Management
-- Create, edit, and manage project boards.
-- Invite teammates and manage membership.
-- Join boards through controlled invitations.
-- Restrict board access to authorized members.
+- Create and manage project boards.
+- Invite teammates with member or admin roles using expiring, single-use invitation links.
+- Accept invitations only while signed in with the invited email address.
+- Revoke pending invitations and inspect their expiry.
+- Restrict project and column management to workspace owners and admins.
 
 ### 3. Task and List Management
-- Create, edit, and delete lists and cards.
+- Create, rename, and delete empty columns; every project must retain at least one column.
+- Create, edit, and delete tasks.
 - Add descriptions and due dates.
 - Assign tasks to team members.
 - Move cards between lists and reorder cards.
@@ -103,8 +105,10 @@ CampusForge Teams is planned as a Trello-inspired Kanban application. Team membe
 - `GET /api/workspace` returns the signed-in user's workspace, members, boards, lists, tasks, assignments, comments, and activity.
 - `POST /api/tasks`, `PATCH /api/tasks/:id`, and `DELETE /api/tasks/:id` persist task changes.
 - `POST /api/tasks/:id/comments` saves discussion comments; `PATCH /api/tasks/:id/move` persists drag-and-drop order.
+- `POST /api/boards/:board_id/lists`, `PATCH /api/lists/:id`, and `DELETE /api/lists/:id` manage project columns.
+- `GET/POST /api/invitations/`, `DELETE /api/invitations/:id`, and `POST /api/invitations/accept` manage workspace invitations.
 - Protected routes require an `Authorization: Bearer <token>` header. SQLx provides asynchronous access to PostgreSQL.
-- The Vite development server proxies `/api` and `/ws` to the backend on port `5000`. For a separately hosted frontend, set `VITE_API_BASE_URL` to the API service's HTTPS origin.
+- The Vite development server proxies `/api` and `/ws` to the backend on port `5000`. For a separately hosted frontend, set `VITE_API_BASE_URL` to the API service's HTTPS origin. Invitation links use the frontend root query string (`?invite=...`) and are accepted after the invitee signs in.
 
 ## 📁 Repository Structure
 
@@ -270,7 +274,7 @@ AI-assisted tools may be used to understand concepts, explore implementation app
 
 The React client now authenticates against the Rust API and loads workspace records from PostgreSQL. Task creation, editing, deletion, assignments, comments, project creation, and drag-and-drop ordering call protected Axum endpoints; they no longer rely on browser-local demo records. New accounts receive a starter workspace and project board when the workspace endpoint is first loaded. Authenticated WebSocket sessions receive workspace-scoped events after committed mutations, and the frontend reloads the snapshot when remote changes arrive.
 
-**Not yet complete:** list management, invitation acceptance, granular role administration, automated browser end-to-end tests, and deployment configuration validation. CI has passed for the frontend production build and Rust compile check. The API and WebSocket flows still need acceptance testing against a real Neon database and two browser sessions before the application can be considered production-ready.
+**Not yet complete:** automated browser end-to-end tests, live multi-user WebSocket acceptance testing, full workspace switching, and granular per-board permissions. GitHub Actions checks the frontend build and Rust backend; dependency audits and CodeQL analysis are also configured. The production API has connected to PostgreSQL and applied SQLx migrations. The real-time broadcast channel is process-local, so the current single-instance deployment is intentional; multiple API instances require shared pub/sub before scaling horizontally.
 
 ## 🎓 Challenge Information
 
