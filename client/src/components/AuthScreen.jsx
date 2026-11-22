@@ -209,7 +209,6 @@ export default function AuthScreen({ onAuthenticated }) {
         <p className="auth-security"><ShieldCheck size={14} /> Protected sign-in. Your CampusForge session expires after 24 hours.</p>
       </section>
 
-aside>
     </main>
   );
 }
