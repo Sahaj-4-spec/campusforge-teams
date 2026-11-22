@@ -467,7 +467,7 @@ export function FilesPage({ data, realtimeVersion = 0 }) {
           </article>)}
         </div> : <div className="feature-empty"><Folder size={24} /><strong>Your library is ready</strong><span>Upload your first shared project resource.</span></div>}
       </section>
-      <p className="feature-muted">Local development storage is used on this branch. Configure durable object storage and backups before a production release.</p>
+      <p className="feature-muted">Local storage is the localhost default. Production can use a private S3-compatible bucket after server credentials, backups, retention, and malware scanning are configured.</p>
     </div>
   );
 }
