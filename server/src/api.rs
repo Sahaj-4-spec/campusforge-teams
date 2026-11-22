@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     routing::{get, patch, post},
     Json, Router,
 };
@@ -28,7 +28,7 @@ fn internal_error<E: std::fmt::Display>(cause: E, context: &'static str) -> (Sta
     error(StatusCode::INTERNAL_SERVER_ERROR, "The request could not be completed")
 }
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Clone, Serialize, FromRow)]
 struct WorkspaceRow {
     id: Uuid,
     name: String,
@@ -215,18 +215,35 @@ async fn ensure_default_workspace(pool: &PgPool, user_id: Uuid) -> Result<(), sq
 async fn get_workspace(
     State(state): State<AppState>,
     AuthUser(user_id): AuthUser,
+    headers: HeaderMap,
 ) -> ApiResult<Json<WorkspaceSnapshot>> {
     ensure_default_workspace(&state.db, user_id)
         .await
         .map_err(|cause| internal_error(cause, "Could not initialize the user's workspace"))?;
 
-    let workspace = sqlx::query_as::<_, WorkspaceRow>(
-        "SELECT w.id, w.name, w.description, w.created_at          FROM workspaces w          JOIN workspace_members wm ON wm.workspace_id = w.id          WHERE wm.user_id = $1 ORDER BY wm.joined_at DESC LIMIT 1",
+    let workspaces = sqlx::query_as::<_, WorkspaceRow>(
+        "SELECT w.id, w.name, w.description, w.created_at
+           FROM workspaces w
+           JOIN workspace_members wm ON wm.workspace_id = w.id
+          WHERE wm.user_id = $1
+          ORDER BY wm.joined_at DESC, w.created_at DESC",
     )
     .bind(user_id)
-    .fetch_one(&state.db)
+    .fetch_all(&state.db)
     .await
-    .map_err(|cause| internal_error(cause, "Could not load workspace"))?;
+    .map_err(|cause| internal_error(cause, "Could not list user's workspaces"))?;
+
+    let requested_workspace_id = headers.get("x-workspace-id")
+        .map(|value| value.to_str().map_err(|_| error(StatusCode::BAD_REQUEST, "Workspace selection is invalid")))
+        .transpose()?
+        .map(|value| Uuid::parse_str(value).map_err(|_| error(StatusCode::BAD_REQUEST, "Workspace selection is invalid")))
+        .transpose()?;
+    let workspace_id = requested_workspace_id
+        .or_else(|| workspaces.first().map(|workspace| workspace.id))
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "Workspace not found"))?;
+    let workspace = workspaces.iter().find(|workspace| workspace.id == workspace_id)
+        .cloned()
+        .ok_or_else(|| error(StatusCode::FORBIDDEN, "You are not a member of the selected workspace"))?;
 
     let users = sqlx::query_as::<_, UserRow>(
         "SELECT u.id, u.email, u.full_name, u.avatar_url          FROM users u JOIN workspace_members wm ON wm.user_id = u.id          WHERE wm.workspace_id = $1 ORDER BY u.full_name",
@@ -303,7 +320,7 @@ async fn get_workspace(
     Ok(Json(WorkspaceSnapshot {
         current_user_id: user_id,
         current_workspace_id: workspace.id,
-        workspaces: vec![workspace],
+        workspaces,
         users,
         workspace_members,
         boards,
