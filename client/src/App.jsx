@@ -475,6 +475,7 @@ export default function App() {
   }
 
   function handleAuthenticated(nextToken) {
+    setLoading(true);
     setToken(nextToken);
     setActiveView("Overview");
     setLoadError("");
