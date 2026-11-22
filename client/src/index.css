@@ -204,12 +204,14 @@ a { color: inherit; text-decoration: none; }
 .priority-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: #df9b57; }
 .priority-dot.priority-high { background: #dc807b; }
 .priority-dot.priority-low { background: #69b391; }
+.priority-dot.priority-urgent { background: #b64b46; }
 .table-muted { color: #969eae; font-size: 9px; }
 .status-pill { display: inline-block; max-width: 100%; overflow: hidden; padding: 5px 8px; border-radius: 6px; color: #6872b8; background: #f0f0ff; font-size: 8px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .priority-text { font-size: 9px; text-transform: capitalize; }
 .priority-text.priority-high { color: #d27d77; }
 .priority-text.priority-medium { color: #c8944f; }
 .priority-text.priority-low { color: #63a88a; }
+.priority-text.priority-urgent { color: #b64b46; font-weight: 700; }
 .team-panel { max-width: 900px; }
 .team-panel-heading { display: flex; align-items: center; justify-content: space-between; padding-bottom: 16px; }
 .team-panel-heading h2 { margin: 0; color: #30364b; font-family: Inter,sans-serif; font-size: 15px; }
@@ -283,6 +285,7 @@ a { color: inherit; text-decoration: none; }
 .priority-tag { padding: 4px 6px; border-radius: 5px; color: #b77c36; background: #fff5e8; font-size: 7px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; }
 .priority-high { color: #c66f6a; background: #fff0ef; }
 .priority-low { color: #4e9979; background: #eaf7f1; }
+.priority-urgent { color: #a83f3a; background: #ffe5e3; }
 .drag-handle { display: grid; width: 23px; height: 23px; place-items: center; border: 0; border-radius: 5px; color: #b8bdc9; background: transparent; cursor: grab; }
 .drag-handle:hover { color: #7166d8; background: #f5f4ff; }
 .task-title-button { display: block; width: 100%; padding: 4px 0 0; border: 0; color: #464e63; background: transparent; font-size: 10px; font-weight: 700; line-height: 1.45; text-align: left; }
