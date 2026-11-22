@@ -1,4 +1,5 @@
 const WORKSPACE_KEY = "campusforge-active-workspace";
+const TAB_WORKSPACE_KEY = "campusforge-tab-active-workspace";
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 
 // Remove JWTs saved by older CampusForge builds before using cookie-based sessions.
@@ -9,15 +10,21 @@ try {
 }
 
 export function getStoredWorkspaceId() {
-  return window.localStorage.getItem(WORKSPACE_KEY);
+  return window.sessionStorage.getItem(TAB_WORKSPACE_KEY) || window.localStorage.getItem(WORKSPACE_KEY);
 }
 
 export function setStoredWorkspaceId(workspaceId) {
-  if (workspaceId) window.localStorage.setItem(WORKSPACE_KEY, workspaceId);
-  else window.localStorage.removeItem(WORKSPACE_KEY);
+  if (workspaceId) {
+    window.sessionStorage.setItem(TAB_WORKSPACE_KEY, workspaceId);
+    window.localStorage.setItem(WORKSPACE_KEY, workspaceId);
+  } else {
+    window.sessionStorage.removeItem(TAB_WORKSPACE_KEY);
+    window.localStorage.removeItem(WORKSPACE_KEY);
+  }
 }
 
 export function clearStoredWorkspaceId() {
+  window.sessionStorage.removeItem(TAB_WORKSPACE_KEY);
   window.localStorage.removeItem(WORKSPACE_KEY);
 }
 
