@@ -80,3 +80,17 @@ export const taskApi = {
     { method: "PATCH", body: { destination_list_id: destinationListId, ordered_task_ids: orderedTaskIds } }
   )
 };
+
+export function createWorkspaceSocket(token) {
+  const origin = API_BASE || window.location.origin;
+  const websocketOrigin = origin
+    .replace(/^https:/i, "wss:")
+    .replace(/^http:/i, "ws:");
+  const socket = new WebSocket(`${websocketOrigin}/ws`);
+
+  socket.addEventListener("open", () => {
+    socket.send(JSON.stringify({ type: "authenticate", token }));
+  });
+
+  return socket;
+}
