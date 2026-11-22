@@ -1,20 +1,47 @@
-use axum::{routing::get, Json, Router};
+mod db;
+
+use axum::{
+    extract::State,
+    http::{header, HeaderValue, Method, StatusCode},
+    routing::get,
+    Json, Router,
+};
 use serde::Serialize;
+use sqlx::PgPool;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
-use tower_http::trace::TraceLayer;
+use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 #[derive(Serialize)]
 struct HealthResponse {
     status: &'static str,
     service: &'static str,
+    database: &'static str,
 }
 
-async fn health() -> Json<HealthResponse> {
-    Json(HealthResponse {
+#[derive(Serialize)]
+struct ErrorResponse {
+    error: &'static str,
+}
+
+async fn health(
+    State(pool): State<PgPool>,
+) -> Result<Json<HealthResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if let Err(error) = sqlx::query("SELECT 1").execute(&pool).await {
+        tracing::error!(%error, "Database health check failed");
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: "Database unavailable",
+            }),
+        ));
+    }
+
+    Ok(Json(HealthResponse {
         status: "ok",
         service: "campusforge-api",
-    })
+        database: "connected",
+    }))
 }
 
 #[tokio::main]
@@ -28,9 +55,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
+    let database_url = std::env::var("DATABASE_URL")
+        .map_err(|_| "DATABASE_URL must be set before starting CampusForge API")?;
+    let frontend_origin = std::env::var("FRONTEND_ORIGIN")
+        .unwrap_or_else(|_| "http://localhost:5173".to_string());
+
+    let pool = db::connect_and_migrate(&database_url).await?;
+    tracing::info!("PostgreSQL connected and migrations applied");
+
+    let cors = CorsLayer::new()
+        .allow_origin(frontend_origin.parse::<HeaderValue>()?)
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
+
     let app = Router::new()
         .route("/health", get(health))
         .route("/api/health", get(health))
+        .with_state(pool)
+        .layer(cors)
         .layer(TraceLayer::new_for_http());
 
     let port = std::env::var("PORT")
