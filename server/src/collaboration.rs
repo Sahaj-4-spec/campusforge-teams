@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::FromRow;
-use std::path::PathBuf;
 use uuid::Uuid;
 
 use crate::{auth::AuthUser, state::AppState};
@@ -480,9 +479,32 @@ async fn files_upload(
         return Err(fail(StatusCode::BAD_REQUEST, "File name or media type is invalid"));
     }
 
+    let extension = original_name
+        .rsplit_once('.')
+        .map(|(_, extension)| extension.to_ascii_lowercase())
+        .unwrap_or_default();
+    let normalized_media_type = match extension.as_str() {
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "zip" => "application/zip",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "doc" => "application/msword",
+        "xls" => "application/vnd.ms-excel",
+        "ppt" => "application/vnd.ms-powerpoint",
+        "txt" | "md" | "csv" | "json" | "rs" | "py" | "js" | "ts" | "jsx" | "tsx" |
+        "java" | "c" | "cpp" | "h" | "css" | "sql" | "go" | "html" | "xml" | "yaml" | "yml" =>
+            "text/plain; charset=utf-8",
+        _ => return Err(fail(StatusCode::BAD_REQUEST, "This file type is not supported")),
+    };
+
     let checksum = format!("{:x}", Sha256::digest(&bytes));
     let storage_key = Uuid::new_v4().to_string();
-    state.storage.put(&storage_key, &bytes, &media_type)
+    state.storage.put(&storage_key, &bytes, normalized_media_type)
         .await
         .map_err(|error| {
             tracing::error!(%error, "Could not store workspace file");
@@ -502,7 +524,7 @@ async fn files_upload(
     .bind(user_id)
     .bind(original_name.trim())
     .bind(&storage_key)
-    .bind(&media_type)
+    .bind(normalized_media_type)
     .bind(bytes.len() as i64)
     .bind(&checksum)
     .fetch_one(&state.db)
