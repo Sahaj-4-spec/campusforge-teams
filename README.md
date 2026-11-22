@@ -107,7 +107,7 @@ These are planning decisions only; no feature code or deployment is included in 
 - `POST /api/tasks/:id/comments` saves discussion comments; `PATCH /api/tasks/:id/move` persists drag-and-drop order.
 - `POST /api/boards/:board_id/lists`, `PATCH /api/lists/:id`, and `DELETE /api/lists/:id` manage project columns.
 - `GET/POST /api/invitations/`, `DELETE /api/invitations/:id`, and `POST /api/invitations/accept` manage workspace invitations.
-- Protected routes require an `Authorization: Bearer <token>` header. SQLx provides asynchronous access to PostgreSQL.
+- Browser sessions use an API-issued HttpOnly cookie; protected routes also retain Bearer authentication for non-browser clients. SQLx provides asynchronous access to PostgreSQL.
 - The Vite development server proxies `/api` and `/ws` to the backend on port `5000`. For a separately hosted frontend, set `VITE_API_BASE_URL` to the API service's HTTPS origin. Invitation links use the frontend root query string (`?invite=...`) and are accepted after the invitee signs in.
 
 ## 📁 Repository Structure
@@ -222,8 +222,9 @@ The frontend milestone is connected to the authenticated Rust API.
 - Task comments and a recent activity timeline loaded from the API.
 - Workspace team directory, task search, and filters.
 - Responsive layout for desktop, tablet, and mobile screens.
-- JWT-backed sign-in and registration; the browser stores the session token and sends it with API requests.
-- Authenticated workspace WebSocket connection with reconnect handling and workspace snapshot refreshes after remote changes.
+- JWT-backed sign-in and registration; the API sends the session JWT only in an HttpOnly cookie, which browser JavaScript cannot read or persist.
+- Authenticated workspace WebSocket connections use the HttpOnly cookie during the handshake; JavaScript does not send the session token.
+- Browser API requests include credentials; the server validates the frontend Origin on state-changing cookie-authenticated requests.
 
 The active React application reads workspace, project, task, assignment, comment, and activity records from the authenticated Rust API backed by PostgreSQL. `client/src/data/demoData.js` remains as an unused legacy sample-data reference and is not the active application data source.
 
