@@ -359,12 +359,19 @@ async fn create_board(
     .await
     .map_err(|cause| internal_error(cause, "Could not create project"))?;
 
-    sqlx::query("INSERT INTO board_members (board_id, user_id, role) VALUES ($1, $2, 'admin')")
-        .bind(board_id)
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|cause| internal_error(cause, "Could not add project owner"))?;
+    sqlx::query(
+        "INSERT INTO board_members (board_id, user_id, role)
+         SELECT $1, wm.user_id,
+                CASE WHEN wm.role IN ('owner', 'admin') THEN 'admin' ELSE 'member' END
+         FROM workspace_members wm
+         WHERE wm.workspace_id = $2
+         ON CONFLICT (board_id, user_id) DO NOTHING",
+    )
+    .bind(board_id)
+    .bind(workspace_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|cause| internal_error(cause, "Could not add project members"))?;
 
     for (position, list_name) in ["To do", "In progress", "In review", "Done"].iter().enumerate() {
         sqlx::query("INSERT INTO lists (board_id, name, position) VALUES ($1, $2, $3)")
