@@ -1,258 +1,178 @@
 # CampusForge Teams — Architecture and Project Decisions
 
-**Document status:** Approved design decisions and planned target architecture.  
-**Implementation status:** The existing baseline is implemented to varying degrees; the five roadmap features below remain planned. This document is not evidence that those features already exist in the running application.
+**Document status:** Selected technology decisions and current draft-branch implementation notes.  
+**Release status:** The collaboration-suite implementation is on draft PR #12. It is not merged into the main branch or deployed. Some items remain local-development-only or incomplete.
 
 ## 1. Product direction
 
-CampusForge Teams is a collaborative project workspace for student teams. Its foundation is a shared workspace containing members, boards, task lists, tasks, assignments, comments, invitations, activity history, and real-time updates.
+CampusForge Teams is a shared collaboration workspace for student teams. Its existing foundation contains accounts, workspaces, members, project boards, lists, tasks, assignees, comments, invitations, activity history, and workspace-scoped WebSocket updates.
 
-The next product increment adds:
+The collaboration-suite branch adds:
 1. Team calendar and deadline planner.
 2. Advanced tasks and subtasks.
 3. Smart notification centre.
 4. Shared files and documents.
-5. AI project assistant.
+5. Team productivity analytics.
+6. Team chat and meeting notes.
 
-The approved delivery order is recorded in docs/ROADMAP.md. Advanced task relationships come first because calendar, notifications, and AI depend on reliable task and assignment data.
+AI project assistance remains an approved future roadmap item. Delivery status and remaining work are recorded in docs/ROADMAP.md.
 
 ## 2. Current architecture decisions
 
-| Area | Selected decision | Rationale / boundary |
+| Area | Selected decision | Boundary |
 |---|---|---|
 | Frontend | React + Vite | Existing client and build workflow |
-| UI styling | Tailwind CSS plus existing component styles | Keep the current responsive interface and avoid a second UI framework |
-| Backend | Rust + Axum | Typed, async HTTP and WebSocket API |
-| Database | PostgreSQL | Relational workspace, membership, task, and event data |
-| Database access | SQLx | Parameterized queries, connection pooling, and migrations |
-| Authentication | Argon2 password hashing and signed JWT sessions; Google, GitHub, Discord OAuth is being added on the feature branch | Provider secrets stay on the server |
-| Real-time transport | Native WebSockets through Axum | No Socket.IO service or separate Node backend |
-| Version control | GitHub | Branch-based work, pull requests, and CI checks |
+| UI styling | Tailwind CSS plus existing component styles | Keep current responsive design system |
+| Backend | Rust + Axum | Typed asynchronous HTTP and WebSocket API |
+| Database | PostgreSQL | System of record for workspace/product data |
+| Database access | SQLx | Parameterized SQL, pooling, migrations |
+| Authentication | Argon2 and signed JWT sessions; Google, GitHub, Discord OAuth on the social-auth feature branch | Provider secrets remain server-side |
+| Real-time transport | Native Axum WebSockets | Not Socket.IO |
+| File bytes | Private local filesystem directory for local development | Production object storage is not configured |
+| Version control | GitHub | Branch-based work, draft PRs, CI |
 
-Node.js/Express, MongoDB/Mongoose, and Socket.IO are not the selected backend stack. The current architecture remains React + Vite, Rust + Axum, PostgreSQL, SQLx, and native WebSockets.
+Node.js/Express, MongoDB/Mongoose, and Socket.IO are not the selected backend architecture.
 
 ## 3. Current relational model
 
-The existing PostgreSQL baseline includes these main entities:
+The baseline schema includes users, workspaces, workspace_members, boards, board_members, lists, tasks, task_assignees, comments, activity_events, invitations, oauth_accounts, and oauth_states.
 
-| Table | Responsibility |
+The collaboration-suite migration adds:
+
+| Table / columns | Responsibility |
 |---|---|
-| users | Account identity, email, name, avatar, and password hash (nullable for provider-only accounts after social-auth migration) |
-| workspaces | Team workspace and owner |
-| workspace_members | User membership and workspace role |
-| boards | Projects within a workspace |
-| board_members | Board-scoped membership/role records |
-| lists | Ordered workflow columns for a board |
-| tasks | Task title, description, priority, due timestamp, position, creator, and list |
-| task_assignees | Many-to-many task assignment |
-| comments | Task discussion |
-| activity_events | Workspace/board/task activity history |
-| invitations | Email-bound, expiring, single-use workspace invitations |
-| oauth_accounts | External Google/GitHub/Discord identity linked to a CampusForge user |
-| oauth_states | Hashed, short-lived OAuth state values consumed once by the callback |
+| tasks.parent_task_id | Parent task/subtask relationship |
+| tasks.estimated_minutes | Optional effort estimate |
+| task_checklist_items | Ordered checklist and completion metadata |
+| labels, task_labels | Workspace-scoped labels and task assignments |
+| task_dependencies | Directed same-project dependency records |
+| task_recurrence_rules | Recurrence interval, time zone, destination, and next run |
+| calendar_events | Meetings, milestones, exams, submissions, and focus blocks |
+| notifications | Recipient-scoped persistent in-app notifications |
+| notification_preferences | Per-user notification category preferences |
+| workspace_files | File metadata, scope, uploader, checksum and storage key |
+| chat_messages | Workspace-wide or project-specific message history |
+| meeting_notes | Meeting title, time, attendees, agenda, notes and action items |
 
-The active API checks workspace membership for current operations. Fine-grained per-board authorization remains a known gap and must be designed before board-level private visibility is introduced.
+The new SQL migration is server/migrations/0004_collaboration_suite.sql.
 
-## 4. Decisions for the five approved features
+## 4. Feature architecture decisions
 
 ### ADR-005 — Advanced tasks and subtasks
 
-**Decision:** Extend the existing task entity and add relational child tables; do not introduce a separate task database or replace the existing task API.
+**Decision:** Extend existing tasks rather than introducing a separate task database.
 
-Planned schema additions (not yet migrated):
+The draft branch supports:
+- Parent task references and subtask creation.
+- Ordered checklist items with completion state.
+- Workspace labels and task-label assignments.
+- Same-project dependency links with recursive cycle checks.
+- Estimated effort stored in minutes.
+- Recurrence rules processed by a background worker after the current occurrence is complete and due.
 
-| Entity / field | Planned purpose |
-|---|---|
-| tasks.parent_task_id | Nullable self-reference to a parent task |
-| tasks.estimated_minutes | Optional effort estimate |
-| tasks.recurrence_rule_id | Optional link to a recurring-task rule |
-| task_checklist_items | Ordered checklist items, completion timestamp, and completing user |
-| labels | Workspace-scoped reusable labels |
-| task_labels | Many-to-many link between tasks and labels |
-| task_dependencies | Directed dependency edges between tasks |
-| task_recurrence_rules | Recurrence rule, time zone, next occurrence, and template task |
+Important invariants:
+- A subtask is created in the same list/board as its parent.
+- A task cannot depend on itself or a task in another project.
+- The API rejects dependency cycles.
+- Subtask completion does not automatically complete its parent.
+- Recurrence creates a new task occurrence rather than resetting the completed task.
 
-Constraints and behavior:
-- A parent and child must belong to the same board and workspace.
-- Prevent self-parenting and cyclic parent/child relationships.
-- Prevent dependency cycles and dependencies across inaccessible workspaces.
-- Use transaction-safe ordering for checklist items.
-- A parent task shows derived child completion progress; child completion does not silently complete the parent.
-- Recurrence creates a new occurrence and preserves completed-task history. Retries must not create duplicate occurrences.
-- Existing task IDs, assignees, comments, due dates, and drag-and-drop behavior remain compatible.
-
-Potential API shape:
-- GET/POST /api/tasks/:task_id/subtasks
-- PATCH/DELETE /api/subtasks/:subtask_id
-- GET/POST /api/tasks/:task_id/checklist
-- PATCH/DELETE /api/checklist-items/:item_id
-- GET/POST /api/workspace/labels
-- POST/DELETE /api/tasks/:task_id/labels/:label_id
-- GET/POST /api/tasks/:task_id/dependencies
-- DELETE /api/task-dependencies/:dependency_id
-- PUT /api/tasks/:task_id/recurrence
-
-The exact route naming may be refined during implementation, but all routes must enforce workspace scope and cycle checks on the server.
+Remaining validation: database-level hierarchy scope enforcement, recursive parent-cycle protection, concurrent recurrence idempotency, and browser regression coverage.
 
 ### ADR-006 — Team calendar and deadline planner
 
-**Decision:** Build one calendar view over existing task deadlines plus a separate calendar event entity. Do not copy task deadlines into duplicate calendar rows.
+**Decision:** Read task deadlines directly from tasks.due_at; use a separate calendar event table for meetings and milestones. Do not duplicate task deadlines.
 
-Planned schema:
+calendar_events stores:
+- id, workspace_id, optional board_id, created_by.
+- title, description, event_type.
+- start_at and end_at as UTC timestamps.
+- time_zone and all_day.
+- created/updated timestamps.
 
-**calendar_events**
-- id UUID primary key
-- workspace_id UUID foreign key
-- board_id UUID nullable foreign key
-- created_by UUID foreign key
-- title and description
-- event_type (meeting, milestone, or focus_block)
-- start_at and end_at (UTC timestamps for timed events)
-- time_zone (IANA identifier)
-- all_day boolean
-- created_at and updated_at
+Draft UI/API supports month, week, and day views; task deadline display; and creating/deleting meeting, milestone, exam, submission, and focus-block events.
 
-A future attendee relation may connect events to workspace members. The first implementation should keep event ownership and workspace visibility simple and explicit.
-
-Task due dates continue to come from tasks.due_at. The calendar query combines task deadlines and calendar_events at read time. A migration may be considered later if the current timestamp-based task due date cannot preserve date-only semantics in all user time zones; do not duplicate deadlines as a workaround.
-
-Potential API shape:
-- GET /api/calendar?from=...&to=...&board_id=...
-- GET/POST /api/calendar/events
-- PATCH/DELETE /api/calendar/events/:event_id
-
-Timed events are stored in UTC and displayed in the user's selected time zone. All-day events must retain their intended local calendar date. Every query is restricted to the authenticated workspace and requested range.
-
-Deadline-risk radar is an explainable calendar/dashboard layer, not a separate source of task truth. Indicators may include overdue, due soon, unassigned, blocked by dependency, or milestone at risk.
+Remaining: attendee links, full rescheduling/editor controls, time-zone/daylight-saving acceptance tests, richer filters, and reminder settings.
 
 ### ADR-007 — Smart notification centre
 
-**Decision:** Persist in-app notifications in PostgreSQL first, then use WebSockets for live delivery. Do not use WebSocket messages as the only copy of a notification.
+**Decision:** Notifications persist in PostgreSQL; WebSockets are only the delivery/update signal. A reconnecting client reloads authorized records from REST.
 
-Planned schema:
+notifications stores workspace and recipient, optional actor, type/title/body, resource type/id, optional dedupe key, read timestamp, and creation timestamp.
 
-**notifications**
-- id UUID primary key
-- workspace_id UUID foreign key
-- recipient_user_id UUID foreign key
-- actor_user_id UUID nullable foreign key
-- notification_type
-- title and body
-- resource_type and resource_id
-- dedupe_key nullable unique
-- read_at nullable timestamp
-- created_at timestamp
+notification_preferences stores in-app and email flags by user/category. Email stays disabled.
 
-**notification_preferences**
-- user_id UUID foreign key
-- notification_type
-- in_app_enabled boolean
-- email_enabled boolean (kept disabled until email delivery is implemented and approved)
-- unique(user_id, notification_type)
+Draft implementation includes:
+- Inbox and unread count.
+- Mark-one/read-all behavior.
+- Per-category in-app preferences.
+- Task/comment activity notifications.
+- Background reminders for assigned tasks due within 24 hours and tasks that have recently become overdue.
 
-Initial notification types include assignment, mention, comment, invitation, dependency change, deadline approaching, overdue task, and calendar event change.
-
-Potential API shape:
-- GET /api/notifications?cursor=...
-- PATCH /api/notifications/:notification_id/read
-- POST /api/notifications/read-all
-- GET/PUT /api/notification-preferences
-
-Notifications are created in the same database transaction as the domain change where practical. Background deadline reminders use idempotency keys and retry-safe jobs. WebSocket events contain a minimal notification ID/update signal; the client retrieves the notification through an authorized endpoint. Recipient resolution is based on task assignees, explicit mentions, and relevant workspace membership.
-
-Email notifications are not part of the first implementation. They require an approved mail provider, opt-in settings, unsubscribe handling, retry policy, and delivery observability.
+Remaining: mentions, invitation-specific recipients, pagination, delivery retry/idempotency tests, retention controls, and optional email integration.
 
 ### ADR-008 — Shared files and documents
 
-**Decision:** Keep file metadata and authorization in PostgreSQL, while storing file bytes in an object-storage adapter. Do not store uploaded binaries in PostgreSQL or trust client-provided object URLs.
+**Decision:** Store metadata and authorization in PostgreSQL; do not store file bytes in database rows. File bytes currently go to a private local filesystem path for development.
 
-Planned schema:
+workspace_files stores workspace, optional board/task attachment, uploader, original name, opaque server-generated storage key, media type, size, SHA-256 checksum, and timestamp.
 
-**workspace_files**
-- id UUID primary key
-- workspace_id UUID foreign key
-- uploaded_by UUID foreign key
-- original_name
-- storage_key (opaque server-generated key)
-- media_type
-- size_bytes
-- checksum_sha256
-- created_at and deleted_at
+Draft implementation includes an authenticated workspace file listing, upload, download, and uploader-only delete route, with a 10 MB request limit and safe download headers.
 
-**file_links**
-- id UUID primary key
-- workspace_file_id UUID foreign key
-- board_id UUID nullable foreign key
-- task_id UUID nullable foreign key
-- created_at timestamp
-- constraint: exactly one of board_id or task_id is present
+**Production blocker:** Local disk is not durable across server replacement or multiple instances. Before public use, replace it with private object storage, short-lived signed transfers or server-mediated transfers, malware scanning, file type/size policy, quotas, backups, retention/deletion, and orphan cleanup. A client-provided storage key/URL is never an authorization credential.
 
-The API must verify that file, board, task, and signed-in user all belong to the same authorized workspace. Use short-lived signed upload/download URLs or equivalent server-mediated transfers. Validate size, allowed media types, ownership, object keys, and safe content disposition. Plan cleanup for abandoned uploads and deleted metadata.
+### ADR-009 — AI project assistant (future)
 
-Potential API shape:
-- GET /api/files
-- POST /api/files/upload-requests
-- GET /api/files/:file_id/download
-- DELETE /api/files/:file_id
-- POST/DELETE /api/files/:file_id/links
+**Decision:** Keep AI integration behind a server-side provider adapter and keep responses advisory.
 
-Storage vendor selection is deliberately deferred until region, cost, access control, backup, retention, and lifecycle requirements are compared. Folder organization and file version history are later increments, not requirements for the first upload release.
+Potential functions include project-plan drafting, task breakdown, milestone suggestions, workload/dependency explanations, and summaries of explicitly selected resources. Do not select a provider until privacy, data region, retention, cost, and quality are reviewed. Show the user what context is sent; verify access server-side; treat uploaded files and comments as untrusted; require explicit user approval before applying any suggestion. Default to no raw prompt/document/response retention.
 
-### ADR-009 — AI project assistant
+### ADR-010 — Team productivity analytics
 
-**Decision:** Add a server-side provider adapter and keep AI output advisory. The assistant never changes project data without explicit user confirmation.
+**Decision:** Calculate live operational counts from PostgreSQL and be explicit about what each metric means. Do not present current totals as historical trends.
 
-Initial capabilities:
-- Draft a project plan from a user-provided brief.
-- Suggest subtasks for a selected task or deliverable.
-- Suggest milestone dates and highlight workload/dependency risks.
-- Summarize a selected board, task discussion, or explicitly selected documents.
+Draft API GET /api/analytics returns workspace totals for tasks, completed tasks, completion percentage, overdue tasks, unassigned tasks, project completion counts, and per-member open/completed assignments. The Reports/Analytics view displays these server-calculated values alongside existing activity/project reports.
 
-Potential API shape:
-- POST /api/ai/project-plan
-- POST /api/ai/task-breakdown
-- POST /api/ai/summarize
-- GET /api/ai/usage
+Remaining: historical snapshots, date filters, export, metric definitions for reopened/cancelled tasks, and privacy review before member ranking or contribution scoring.
 
-Provider selection is deferred. Evaluate privacy, retention, data region, cost, latency, quality, and contract terms before choosing a model/provider. Provider credentials remain on the Rust server and are never sent to the browser.
+### ADR-011 — Team chat and meeting notes
 
-The client must show which workspace, board, task, or files are in context before sending a request. The server independently verifies every referenced record. Workspace comments and uploaded documents are untrusted content; prompt-injection instructions found in them must not be followed. AI-generated output is structured as suggestions, shown for review, and applied through existing authenticated APIs only after a user action.
+**Decision:** Keep workspace/project message history and meeting notes as separate PostgreSQL resources scoped to the same workspace.
 
-Default privacy decision: do not retain raw prompts, document contents, or model responses. Record minimal usage metadata (user, workspace, feature, provider/model, token/cost counters when available, status, and timestamp). Persistent AI conversation history requires an explicit retention, export, and deletion design before implementation.
+- chat_messages supports workspace-wide or board-specific channels with author and timestamp.
+- meeting_notes supports title, meeting time, attendees, agenda, discussion notes, and action items.
 
-Add quotas and cost guardrails. Tests must verify cross-workspace isolation, safe error behavior, provider timeouts, and that generated content cannot bypass normal authorization.
+Draft UI/API supports sending/listing messages and creating/listing/updating/deleting meeting notes (delete is limited to the creator). This is not yet a full messenger: direct messages, typing/presence, pins, and mention parsing are not included. Real-time message fan-out and two-browser acceptance tests remain.
 
-## 5. Shared API and real-time conventions
+## 5. API and real-time conventions
 
-- REST endpoints are authenticated by the existing bearer-token mechanism unless explicitly declared public.
-- Every endpoint validates workspace membership and validates relationships between every referenced record.
-- Mutations use SQLx transactions where multiple tables or activity/notification records must remain consistent.
-- PostgreSQL is the system of record.
-- Native WebSockets notify connected workspace users after committed mutations; a reconnecting client fetches authoritative state from REST endpoints.
-- WebSocket payloads should carry minimal identifiers and event names, not become an alternate permission bypass.
-- Background jobs must be idempotent and observable. Deadline reminders and recurrence generation must be safe to retry.
+REST routes require a valid bearer session unless explicitly public. Every resource lookup validates the authenticated user's workspace membership and the relationship between referenced IDs.
 
-## 6. Security, privacy, and operational decisions
+Draft route groups include:
+- /api/calendar and /api/calendar/events/:id
+- /api/tasks/:id/advanced, /subtasks, /checklist, /labels, /dependencies, /estimate, and /recurrence
+- /api/notifications and /notification-preferences
+- /api/files and /api/files/:id/download
+- /api/chat/messages
+- /api/meeting-notes
+- /api/analytics
+
+PostgreSQL is the source of truth. Mutations use SQLx; background jobs must be observable and retry-safe. WebSocket payloads should contain minimal update signals; the client reloads authorized data from REST. The current broadcast channel is in-process and requires shared pub/sub before horizontal scaling.
+
+## 6. Security, privacy, and operations
 
 - Use parameterized SQL through SQLx.
-- Keep API/provider/storage secrets in server environment variables or a secret store.
-- Enforce membership and resource ownership on the server, not only in the UI.
-- Treat uploaded files and AI context as untrusted input.
-- Use short-lived file transfer credentials and server-generated storage keys.
-- Apply file type/size limits and safe download headers.
-- Keep notification visibility scoped to the recipient and workspace.
-- Define backup, retention, export, account deletion, and file deletion semantics before public launch.
-- The current in-process WebSocket broadcast channel is a single-instance design; shared pub/sub is required before scaling the API horizontally.
-- Fine-grained per-board authorization remains a known gap and must be resolved before private board visibility is introduced.
+- Keep OAuth, storage, and future AI secrets on the server.
+- Check workspace membership and referenced resource relationships on every request.
+- Keep files private; use server-generated opaque storage keys and workspace-scoped downloads.
+- Limit file sizes and return safe content-disposition and nosniff headers.
+- Do not enable email delivery without opt-in, unsubscribe, retry, and provider configuration.
+- Do not send unauthorized workspace data to future AI services.
+- Define backups, retention, export, and deletion before public launch.
+- Fine-grained per-board authorization and shared WebSocket pub/sub are known scale/security gaps.
 
-## 7. Delivery and deployment decision
+## 7. Deployment decision
 
-The five roadmap features are planned, not implemented by this documentation update. New SQL migrations, routes, UI components, background workers, storage integrations, and AI provider dependencies must be added in their relevant implementation phases and tested separately.
+PR #12 is a draft feature branch. No new collaboration-suite feature is in the live preview until it is merged and deployed by explicit authorization. Before that, the branch needs completed CI/security checks, database migration review, browser/multi-user testing, storage vendor configuration, production retention/backup design, and security review.
 
-This update is documentation-only:
-- No runtime code is changed.
-- No database migration is applied.
-- No provider, storage, mail, or AI secrets are added.
-- No hosting configuration is changed.
-- Keep the feature branch and draft PR unmerged.
-- Do not deploy until the user explicitly authorizes deployment after implementation, security review, and end-to-end release checks.
+Do not merge or deploy until the user explicitly authorizes release.
