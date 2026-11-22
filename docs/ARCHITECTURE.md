@@ -118,7 +118,7 @@ Remaining: verify the sender domain and provider account, test actual delivery a
 
 workspace_files stores workspace, optional board/task attachment, uploader, original name, opaque server-generated storage key, media type, size, SHA-256 checksum, and timestamp.
 
-Draft implementation includes an authenticated workspace file listing, upload, download, and uploader-only delete route, with a 10 MB request limit, extension allowlist, normalized content types, and safe download headers. A storage adapter supports local-development disk and an S3-compatible backend using the AWS SDK for Rust. Transfers are server-mediated; the bucket remains private and the API checks authorization before reading/deleting an object.
+Draft implementation includes an authenticated workspace file listing, upload, download, and uploader-only delete route, with a 10 MB request limit, extension allowlist, normalized content types, and safe download headers. A storage adapter supports local-development disk and an S3-compatible backend using AWS Signature Version 4 over Reqwest. Transfers are server-mediated; the bucket remains private and the API checks authorization before reading/deleting an object.
 
 **Production blocker:** The S3 adapter is code-complete but no private bucket/credentials are configured. Before public use, provision and verify the chosen private bucket, IAM policy, encryption, backups/versioning, retention/deletion, malware scanning, quotas, object/database reconciliation, and restore procedures. A client-provided storage key/URL is never an authorization credential.
 
