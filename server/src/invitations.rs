@@ -326,7 +326,11 @@ async fn accept_invitation(
 
     sqlx::query(
         "INSERT INTO board_members (board_id, user_id, role)
-         SELECT id, $1, 'member' FROM boards WHERE workspace_id = $2
+         SELECT b.id, wm.user_id,
+                CASE WHEN wm.role IN ('owner', 'admin') THEN 'admin' ELSE 'member' END
+         FROM boards b
+         JOIN workspace_members wm ON wm.workspace_id = b.workspace_id AND wm.user_id = $1
+         WHERE b.workspace_id = $2
          ON CONFLICT (board_id, user_id) DO NOTHING",
     )
     .bind(user_id)
