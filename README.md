@@ -296,3 +296,11 @@ The React client authenticates against the Rust API and loads workspace records 
 <p align="center">
   <strong>CampusForge Teams — Build Together. Achieve Together.</strong>
 </p>
+
+## Social sign-in
+
+CampusForge supports email/password authentication and server-side OAuth sign-in with Google, GitHub, and Discord. The provider integration requires server environment variables for each OAuth client ID and secret. See [Social Sign-in Setup](docs/SOCIAL_AUTH_SETUP.md) for provider console setup, exact callback URLs, local configuration, and the authentication test checklist.
+
+OAuth provider secrets must remain on the Rust API server and must never be added to frontend variables or committed to Git. Social-only accounts are stored with a nullable password hash, while existing password accounts continue to use Argon2 password verification. New OAuth identities are accepted only when the provider returns a verified email address.
+
+A CodeRabbit configuration is included in the repository root to guide pull-request reviews of OAuth handlers, auth code, migrations, and the sign-in UI. The CodeRabbit GitHub App must be installed and enabled for this repository before automated PR reviews can run.
