@@ -463,7 +463,7 @@ a { color: inherit; text-decoration: none; }
 .auth-intro > p:last-child { max-width: 360px; margin: 11px 0 0; color: #8a90a3; font-size: 12px; line-height: 1.65; }
 .auth-screen-split .auth-form { display: grid; gap: 15px; padding: 0; }
 .auth-screen-split .field-group { gap: 7px; }
-.auth-screen-split .field-group > span:first-child { color: #4f566d; font-size: 10px; font-weight: 700; }
+.auth-screen-split .field-group > span:first-child, .auth-screen-split .field-group > label:first-child { color: #4f566d; font-size: 10px; font-weight: 700; }
 .auth-input-wrap {
   display: flex; min-height: 48px; align-items: center; gap: 11px; padding: 0 13px;
   border: 1px solid #e7e9f1; border-radius: 11px; color: #9ba2b4; background: #fbfcfe;
@@ -567,4 +567,13 @@ a { color: inherit; text-decoration: none; }
   .auth-intro h1 { font-size: 29px; }
   .social-auth-grid { gap: 6px; }
   .social-auth-button { gap: 5px; padding: 0 6px; font-size: 9px; }
+}
+
+.auth-screen-split .social-auth-button:focus-visible,
+.auth-screen-split .auth-submit:focus-visible,
+.auth-screen-split .auth-panel-cta:focus-visible,
+.auth-screen-split .auth-password-toggle:focus-visible,
+.auth-screen-split .auth-switch button:focus-visible {
+  outline: 3px solid rgba(112, 98, 221, .45);
+  outline-offset: 3px;
 }
