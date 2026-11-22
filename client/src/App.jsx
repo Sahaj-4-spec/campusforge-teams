@@ -29,7 +29,8 @@ import {
 import BoardView from "./components/BoardView.jsx";
 import TaskDialog from "./components/TaskDialog.jsx";
 import AuthScreen from "./components/AuthScreen.jsx";
-import { clearStoredToken, getStoredToken, workspaceApi, taskApi } from "./lib/api.js";
+import ProjectDialog from "./components/ProjectDialog.jsx";
+import { boardApi, clearStoredToken, getStoredToken, workspaceApi, taskApi } from "./lib/api.js";
 
 const navigation = [
   { id: "Overview", label: "Overview", icon: LayoutDashboard },
@@ -326,10 +327,10 @@ function ActivityPage({ data }) {
   );
 }
 
-function ProjectsPage({ data, onOpenBoard }) {
+function ProjectsPage({ data, onOpenBoard, onCreateBoard }) {
   return (
     <div className="page-stack">
-      <div className="page-title-row"><div><p className="eyebrow">WORKSPACE LIBRARY</p><h1>Projects</h1><p className="page-subtitle">Choose a board to see its tasks and keep work moving.</p></div></div>
+      <div className="page-title-row"><div><p className="eyebrow">WORKSPACE LIBRARY</p><h1>Projects</h1><p className="page-subtitle">Choose a board to see its tasks and keep work moving.</p></div><button className="primary-button" type="button" onClick={onCreateBoard}><Plus size={16} /> New project</button></div>
       <div className="projects-grid-page">
         {data.boards.map((board) => {
           const count = data.tasks.filter((task) => task.board_id === board.id).length;
@@ -348,7 +349,7 @@ function ProjectsPage({ data, onOpenBoard }) {
   );
 }
 
-function AppSidebar({ activeView, onNavigate, onOpenBoard, boards, currentUser }) {
+function AppSidebar({ activeView, onNavigate, onOpenBoard, onCreateBoard, boards, currentUser }) {
   return (
     <aside className="sidebar">
       <a className="brand" href="#" onClick={(event) => { event.preventDefault(); onNavigate("Overview"); }} aria-label="CampusForge Teams home">
@@ -368,7 +369,7 @@ function AppSidebar({ activeView, onNavigate, onOpenBoard, boards, currentUser }
           </button>
         ))}
       </nav>
-      <div className="sidebar-section-row"><span className="sidebar-section-label">YOUR PROJECTS</span><span className="sidebar-plus">+</span></div>
+      <div className="sidebar-section-row"><span className="sidebar-section-label">YOUR PROJECTS</span><button className="sidebar-plus" type="button" onClick={onCreateBoard} aria-label="Create project">+</button></div>
       <div className="sidebar-projects">
         {boards.map((board, index) => (
           <button className={"sidebar-project" + (activeView === "Board" && index === 0 ? " selected" : "")} key={board.id} onClick={() => onOpenBoard(board)} type="button">
@@ -398,6 +399,7 @@ export default function App() {
   const [activeBoardId, setActiveBoardId] = useState("");
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [boardDialogOpen, setBoardDialogOpen] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState(null);
   const [defaultListId, setDefaultListId] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -469,6 +471,7 @@ export default function App() {
     if (!workspace.boards.some((board) => board.id === activeBoardId)) {
       setActiveBoardId(workspace.boards[0]?.id || "");
     }
+    return workspace;
   }
 
   function handleAuthenticated(nextToken) {
@@ -498,6 +501,25 @@ export default function App() {
     setActiveView(view);
     setSearch("");
     setMobileMenuOpen(false);
+  }
+
+  function openNewBoard() {
+    setBoardDialogOpen(true);
+    setMobileMenuOpen(false);
+  }
+
+  async function saveBoard(values) {
+    try {
+      await boardApi.create(values);
+      const workspace = await refreshWorkspace();
+      const newestBoard = [...workspace.boards].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+      setBoardDialogOpen(false);
+      if (newestBoard) openBoard(newestBoard);
+      setNotice("Project created");
+    } catch (error) {
+      setNotice(error.message || "Could not create project");
+      throw error;
+    }
   }
 
   function openNewTask(listId = activeLists[0]?.id) {
@@ -608,7 +630,7 @@ export default function App() {
       case "Activity":
         return <ActivityPage data={data} />;
       case "Projects":
-        return <ProjectsPage data={data} onOpenBoard={openBoard} />;
+        return <ProjectsPage data={data} onOpenBoard={openBoard} onCreateBoard={openNewBoard} />;
       case "Settings":
         return (
           <div className="page-stack">
@@ -672,6 +694,7 @@ export default function App() {
         activeView={activeView}
         onNavigate={navigate}
         onOpenBoard={openBoard}
+        onCreateBoard={openNewBoard}
         boards={data.boards}
         currentUser={currentUser}
       />
@@ -691,7 +714,7 @@ export default function App() {
                 <kbd>⌘ K</kbd>
               </label>
             )}
-            <span className="preview-status"><i /> Synced workspace</span>
+            <span className="preview-status"><i /> Database-backed</span>
             <button className="icon-button notification-button" type="button" aria-label="Notifications" onClick={() => navigate("Activity")}><Bell size={18} /><span className="notification-dot" /></button>
             <Avatar name={currentUser?.full_name || "You"} />
           </div>
@@ -711,6 +734,7 @@ export default function App() {
         <footer className="page-footer"><span>CampusForge Teams</span><span>Plan better. Collaborate smarter. Build together.</span></footer>
       </div>
 
+      <ProjectDialog open={boardDialogOpen} onClose={() => setBoardDialogOpen(false)} onSave={saveBoard} />
       <TaskDialog
         open={dialogOpen}
         task={editingTask}
