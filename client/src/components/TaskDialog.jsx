@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CalendarDays, MessageCircle, Trash2, X } from "lucide-react";
 import TaskAdvancedPanel from "./TaskAdvancedPanel.jsx";
 
@@ -38,31 +38,44 @@ export default function TaskDialog({
     estimated_minutes: ""
   });
   const [commentDraft, setCommentDraft] = useState("");
+  const dialogWasOpen = useRef(false);
+  const lastTaskIdentity = useRef(null);
 
   useEffect(() => {
-    if (task) {
-      setForm({
-        title: task.title || "",
-        description: task.description || "",
-        priority: task.priority || "medium",
-        due_date: task.due_date || "",
-        list_id: task.list_id || defaultListId || "",
-        assignee_id: assigneeIds[0] || "",
-        estimated_minutes: task.estimated_minutes ? String(task.estimated_minutes) : ""
-      });
-    } else {
-      setForm({
-        title: "",
-        description: "",
-        priority: "medium",
-        due_date: "",
-        list_id: defaultListId || (lists[0] && lists[0].id) || "",
-        assignee_id: "",
-        estimated_minutes: ""
-      });
+    if (!open) {
+      dialogWasOpen.current = false;
+      lastTaskIdentity.current = null;
+      return;
     }
-    setCommentDraft("");
-  }, [task, open, defaultListId, lists, assigneeIds]);
+
+    const identity = task?.id || "__new_task__";
+    if (!dialogWasOpen.current || lastTaskIdentity.current !== identity) {
+      if (task) {
+        setForm({
+          title: task.title || "",
+          description: task.description || "",
+          priority: task.priority || "medium",
+          due_date: task.due_date || "",
+          list_id: task.list_id || defaultListId || "",
+          assignee_id: assigneeIds[0] || "",
+          estimated_minutes: task.estimated_minutes ? String(task.estimated_minutes) : ""
+        });
+      } else {
+        setForm({
+          title: "",
+          description: "",
+          priority: "medium",
+          due_date: "",
+          list_id: defaultListId || (lists[0] && lists[0].id) || "",
+          assignee_id: "",
+          estimated_minutes: ""
+        });
+      }
+      setCommentDraft("");
+      lastTaskIdentity.current = identity;
+    }
+    dialogWasOpen.current = true;
+  }, [open, task?.id]);
 
   useEffect(() => {
     if (!open) return undefined;
