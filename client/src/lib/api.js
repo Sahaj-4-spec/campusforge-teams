@@ -67,6 +67,25 @@ export const boardApi = {
   create: (values) => request("/api/boards", { method: "POST", body: values })
 };
 
+export const listApi = {
+  create: (boardId, name) => request(`/api/boards/${encodeURIComponent(boardId)}/lists`, {
+    method: "POST",
+    body: { name }
+  }),
+  update: (listId, name) => request(`/api/lists/${encodeURIComponent(listId)}`, {
+    method: "PATCH",
+    body: { name }
+  }),
+  remove: (listId) => request(`/api/lists/${encodeURIComponent(listId)}`, { method: "DELETE" })
+};
+
+export const invitationApi = {
+  list: () => request("/api/invitations/"),
+  create: (values) => request("/api/invitations/", { method: "POST", body: values }),
+  revoke: (invitationId) => request(`/api/invitations/${encodeURIComponent(invitationId)}`, { method: "DELETE" }),
+  accept: (token) => request("/api/invitations/accept", { method: "POST", body: { token } })
+};
+
 export const taskApi = {
   create: (values) => request("/api/tasks", { method: "POST", body: values }),
   update: (taskId, values) => request(`/api/tasks/${encodeURIComponent(taskId)}`, { method: "PATCH", body: values }),
