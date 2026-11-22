@@ -465,6 +465,10 @@ async fn add_activity(
                 ON np.user_id = wm.user_id AND np.notification_type = $3
              WHERE wm.workspace_id = $1 AND wm.user_id <> $2
                AND (COALESCE(np.in_app_enabled, TRUE) OR COALESCE(np.email_enabled, FALSE))
+               AND ($3 <> 'task_assigned' OR EXISTS (
+                    SELECT 1 FROM task_assignees ta
+                     WHERE ta.task_id=$7 AND ta.user_id=wm.user_id
+               ))
          ),
          inserted_notifications AS (
             INSERT INTO notifications
@@ -620,6 +624,14 @@ async fn update_task(
         }
     }
 
+    let previous_assignee_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT user_id FROM task_assignees WHERE task_id=$1 ORDER BY user_id LIMIT 1",
+    )
+    .bind(task_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|cause| internal_error(cause, "Could not load previous task assignee"))?;
+
     if old_list_id != input.list_id {
         let position: i32 = sqlx::query_scalar(
             "SELECT COALESCE(MAX(position), 0) + 1 FROM tasks WHERE list_id = $1",
@@ -682,12 +694,22 @@ async fn update_task(
     }
 
     let moved = old_list_id != input.list_id;
-    let description = if moved {
+    let assignment_changed = previous_assignee_id != input.assignee_id;
+    let event_type = if assignment_changed && input.assignee_id.is_some() {
+        "task_assigned"
+    } else if moved {
+        "task_moved"
+    } else {
+        "task_updated"
+    };
+    let description = if assignment_changed && input.assignee_id.is_some() {
+        format!("assigned {title}")
+    } else if moved {
         format!("moved {old_title} to another list")
     } else {
         format!("updated {title}")
     };
-    add_activity(&mut tx, workspace_id, board_id, Some(task_id), user_id, if moved { "task_moved" } else { "task_updated" }, description)
+    add_activity(&mut tx, workspace_id, board_id, Some(task_id), user_id, event_type, description)
         .await.map_err(|cause| internal_error(cause, "Could not record task activity"))?;
     tx.commit().await.map_err(|cause| internal_error(cause, "Could not save task update"))?;
     state.publish_workspace_event(
