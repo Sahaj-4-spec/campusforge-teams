@@ -63,6 +63,10 @@ export const workspaceApi = {
   get: () => request("/api/workspace")
 };
 
+export const boardApi = {
+  create: (values) => request("/api/boards", { method: "POST", body: values })
+};
+
 export const taskApi = {
   create: (values) => request("/api/tasks", { method: "POST", body: values }),
   update: (taskId, values) => request(`/api/tasks/${encodeURIComponent(taskId)}`, { method: "PATCH", body: values }),
