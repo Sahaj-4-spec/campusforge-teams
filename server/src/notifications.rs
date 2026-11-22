@@ -26,6 +26,8 @@ struct EmailContent {
     title: String,
     body: String,
     email_enabled: bool,
+    job_status: String,
+    job_attempts: i32,
 }
 
 #[derive(Debug, Serialize)]
@@ -45,12 +47,27 @@ async fn claim_email_jobs(state: &AppState) -> Vec<EmailJob> {
         }
     };
 
+    let exhausted = sqlx::query(
+        "UPDATE notification_email_outbox SET status='failed', locked_at=NULL, last_error='Delivery attempt limit exhausted', updated_at=NOW()
+          WHERE status='processing' AND locked_at < NOW() - INTERVAL '5 minutes' AND attempts >= 5"
+    ).execute(&mut *transaction).await;
+    if let Err(error) = exhausted { tracing::error!(%error, "Could not finalize exhausted notification jobs"); return Vec::new(); }
+
+    let stale_ambiguous = sqlx::query(
+        "UPDATE notification_email_outbox SET status='reconciliation', locked_at=NULL,
+                last_error='Provider idempotency window expired; reconcile delivery before retrying', updated_at=NOW()
+          WHERE status='processing' AND locked_at < NOW() - INTERVAL '5 minutes'
+            AND first_provider_attempt_at < NOW() - INTERVAL '24 hours'"
+    ).execute(&mut *transaction).await;
+    if let Err(error) = stale_ambiguous { tracing::error!(%error, "Could not quarantine ambiguous notification jobs"); return Vec::new(); }
+
     let rows = match sqlx::query_as::<_, EmailJob>(
         "WITH next_jobs AS (
             SELECT id
               FROM notification_email_outbox
-             WHERE (status = 'queued' AND available_at <= NOW())
-                OR (status = 'processing' AND locked_at < NOW() - INTERVAL '5 minutes')
+             WHERE (status = 'queued' AND available_at <= NOW() AND attempts < 5)
+                OR (status = 'processing' AND locked_at < NOW() - INTERVAL '5 minutes' AND attempts < 5
+                    AND (first_provider_attempt_at IS NULL OR first_provider_attempt_at >= NOW() - INTERVAL '24 hours'))
              ORDER BY available_at, created_at
              FOR UPDATE SKIP LOCKED
              LIMIT 10
@@ -59,6 +76,7 @@ async fn claim_email_jobs(state: &AppState) -> Vec<EmailJob> {
             SET status = 'processing',
                 attempts = attempts + 1,
                 locked_at = NOW(),
+                first_provider_attempt_at = COALESCE(first_provider_attempt_at, NOW()),
                 updated_at = NOW()
            FROM next_jobs
           WHERE outbox.id = next_jobs.id
@@ -90,9 +108,10 @@ async fn update_email_job(
         if let Err(error) = sqlx::query(
             "UPDATE notification_email_outbox
                 SET status='sent', sent_at=NOW(), locked_at=NULL, last_error=NULL, updated_at=NOW()
-              WHERE id=$1 AND status='processing'",
+              WHERE id=$1 AND status='processing' AND attempts=$2",
         )
         .bind(job.id)
+        .bind(job.attempts)
         .execute(&state.db)
         .await {
             tracing::error!(%error, job_id=%job.id, "Could not mark notification email as sent");
@@ -110,12 +129,13 @@ async fn update_email_job(
                 locked_at=NULL,
                 last_error=$4,
                 updated_at=NOW()
-          WHERE id=$1 AND status='processing'",
+          WHERE id=$1 AND status='processing' AND attempts=$5",
     )
     .bind(job.id)
     .bind(status)
     .bind(retry_seconds as f64)
     .bind(error_message.unwrap_or_else(|| "Email provider request failed".to_string()))
+    .bind(job.attempts)
     .execute(&state.db)
     .await {
         tracing::error!(%error, job_id=%job.id, "Could not update failed notification email");
@@ -126,10 +146,11 @@ async fn suppress_email_job(state: &AppState, job: &EmailJob, reason: &'static s
     if let Err(error) = sqlx::query(
         "UPDATE notification_email_outbox
             SET status='suppressed', locked_at=NULL, last_error=$2, updated_at=NOW()
-          WHERE id=$1 AND status='processing'",
+          WHERE id=$1 AND status='processing' AND attempts=$3",
     )
     .bind(job.id)
     .bind(reason)
+    .bind(job.attempts)
     .execute(&state.db)
     .await {
         tracing::error!(%error, job_id=%job.id, "Could not suppress notification email");
@@ -145,17 +166,23 @@ async fn send_one(
 ) {
     let content = sqlx::query_as::<_, EmailContent>(
         "SELECT u.email AS recipient_email, n.title, n.body,
-                COALESCE(np.email_enabled,FALSE) AS email_enabled
+                COALESCE(np.email_enabled,FALSE) AS email_enabled,
+                outbox.status AS job_status, outbox.attempts AS job_attempts
            FROM notifications n
            JOIN users u ON u.id=n.recipient_user_id
            JOIN workspace_members wm
              ON wm.workspace_id=n.workspace_id AND wm.user_id=n.recipient_user_id
            LEFT JOIN notification_preferences np
              ON np.user_id=n.recipient_user_id AND np.notification_type=n.notification_type
-          WHERE n.id=$1 AND n.recipient_user_id=$2",
+           JOIN notification_email_outbox outbox
+             ON outbox.notification_id=n.id AND outbox.recipient_user_id=n.recipient_user_id
+          WHERE n.id=$1 AND n.recipient_user_id=$2
+            AND outbox.id=$3 AND outbox.status='processing' AND outbox.attempts=$4",
     )
     .bind(job.notification_id)
     .bind(job.recipient_user_id)
+    .bind(job.id)
+    .bind(job.attempts)
     .fetch_optional(&state.db)
     .await;
 
