@@ -93,7 +93,7 @@ struct CalendarTask {
     id: Uuid,
     board_id: Uuid,
     title: String,
-    due_at: chrono::DateTime<Utc>,
+    due_date: String,
     priority: String,
     list_name: String,
 }
@@ -102,6 +102,8 @@ struct CalendarTask {
 struct CalendarRange {
     from: Option<NaiveDate>,
     to: Option<NaiveDate>,
+    start_at: Option<chrono::DateTime<Utc>>,
+    end_at: Option<chrono::DateTime<Utc>>,
 }
 
 async fn calendar_list(
@@ -116,14 +118,21 @@ async fn calendar_list(
     if to < from || (to - from).num_days() > 400 {
         return Err(fail(StatusCode::BAD_REQUEST, "Calendar range must be within 400 days"));
     }
-    let start = from.and_hms_opt(0, 0, 0).unwrap().and_utc();
-    let end = (to + Duration::days(1)).and_hms_opt(0, 0, 0).unwrap().and_utc();
+    let next_day = to.succ_opt()
+        .ok_or_else(|| fail(StatusCode::BAD_REQUEST, "Calendar end date is out of range"))?;
+    let task_start = from.and_hms_opt(0, 0, 0).unwrap().and_utc();
+    let task_end = next_day.and_hms_opt(0, 0, 0).unwrap().and_utc();
+    let start = range.start_at.unwrap_or(task_start);
+    let end = range.end_at.unwrap_or(task_end);
+    if end <= start || end - start > Duration::days(401) {
+        return Err(fail(StatusCode::BAD_REQUEST, "Calendar instant range is invalid or exceeds 401 days"));
+    }
 
     let events = sqlx::query_as::<_, CalendarEvent>(
         "SELECT id, workspace_id, board_id, created_by, title, description, event_type,
                 start_at, end_at, time_zone, all_day, created_at
          FROM calendar_events
-         WHERE workspace_id = $1 AND start_at < $3 AND end_at >= $2
+         WHERE workspace_id = $1 AND start_at < $3 AND end_at > $2
          ORDER BY start_at",
     )
     .bind(workspace_id)
@@ -134,7 +143,7 @@ async fn calendar_list(
     .map_err(|error| internal(error, "Could not load calendar events"))?;
 
     let tasks = sqlx::query_as::<_, CalendarTask>(
-        "SELECT t.id, b.id AS board_id, t.title, t.due_at, t.priority, l.name AS list_name
+        "SELECT t.id, b.id AS board_id, t.title, to_char(t.due_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS due_date, t.priority, l.name AS list_name
          FROM tasks t
          JOIN lists l ON l.id = t.list_id
          JOIN boards b ON b.id = l.board_id
@@ -142,8 +151,8 @@ async fn calendar_list(
          ORDER BY t.due_at",
     )
     .bind(workspace_id)
-    .bind(start)
-    .bind(end)
+    .bind(task_start)
+    .bind(task_end)
     .fetch_all(&state.db)
     .await
     .map_err(|error| internal(error, "Could not load task deadlines"))?;
