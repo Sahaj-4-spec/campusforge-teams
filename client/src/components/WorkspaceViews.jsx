@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Activity, ArrowRight, ArrowUpRight, BarChart3, CalendarDays, CheckCircle2,
   CircleAlert, Clock3, FolderKanban, ListTodo, Plus, Users, Zap
 } from "lucide-react";
+import { analyticsApi } from "../lib/api.js";
 
 const safeArray = (value) => Array.isArray(value) ? value : [];
 const todayKey = () => new Date().toISOString().slice(0, 10);
@@ -260,6 +261,12 @@ export function WorkspaceTimeline({ data }) {
 
 export function WorkspaceReports({ data }) {
   const metrics = getWorkspaceMetrics(data);
+  const [serverAnalytics, setServerAnalytics] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    analyticsApi.get().then((result) => { if (!cancelled) setServerAnalytics(result); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
   const projectRows = metrics.boards.map((board) => {
     const tasks = metrics.tasks.filter((task) => task.board_id === board.id);
     const done = tasks.filter((task) => metrics.doneIds.has(task.id)).length;
@@ -297,6 +304,23 @@ export function WorkspaceReports({ data }) {
         <StatCard icon={Users} label="Team members" value={metrics.users.length} note={totalAssigned + " active assignments"} tone="blue" />
       </section>
 
+      {serverAnalytics && (
+        <section className="ref-panel">
+          <PanelTitle icon={Users} title="Server-verified team productivity" />
+          <div className="feature-analytics-summary">
+            <div><strong>{serverAnalytics.unassigned_tasks}</strong><span>Unassigned tasks</span></div>
+            <div><strong>{serverAnalytics.overdue_tasks}</strong><span>Overdue open tasks</span></div>
+            <div><strong>{serverAnalytics.completion_percent}%</strong><span>Completed across workspace</span></div>
+          </div>
+          {serverAnalytics.members?.length ? <div className="ref-health-table feature-analytics-members">
+            <div className="ref-health-head"><span>Team member</span><span>Open tasks</span><span>Completed</span><span>Activity</span></div>
+            {serverAnalytics.members.map((member) => <div className="ref-health-row" key={member.user_id}>
+              <strong>{member.full_name}</strong><span>{member.open_tasks}</span><span>{member.completed_tasks}</span>
+              <span className="ref-health-task-count">{member.open_tasks + member.completed_tasks} assigned</span>
+            </div>)}
+          </div> : <p className="ref-empty-copy">No assigned team work yet.</p>}
+        </section>
+      )}
       <section className="ref-panel">
         <PanelTitle icon={FolderKanban} title="Project health overview" />
         {projectRows.length ? <div className="ref-health-table">
