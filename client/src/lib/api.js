@@ -1,4 +1,5 @@
 const TOKEN_KEY = "campusforge-auth-token";
+const WORKSPACE_KEY = "campusforge-active-workspace";
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 
 export function getStoredToken() {
@@ -13,12 +14,29 @@ export function clearStoredToken() {
   window.localStorage.removeItem(TOKEN_KEY);
 }
 
+export function getStoredWorkspaceId() {
+  return window.localStorage.getItem(WORKSPACE_KEY);
+}
+
+export function setStoredWorkspaceId(workspaceId) {
+  if (workspaceId) window.localStorage.setItem(WORKSPACE_KEY, workspaceId);
+  else window.localStorage.removeItem(WORKSPACE_KEY);
+}
+
+export function clearStoredWorkspaceId() {
+  window.localStorage.removeItem(WORKSPACE_KEY);
+}
+
 async function request(path, options = {}) {
   const headers = new Headers(options.headers || {});
   headers.set("Accept", "application/json");
   if (options.body !== undefined) headers.set("Content-Type", "application/json");
   const token = getStoredToken();
   if (token) headers.set("Authorization", "Bearer " + token);
+  if (path !== "/api/workspace" && !headers.has("X-Workspace-ID")) {
+    const workspaceId = getStoredWorkspaceId();
+    if (workspaceId) headers.set("X-Workspace-ID", workspaceId);
+  }
 
   let response;
   try {
@@ -50,6 +68,8 @@ async function authorizedFetch(path, options = {}) {
   const token = getStoredToken();
   headers.set("Accept", options.accept || "application/json");
   if (token) headers.set("Authorization", "Bearer " + token);
+  const workspaceId = getStoredWorkspaceId();
+  if (workspaceId) headers.set("X-Workspace-ID", workspaceId);
   try {
     const response = await fetch(API_BASE + path, { ...options, headers });
     if (!response.ok) {
@@ -78,7 +98,9 @@ export const authApi = {
 };
 
 export const workspaceApi = {
-  get: () => request("/api/workspace")
+  get: (workspaceId = getStoredWorkspaceId()) => request("/api/workspace", {
+    headers: workspaceId ? { "X-Workspace-ID": workspaceId } : {}
+  })
 };
 
 export const boardApi = {
@@ -204,7 +226,11 @@ export function createWorkspaceSocket(token) {
   const websocketOrigin = origin.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:");
   const socket = new WebSocket(websocketOrigin + "/ws");
   socket.addEventListener("open", () => {
-    socket.send(JSON.stringify({ type: "authenticate", token }));
+    socket.send(JSON.stringify({
+      type: "authenticate",
+      token,
+      workspace_id: getStoredWorkspaceId()
+    }));
   });
   return socket;
 }
