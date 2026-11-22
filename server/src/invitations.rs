@@ -356,6 +356,33 @@ async fn accept_invitation(
     Ok(Json(AcceptedInvitation { workspace_id }))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invitation_tokens_are_random_hex_and_only_the_hash_is_stored() {
+        let first = make_token();
+        let second = make_token();
+        assert_eq!(first.len(), 64);
+        assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_ne!(first, second);
+        assert_eq!(hash_token(&first).len(), 64);
+        assert_ne!(hash_token(&first), first);
+        assert_eq!(hash_token(&first), hash_token(&first));
+    }
+
+    #[test]
+    fn invitation_email_validation_rejects_malformed_addresses() {
+        assert!(is_valid_email("student@example.edu"));
+        assert!(is_valid_email("student+team@example.co.in"));
+        assert!(!is_valid_email("not-an-email"));
+        assert!(!is_valid_email("student@localhost"));
+        assert!(!is_valid_email("student @example.edu"));
+        assert!(!is_valid_email("@example.edu"));
+    }
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_invitations).post(create_invitation))
