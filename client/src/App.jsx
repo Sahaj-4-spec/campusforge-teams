@@ -636,6 +636,7 @@ export default function App() {
                 if (!stopped && requestGeneration === workspaceGeneration.current && snapshot.current_workspace_id === requestedWorkspaceId) {
                   setStoredWorkspaceId(snapshot.current_workspace_id);
                   setData(snapshot);
+                  setActiveBoardId((current) => snapshot.boards.some((board) => board.id === current) ? current : (snapshot.boards[0]?.id || ""));
                 }
               })
               .catch((error) => {
@@ -757,7 +758,7 @@ export default function App() {
     } catch (error) {
       setNotice(error.message || "Could not switch workspace");
     } finally {
-      setLoading(false);
+      if (requestGeneration === workspaceGeneration.current) setLoading(false);
     }
   }
 
