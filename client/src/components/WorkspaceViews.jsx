@@ -259,7 +259,7 @@ export function WorkspaceTimeline({ data }) {
   );
 }
 
-export function WorkspaceReports({ data }) {
+export function WorkspaceReports({ data, realtimeVersion = 0 }) {
   const metrics = getWorkspaceMetrics(data);
   const [serverAnalytics, setServerAnalytics] = useState(null);
   useEffect(() => {
