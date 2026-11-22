@@ -44,6 +44,11 @@ jobs:
             echo "::error::SQLite or RSA is present in the active backend dependency graph"
             exit 1
           fi
+      - name: Inspect legacy HTTP and TLS dependency paths
+        run: |
+          cargo tree --manifest-path server/Cargo.toml --invert h2@0.3.27 || true
+          cargo tree --manifest-path server/Cargo.toml --invert rustls@0.21.12 || true
+          cargo tree --manifest-path server/Cargo.toml --invert rustls-webpki@0.101.7 || true
       - name: Audit Rust dependencies
         run: cargo audit --file server/Cargo.lock --ignore RUSTSEC-2026-0459 --ignore RUSTSEC-2023-0071
 
