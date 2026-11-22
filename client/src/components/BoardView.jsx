@@ -4,9 +4,9 @@ import {
   DragOverlay,
   PointerSensor,
   closestCorners,
+  useDroppable,
   useSensor,
-  useSensors,
-  useDroppable
+  useSensors
 } from "@dnd-kit/core";
 import {
   SortableContext,
@@ -14,7 +14,7 @@ import {
   verticalListSortingStrategy
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { CalendarDays, GripVertical, Plus, UserRound } from "lucide-react";
+import { CalendarDays, GripVertical, Pencil, Plus, Trash2, UserRound } from "lucide-react";
 
 function formatDueDate(value) {
   if (!value) return "No due date";
@@ -78,7 +78,7 @@ function SortableTask({ task, users, assigneeIds, onOpen }) {
   );
 }
 
-function BoardColumn({ list, tasks, users, assigneesByTask, onOpenTask, onAddTask }) {
+function BoardColumn({ list, tasks, users, assigneesByTask, onOpenTask, onAddTask, onRenameList, onDeleteList }) {
   const { setNodeRef, isOver } = useDroppable({
     id: "list:" + list.id,
     data: { type: "column", listId: list.id }
@@ -92,9 +92,17 @@ function BoardColumn({ list, tasks, users, assigneesByTask, onOpenTask, onAddTas
           <h3>{list.name}</h3>
           <span className="column-count">{tasks.length}</span>
         </div>
-        <button className="column-add" type="button" onClick={() => onAddTask(list.id)} aria-label={"Add a task to " + list.name}>
-          <Plus size={16} />
-        </button>
+        <div className="column-actions">
+          <button className="column-add" type="button" onClick={() => onRenameList(list)} aria-label={"Rename " + list.name} title="Rename column">
+            <Pencil size={14} />
+          </button>
+          <button className="column-add column-delete" type="button" onClick={() => onDeleteList(list)} aria-label={"Delete " + list.name} title="Delete empty column">
+            <Trash2 size={14} />
+          </button>
+          <button className="column-add" type="button" onClick={() => onAddTask(list.id)} aria-label={"Add a task to " + list.name} title="Add task">
+            <Plus size={16} />
+          </button>
+        </div>
       </div>
       <div ref={setNodeRef} className="column-dropzone" data-list-id={list.id}>
         <SortableContext items={tasks.map((task) => task.id)} strategy={verticalListSortingStrategy}>
@@ -128,7 +136,10 @@ export default function BoardView({
   taskAssignees,
   onOpenTask,
   onAddTask,
-  onMoveTask
+  onMoveTask,
+  onCreateList,
+  onRenameList,
+  onDeleteList
 }) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 7 } })
@@ -175,9 +186,14 @@ export default function BoardView({
 
       <div className="board-toolbar">
         <div className="board-toolbar-note"><span className="live-dot" /> Workspace board <span className="toolbar-divider">·</span> Drag cards to update their list</div>
-        <button className="primary-button" type="button" onClick={() => onAddTask(lists[0]?.id)}>
-          <Plus size={17} /> New task
-        </button>
+        <div className="board-toolbar-actions">
+          <button className="secondary-button" type="button" onClick={onCreateList}>
+            <Plus size={16} /> Add column
+          </button>
+          <button className="primary-button" type="button" onClick={() => onAddTask(lists[0]?.id)}>
+            <Plus size={17} /> New task
+          </button>
+        </div>
       </div>
 
       <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={handleDragEnd}>
@@ -195,6 +211,8 @@ export default function BoardView({
                 assigneesByTask={assigneesByTask}
                 onOpenTask={onOpenTask}
                 onAddTask={onAddTask}
+                onRenameList={onRenameList}
+                onDeleteList={onDeleteList}
               />
             );
           })}
