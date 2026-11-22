@@ -1,6 +1,7 @@
 mod api;
 mod auth;
 mod db;
+mod realtime;
 mod state;
 
 use axum::{
@@ -91,6 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/health", get(health))
         .nest("/api/auth", auth::router())
         .nest("/api", api::router())
+        .nest("/ws", realtime::router())
         .with_state(state)
         .layer(cors)
         .layer(TraceLayer::new_for_http());
