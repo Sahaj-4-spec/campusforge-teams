@@ -77,6 +77,25 @@ async fn applies_all_postgres_migrations_and_creates_collaboration_tables() {
     .expect("email outbox status constraint should be readable");
     assert!(suppressed_email_jobs_supported);
 
+    let reconciliation_status_supported: bool = sqlx::query_scalar(
+        "SELECT position('reconciliation' in pg_get_constraintdef(oid)) > 0
+           FROM pg_constraint WHERE conname='email_outbox_status_valid'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("email outbox reconciliation status should be readable");
+    assert!(reconciliation_status_supported);
+
+    let first_attempt_timestamp_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='notification_email_outbox'
+            AND column_name='first_provider_attempt_at' AND is_nullable='YES')",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("first provider attempt timestamp should be readable");
+    assert!(first_attempt_timestamp_exists);
+
     // Deleting a board cascades its workspace_files metadata. The trigger must
     // preserve the object key in a table that is not part of the workspace cascade.
     let user_id = uuid::Uuid::new_v4();
