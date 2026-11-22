@@ -38,10 +38,11 @@ import { DashboardOverview, WorkspaceTimeline, WorkspaceReports } from "./compon
 import { boardApi, clearStoredToken, createWorkspaceSocket, getStoredToken, workspaceApi, taskApi, listApi, invitationApi } from "./lib/api.js";
 
 const navigation = [
-  { id: "Overview", label: "Overview", icon: LayoutDashboard },
+  { id: "Overview", label: "Dashboard", icon: LayoutDashboard },
+  { id: "Projects", label: "Projects", icon: FolderKanban },
   { id: "My Tasks", label: "My tasks", icon: ListTodo },
   { id: "Team", label: "Team", icon: Users },
-  { id: "Activity", label: "Activity", icon: Activity },
+  { id: "Activity", label: "Timeline", icon: Activity },
   { id: "Reports", label: "Reports", icon: BarChart3 }
 ];
 
@@ -953,7 +954,7 @@ export default function App() {
     );
   }
 
-  const pageTitle = activeView === "Board" ? activeBoard?.name || "Project board" : activeView;
+  const pageTitle = activeView === "Board" ? activeBoard?.name || "Project board" : activeView === "Overview" ? "Dashboard" : activeView === "Activity" ? "Timeline" : activeView;
   const searchPlaceholder = activeView === "Board" ? "Search cards..." : "Search tasks...";
   const showSearch = ["Board", "My Tasks"].includes(activeView);
 
