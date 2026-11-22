@@ -2,7 +2,7 @@ use axum::{
     extract::{DefaultBodyLimit, Multipart, Path, Query, State},
     http::{header, HeaderValue, StatusCode},
     response::Response,
-    routing::{delete, get, patch, post, put},
+    routing::{delete, get, patch, post},
     Json, Router,
 };
 use chrono::{Duration, NaiveDate, Utc};
@@ -852,7 +852,7 @@ async fn analytics(
     Ok(Json(json!({
         "total_tasks": total,
         "completed_tasks": completed,
-        "completion_percent": if total > 0 { (completed * 100 / total) } else { 0 },
+        "completion_percent": if total > 0 { completed * 100 / total } else { 0 },
         "overdue_tasks": overdue,
         "unassigned_tasks": unassigned,
         "members": members.into_iter().map(|(id, name, open, done)| json!({
