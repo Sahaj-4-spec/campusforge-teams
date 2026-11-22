@@ -349,7 +349,7 @@ function ProjectsPage({ data, onOpenBoard, onCreateBoard }) {
   );
 }
 
-function AppSidebar({ activeView, onNavigate, onOpenBoard, onCreateBoard, boards, currentUser }) {
+function AppSidebar({ activeView, activeBoardId, onNavigate, onOpenBoard, onCreateBoard, boards, currentUser, workspaceName, activityCount }) {
   return (
     <aside className="sidebar">
       <a className="brand" href="#" onClick={(event) => { event.preventDefault(); onNavigate("Overview"); }} aria-label="CampusForge Teams home">
@@ -357,22 +357,22 @@ function AppSidebar({ activeView, onNavigate, onOpenBoard, onCreateBoard, boards
         <span className="brand-name">CampusForge<small>TEAMS WORKSPACE</small></span>
       </a>
       <div className="workspace-switcher">
-        <span className="workspace-avatar">C</span>
-        <span><strong>CampusForge</strong><small>Shared workspace</small></span>
+        <span className="workspace-avatar">{(workspaceName || "C").slice(0, 1).toUpperCase()}</span>
+        <span><strong>{workspaceName}</strong><small>Shared workspace</small></span>
         <ChevronDown size={15} />
       </div>
       <div className="sidebar-section-label">WORKSPACE</div>
       <nav className="sidebar-nav" aria-label="Main navigation">
         {navigation.map(({ id, label, icon: Icon }) => (
           <button className={"nav-item" + (activeView === id ? " active" : "")} key={id} onClick={() => onNavigate(id)} type="button">
-            <Icon size={18} /><span>{label}</span>{id === "Activity" && <span className="nav-count">{Math.min(9, 3)}</span>}
+            <Icon size={18} /><span>{label}</span>{id === "Activity" && activityCount > 0 && <span className="nav-count">{Math.min(9, activityCount)}</span>}
           </button>
         ))}
       </nav>
       <div className="sidebar-section-row"><span className="sidebar-section-label">YOUR PROJECTS</span><button className="sidebar-plus" type="button" onClick={onCreateBoard} aria-label="Create project">+</button></div>
       <div className="sidebar-projects">
         {boards.map((board, index) => (
-          <button className={"sidebar-project" + (activeView === "Board" && index === 0 ? " selected" : "")} key={board.id} onClick={() => onOpenBoard(board)} type="button">
+          <button className={"sidebar-project" + (activeView === "Board" && activeBoardId === board.id ? " selected" : "")} key={board.id} onClick={() => onOpenBoard(board)} type="button">
             <span className={"project-dot dot-color-" + index % 3} />{board.name}
           </button>
         ))}
@@ -518,6 +518,7 @@ export default function App() {
   }, [notice]);
 
   const currentUser = data?.users.find((user) => user.id === data.current_user_id);
+  const workspaceName = data?.workspaces?.find((workspace) => workspace.id === data.current_workspace_id)?.name || "CampusForge";
   const activeBoard = data?.boards.find((board) => board.id === activeBoardId) || data?.boards[0];
   const activeLists = (data?.lists || [])
     .filter((list) => list.board_id === activeBoard?.id)
@@ -762,6 +763,9 @@ export default function App() {
     <div className="app-shell">
       <AppSidebar
         activeView={activeView}
+        activeBoardId={activeBoardId}
+        workspaceName={workspaceName}
+        activityCount={data.activity_events.length}
         onNavigate={navigate}
         onOpenBoard={openBoard}
         onCreateBoard={openNewBoard}
