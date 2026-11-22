@@ -576,7 +576,7 @@ export default function App() {
         } else {
           if (error.status === 403 && getStoredWorkspaceId()) {
             clearStoredWorkspaceId();
-            workspaceApi.get(null).then((workspace) => {
+            return workspaceApi.get(null).then((workspace) => {
               if (cancelled || requestGeneration !== workspaceGeneration.current) return;
               setStoredWorkspaceId(workspace.current_workspace_id);
               setData(workspace);
@@ -620,6 +620,7 @@ export default function App() {
         try {
           const payload = JSON.parse(message.data);
           if (payload.type === "error" && /session.*(invalid|expired)|sign in again/i.test(payload.error || "")) {
+            clearStoredWorkspaceId();
             setIsAuthenticated(false);
             setData(null);
             return;
