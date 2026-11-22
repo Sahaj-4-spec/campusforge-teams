@@ -418,10 +418,10 @@ function ActivityPage({ data }) {
   );
 }
 
-function ProjectsPage({ data, onOpenBoard, onCreateBoard }) {
+function ProjectsPage({ data, onOpenBoard, onCreateBoard, canManageProjects }) {
   return (
     <div className="page-stack">
-      <div className="page-title-row"><div><p className="eyebrow">WORKSPACE LIBRARY</p><h1>Projects</h1><p className="page-subtitle">Choose a board to see its tasks and keep work moving.</p></div><button className="primary-button" type="button" onClick={onCreateBoard}><Plus size={16} /> New project</button></div>
+      <div className="page-title-row"><div><p className="eyebrow">WORKSPACE LIBRARY</p><h1>Projects</h1><p className="page-subtitle">Choose a board to see its tasks and keep work moving.</p></div>{canManageProjects && <button className="primary-button" type="button" onClick={onCreateBoard}><Plus size={16} /> New project</button>}</div>
       <div className="projects-grid-page">
         {data.boards.map((board) => {
           const count = data.tasks.filter((task) => task.board_id === board.id).length;
@@ -440,7 +440,7 @@ function ProjectsPage({ data, onOpenBoard, onCreateBoard }) {
   );
 }
 
-function AppSidebar({ activeView, activeBoardId, onNavigate, onOpenBoard, onCreateBoard, boards, currentUser, workspaceName, activityCount }) {
+function AppSidebar({ activeView, activeBoardId, onNavigate, onOpenBoard, onCreateBoard, boards, currentUser, workspaceName, activityCount, canManageProjects }) {
   return (
     <aside className="sidebar">
       <a className="brand" href="#" onClick={(event) => { event.preventDefault(); onNavigate("Overview"); }} aria-label="CampusForge Teams home">
@@ -460,7 +460,7 @@ function AppSidebar({ activeView, activeBoardId, onNavigate, onOpenBoard, onCrea
           </button>
         ))}
       </nav>
-      <div className="sidebar-section-row"><span className="sidebar-section-label">YOUR PROJECTS</span><button className="sidebar-plus" type="button" onClick={onCreateBoard} aria-label="Create project">+</button></div>
+      <div className="sidebar-section-row"><span className="sidebar-section-label">YOUR PROJECTS</span>{canManageProjects && <button className="sidebar-plus" type="button" onClick={onCreateBoard} aria-label="Create project">+</button>}</div>
       <div className="sidebar-projects">
         {boards.map((board, index) => (
           <button className={"sidebar-project" + (activeView === "Board" && activeBoardId === board.id ? " selected" : "")} key={board.id} onClick={() => onOpenBoard(board)} type="button">
@@ -640,6 +640,8 @@ export default function App() {
   }, [notice]);
 
   const currentUser = data?.users.find((user) => user.id === data.current_user_id);
+  const currentRole = data?.workspace_members.find((member) => member.user_id === data.current_user_id)?.role;
+  const canManageWorkspace = currentRole === "owner" || currentRole === "admin";
   const workspaceName = data?.workspaces?.find((workspace) => workspace.id === data.current_workspace_id)?.name || "CampusForge";
   const activeBoard = data?.boards.find((board) => board.id === activeBoardId) || data?.boards[0];
   const activeLists = (data?.lists || [])
@@ -871,6 +873,7 @@ export default function App() {
             onCreateList={createList}
             onRenameList={renameList}
             onDeleteList={deleteList}
+            canManageLists={canManageWorkspace}
           />
         ) : <EmptyState title="No project selected" description="Choose a project from the sidebar." />;
       case "My Tasks":
@@ -883,7 +886,7 @@ export default function App() {
       case "Activity":
         return <ActivityPage data={data} />;
       case "Projects":
-        return <ProjectsPage data={data} onOpenBoard={openBoard} onCreateBoard={openNewBoard} />;
+        return <ProjectsPage data={data} onOpenBoard={openBoard} onCreateBoard={openNewBoard} canManageProjects={canManageWorkspace} />;
       case "Settings":
         return (
           <div className="page-stack">
@@ -953,6 +956,7 @@ export default function App() {
         onCreateBoard={openNewBoard}
         boards={data.boards}
         currentUser={currentUser}
+        canManageProjects={canManageWorkspace}
       />
       <div className="main-content">
         <header className="topbar">
