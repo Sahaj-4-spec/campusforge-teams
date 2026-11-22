@@ -36,7 +36,7 @@ Create an application in the Discord Developer Portal and configure the OAuth2 r
 
 ## 5. Account behavior and security
 
-- Existing email/password accounts can use a provider with the same verified email; the OAuth identity is attached to that account.
+- Existing email/password accounts are not automatically linked to a provider, even when the verified email matches. Users must sign in through the existing account method first.
 - New provider-only accounts are created with a NULL password hash; email/password login remains unchanged for password accounts.
 - OAuth state is a high-entropy random value. Only its SHA-256 hash is stored, and it is deleted when used or allowed to expire after ten minutes.
 - Provider access tokens are used only to fetch the user's verified identity and are not saved.
@@ -52,7 +52,7 @@ Create an application in the Discord Developer Portal and configure the OAuth2 r
 
 1. Register and sign in using email/password.
 2. Sign in with each configured provider using a previously unseen email.
-3. Sign in with a second provider whose verified email belongs to an existing CampusForge user; confirm it uses the same CampusForge account.
+3. Attempt sign-in with a second provider whose verified email belongs to an existing CampusForge user; confirm automatic linking is rejected and the user is instructed to sign in through the existing method.
 4. Try a provider account with no verified email; confirm sign-in is rejected.
 5. Replay an OAuth callback state value; confirm it is rejected.
 6. Start OAuth in one browser and attempt to complete the callback in a different browser; confirm the browser-bound HttpOnly cookie check rejects it.
