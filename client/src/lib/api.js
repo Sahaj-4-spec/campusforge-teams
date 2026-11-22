@@ -1,18 +1,5 @@
-const TOKEN_KEY = "campusforge-auth-token";
 const WORKSPACE_KEY = "campusforge-active-workspace";
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
-
-export function getStoredToken() {
-  return window.localStorage.getItem(TOKEN_KEY);
-}
-
-export function storeToken(token) {
-  window.localStorage.setItem(TOKEN_KEY, token);
-}
-
-export function clearStoredToken() {
-  window.localStorage.removeItem(TOKEN_KEY);
-}
 
 export function getStoredWorkspaceId() {
   return window.localStorage.getItem(WORKSPACE_KEY);
@@ -31,8 +18,6 @@ async function request(path, options = {}) {
   const headers = new Headers(options.headers || {});
   headers.set("Accept", "application/json");
   if (options.body !== undefined) headers.set("Content-Type", "application/json");
-  const token = getStoredToken();
-  if (token) headers.set("Authorization", "Bearer " + token);
   if (path !== "/api/workspace" && !headers.has("X-Workspace-ID")) {
     const workspaceId = getStoredWorkspaceId();
     if (workspaceId) headers.set("X-Workspace-ID", workspaceId);
@@ -42,6 +27,7 @@ async function request(path, options = {}) {
   try {
     response = await fetch(API_BASE + path, {
       ...options,
+      credentials: "include",
       headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body)
     });
@@ -65,13 +51,16 @@ async function request(path, options = {}) {
 
 async function authorizedFetch(path, options = {}) {
   const headers = new Headers(options.headers || {});
-  const token = getStoredToken();
   headers.set("Accept", options.accept || "application/json");
-  if (token) headers.set("Authorization", "Bearer " + token);
   const workspaceId = getStoredWorkspaceId();
   if (workspaceId) headers.set("X-Workspace-ID", workspaceId);
   try {
-    const response = await fetch(API_BASE + path, { ...options, headers });
+    const { accept, ...fetchOptions } = options;
+    const response = await fetch(API_BASE + path, {
+      ...fetchOptions,
+      credentials: "include",
+      headers
+    });
     if (!response.ok) {
       let message = "Request failed (" + response.status + ")";
       try {
@@ -94,6 +83,7 @@ async function authorizedFetch(path, options = {}) {
 export const authApi = {
   register: (values) => request("/api/auth/register", { method: "POST", body: values }),
   login: (values) => request("/api/auth/login", { method: "POST", body: values }),
+  logout: () => request("/api/auth/logout", { method: "POST" }),
   oauthStartUrl: (provider) => (API_BASE || window.location.origin) + "/api/auth/" + encodeURIComponent(provider) + "/start"
 };
 
@@ -221,14 +211,13 @@ export const analyticsApi = {
   get: () => request("/api/analytics")
 };
 
-export function createWorkspaceSocket(token) {
+export function createWorkspaceSocket() {
   const origin = API_BASE || window.location.origin;
   const websocketOrigin = origin.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:");
   const socket = new WebSocket(websocketOrigin + "/ws");
   socket.addEventListener("open", () => {
     socket.send(JSON.stringify({
       type: "authenticate",
-      token,
       workspace_id: getStoredWorkspaceId()
     }));
   });
