@@ -514,6 +514,7 @@ export default function App() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notice, setNotice] = useState("");
   const [unreadNotifications, setUnreadNotifications] = useState(0);
+  const [realtimeVersion, setRealtimeVersion] = useState(0);
 
   useEffect(() => {
     if (!token) {
@@ -595,6 +596,10 @@ export default function App() {
             return;
           }
           if (payload.type === "workspace_event" || payload.type === "refresh_required") {
+            setRealtimeVersion((version) => version + 1);
+            notificationApi.list()
+              .then((result) => { if (!stopped) setUnreadNotifications(result.unread_count || 0); })
+              .catch(() => {});
             workspaceApi.get()
               .then((snapshot) => {
                 if (!stopped) setData(snapshot);
@@ -914,13 +919,13 @@ export default function App() {
         return <TeamPage data={data} invitations={invitations} canManageInvites={canManageInvites} onInvite={createInvitation} onRevoke={revokeInvitation} />;
       }
       case "Calendar":
-        return <CalendarPage data={data} onOpenTask={openTask} />;
+        return <CalendarPage data={data} onOpenTask={openTask} realtimeVersion={realtimeVersion} />;
       case "Notifications":
-        return <NotificationsPage onChanged={() => notificationApi.list().then((result) => setUnreadNotifications(result.unread_count || 0)).catch(() => {})} />;
+        return <NotificationsPage realtimeVersion={realtimeVersion} onChanged={() => notificationApi.list().then((result) => setUnreadNotifications(result.unread_count || 0)).catch(() => {})} />;
       case "Files":
-        return <FilesPage data={data} />;
+        return <FilesPage data={data} realtimeVersion={realtimeVersion} />;
       case "Chat":
-        return <ChatAndMeetingsPage data={data} />;
+        return <ChatAndMeetingsPage data={data} realtimeVersion={realtimeVersion} />;
       case "Activity":
         return <WorkspaceTimeline data={data} />;
       case "Reports":
