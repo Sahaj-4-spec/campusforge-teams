@@ -449,6 +449,8 @@ async fn notification_preference_update(
     if input.email_enabled == Some(true) && !crate::notifications::email_delivery_available() {
         return Err(fail(StatusCode::SERVICE_UNAVAILABLE, "Email delivery is not configured on this server"));
     }
+    let mut transaction = state.db.begin().await
+        .map_err(|error| internal(error, "Could not begin notification preference update"))?;
     sqlx::query(
         "INSERT INTO notification_preferences (user_id, notification_type, in_app_enabled, email_enabled)
          VALUES ($1,$2,$3,COALESCE($4,FALSE))
@@ -462,7 +464,7 @@ async fn notification_preference_update(
     .bind(kind)
     .bind(input.in_app_enabled)
     .bind(input.email_enabled)
-    .execute(&state.db)
+    .execute(&mut *transaction)
     .await
     .map_err(|error| internal(error, "Could not update notification preference"))?;
     if input.email_enabled == Some(false) {
@@ -480,10 +482,12 @@ async fn notification_preference_update(
         )
         .bind(user_id)
         .bind(kind)
-        .execute(&state.db)
+        .execute(&mut *transaction)
         .await
         .map_err(|error| internal(error, "Could not suppress queued notification emails"))?;
     }
+    transaction.commit().await
+        .map_err(|error| internal(error, "Could not commit notification preference update"))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
