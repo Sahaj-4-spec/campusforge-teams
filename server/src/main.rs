@@ -1,4 +1,6 @@
 mod api;
+mod advanced_tasks;
+mod collaboration;
 mod auth;
 mod db;
 mod invitations;
@@ -78,6 +80,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("PostgreSQL connected and migrations applied");
 
     let state = AppState::new(pool, jwt_secret);
+    let background_state = state.clone();
+    tokio::spawn(async move {
+        advanced_tasks::run_background_jobs(background_state).await;
+    });
     let cors = CorsLayer::new()
         .allow_origin(frontend_origin.parse::<HeaderValue>()?)
         .allow_methods([
@@ -92,7 +98,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let api_router = Router::new()
         .merge(api::router())
-        .merge(lists::router());
+        .merge(lists::router())
+        .merge(advanced_tasks::router())
+        .merge(collaboration::router());
     let auth_router = auth::router().merge(oauth::router());
 
     let app = Router::new()
