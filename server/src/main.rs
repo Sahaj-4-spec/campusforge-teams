@@ -79,9 +79,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "http://localhost:5173".to_string());
 
     let pool = db::connect_and_migrate(&database_url).await?;
-    tracing::info!("PostgreSQL connected and migrations applied");
+    let database_identity = db::identify(&pool).await?;
+    tracing::info!(
+        database_name = %database_identity.database_name,
+        database_user = %database_identity.database_user,
+        server_address = ?database_identity.server_address,
+        server_port = ?database_identity.server_port,
+        server_version = %database_identity.server_version,
+        "Verified active PostgreSQL connection target; migrations applied"
+    );
 
     let storage = storage::StorageService::from_env().await?;
+    if storage.verify_remote().await? {
+        tracing::info!("S3-compatible object storage PUT/GET/DELETE verification passed");
+    }
     let state = AppState::new(pool, jwt_secret, storage);
     let background_state = state.clone();
     tokio::spawn(async move {
