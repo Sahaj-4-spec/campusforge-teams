@@ -1,168 +1,153 @@
 # CampusForge Teams — Product Roadmap
 
-**Status:** Approved for planning; the five features below are not implemented yet.  
-**Delivery rule:** Build and test locally first. Do not merge to main or deploy without explicit approval.
+**Status:** Six collaboration areas have implementation work on draft PR #12. They are not merged into the main branch or deployed. AI project assistance remains an approved future capability.  
+**Release rule:** Work on feature branches, test locally, review security, and obtain explicit approval before merging or deploying.
 
 ## Product direction
 
-CampusForge Teams is intended to become a shared planning and collaboration workspace for student teams, project groups, hackathons, research teams, and campus organizations. The current authenticated Kanban workspace remains the foundation. The next roadmap expands it into a connected place to plan deadlines, coordinate work, share project material, and receive assistance.
+CampusForge Teams is a shared workspace for student teams. The existing foundation includes authentication, project boards, task assignment, comments, invitations, activity history, and workspace-scoped real-time updates.
 
-## Approved feature priorities
+The collaboration-suite branch adds calendar planning, advanced task controls, notifications, files, team analytics, chat, and meeting notes. The delivery status below reflects what is in the draft branch, not a production release.
 
-The five features below were selected for the next development roadmap.
+## Feature delivery status
 
-| Priority | Feature | Planned scope | Depends on |
-|---|---|---|---|
-| 1 | Advanced tasks and subtasks | Parent/child tasks, checklists, labels, dependencies, estimates, and recurring work | Existing task and assignment model |
-| 2 | Team calendar and deadline planner | Calendar views, task deadlines, project milestones, meetings, and deadline-risk indicators | Existing due dates; calendar events |
-| 3 | Smart notification centre | Persistent in-app alerts, unread counts, read state, preferences, and real-time delivery | Workspace membership and domain events |
-| 4 | Shared files and documents | Workspace document library, task/board attachments, secure upload/download, and metadata | Workspace authorization and storage adapter |
-| 5 | AI project assistant | Project planning, task breakdown, workload/deadline suggestions, and summaries | Permission-aware task, calendar, and file context |
+| Area | Draft-branch implementation | Remaining before production |
+|---|---|---|
+| Team calendar and deadline planner | Month/week/day views, task deadlines, manual meeting/milestone/exam/submission events | Event attendees, edit/reschedule, stronger date-only/time-zone handling and browser tests |
+| Advanced task management | Estimates, subtasks, checklists, labels, same-project dependencies, recurring rules and scheduled occurrence processing | Parent/child cycle constraints, dependency and recurrence concurrency tests, full filtering and subtask ordering |
+| Smart notification centre | Persistent inbox, read state, category preferences, task/comment notifications, due-soon and overdue reminders | Mentions, invitation-specific recipients, pagination, email delivery, retention and multi-session tests |
+| Shared files and documents | Workspace library, project/task attachment, authenticated upload/list/download/delete, 10 MB limit | Durable private object storage, malware scanning, backups, retention, preview, lifecycle cleanup and production hardening |
+| Team productivity analytics | Server-side completion, overdue and unassigned counts, project progress and member workload | Historical trends, date filters, export, metric verification and privacy review |
+| Team chat and meeting notes | Workspace/project message history and saved notes with attendees, agenda, discussion notes and action items | Direct messages, mentions, presence/typing, chat real-time delivery, edit/delete policy and browser acceptance |
+| AI project assistant | Approved future roadmap item; not implemented in this branch | Provider review, server adapter, permission-aware context, suggestions-only workflow, quotas and AI safety tests |
 
-The implementation order intentionally puts the advanced task model first. Calendar reminders, notifications, and AI suggestions depend on reliable task relationships, assignment data, and task events.
+## Phase 0 — Release foundations
 
-## Phase 0 — Foundation and quality gates
+- Keep React + Vite, Rust + Axum, PostgreSQL, SQLx, and native WebSockets.
+- Add migration, API authorization, database relationship, and browser tests.
+- Test two distinct workspace members in separate browser sessions.
+- Make background processing retry-safe and observable.
+- Confirm local development does not require production storage or email credentials.
 
-Before adding substantial UI, preserve the current application baseline and establish reliable tests around it.
-
-- Keep the existing React + Vite client, Rust + Axum API, PostgreSQL database, SQLx data access, and native WebSocket transport.
-- Add migration and API test coverage for the task, workspace, and membership invariants.
-- Add browser end-to-end coverage for sign-in, board navigation, task create/edit/move, invitations, and two-user collaboration.
-- Confirm every new endpoint checks authenticated workspace membership and validates IDs against the same workspace.
-- Keep the database as the source of truth; WebSockets are a delivery mechanism, not a persistence layer.
-
-**Exit criteria:** frontend production build, Rust compilation/tests, database migration tests, authorization tests, and core browser flows pass.
+**Exit criteria:** frontend build, Rust compile/tests, migration tests, API integration tests, authorization checks, accessibility checks, and core browser flows pass.
 
 ## Phase 1 — Advanced tasks and subtasks
 
-### Scope
-- Parent tasks and nested subtasks, with clear completion and progress roll-up.
-- Ordered checklist items inside a task.
-- Workspace-scoped labels and task-label assignment.
-- Task dependencies, such as “blocked by” and “blocks”.
-- Estimated effort in minutes or hours.
-- Recurring task rules with time-zone-aware scheduling.
-- Keep existing assignees, priorities, comments, task ordering, and due dates working.
+### Draft-branch scope
+- Parent tasks and subtasks.
+- Ordered checklist items with per-item completion.
+- Workspace-scoped labels.
+- Same-project task dependencies with cycle checks.
+- Estimated effort in minutes.
+- Recurrence rules processed by a background worker after the current occurrence is completed and the rule is due.
 
-### Key product decisions
-- A subtask belongs to the same board and workspace as its parent.
-- Prevent self-parenting, circular parent chains, and circular task dependencies.
-- A parent task is not automatically marked complete merely because one child is complete. The UI should show derived subtask progress; any bulk-complete behavior must be explicit.
-- Recurring work creates a new task occurrence from a rule; it does not silently reset the history of a completed task.
-- Existing task IDs and current task workflows remain compatible.
-
-### Acceptance criteria
-- Users can create, edit, reorder, and complete subtasks and checklist items.
-- Dependencies are visible and cannot form cycles.
-- Labels can be filtered without exposing labels from another workspace.
-- Recurrence respects the configured time zone and does not create duplicate occurrences after retries.
-- Existing task CRUD, assignees, comments, and drag-and-drop regression tests still pass.
+### Remaining work
+- Add database-level or transaction-protected invariants for parent/child project scope.
+- Add recursive cycle checks for task hierarchy.
+- Make recurrence creation fully idempotent under concurrent workers.
+- Improve status transitions without silently completing a parent when a child completes.
+- Add filtering by labels, dependency state, estimate, and parent/child structure.
 
 ## Phase 2 — Team calendar and deadline planner
 
-### Scope
-- Calendar views for month, week, and agenda.
-- Show task deadlines from the existing task records.
-- Add project milestones and team meetings as separate calendar events.
-- Filter by workspace, project/board, event type, and assignee where applicable.
-- Highlight overdue tasks, deadlines approaching soon, unassigned work, and project milestones at risk.
-- Provide links from a calendar item to its source task, board, or event.
+### Draft-branch scope
+- Month, week, and day views.
+- Task deadlines read from existing task records, not duplicated.
+- Workspace/project events for meetings, milestones, exams, submissions, and focus blocks.
+- Create/delete events and query by date range.
 
-### Key product decisions
-- Do not duplicate a task deadline into a second event row. The task remains the source of truth for its due date.
-- Store timed events as UTC timestamps and retain the event time zone for correct display.
-- Represent all-day events distinctly from timed meetings.
-- Calendar queries must be constrained to the authenticated workspace and requested date range.
-- Deadline-risk indicators are advisory and explain the underlying reason (for example, overdue, unassigned, or dependency blocked).
-
-### Acceptance criteria
-- Calendar and agenda views agree on the same event/deadline data.
-- Changing a task due date updates the calendar without creating duplicate events.
-- All-day events remain on the intended local date across time zones.
-- Users cannot view or change calendar events outside their workspace.
-- The calendar remains usable on mobile screens.
+### Remaining work
+- Event attendees and invitations.
+- Full edit/reschedule controls and reminders.
+- Preserve all-day event dates across time zones.
+- Test daylight-saving and local-time transitions.
+- Add filters by project, type, and member.
 
 ## Phase 3 — Smart notification centre
 
-### Scope
-- Persistent in-app notification inbox with unread count.
-- Notifications for assignment, mention, comment, invitation, dependency change, approaching deadline, overdue task, and meeting/milestone updates.
-- Mark one notification or all notifications as read.
-- Per-user preferences by notification category.
-- Real-time notification delivery to connected users.
-- Optional email delivery can be added after an email provider and delivery policies are approved.
+### Draft-branch scope
+- Persistent in-app inbox, unread count, mark-one/read-all.
+- Per-user in-app category preferences.
+- Task/comment activity notifications.
+- Scheduled reminders for assigned tasks due within 24 hours and tasks newly overdue.
 
-### Key product decisions
-- Store notifications in PostgreSQL before publishing a WebSocket event.
-- WebSocket messages should contain a notification identifier and minimal update signal; the client fetches the authorized notification record.
-- Generate recipients from workspace membership, task assignees, and explicitly mentioned members.
-- Use idempotency/deduplication keys for repeated events and deadline reminder jobs.
-- Do not send email until a delivery provider, opt-in settings, unsubscribe handling, and retry policy are implemented.
-
-### Acceptance criteria
-- Notifications survive refresh, reconnect, and device changes.
-- Read state and preferences are per user.
-- Members only see notifications addressed to them and belonging to workspaces they can access.
-- Repeated event processing does not create duplicate alerts.
-- A disconnected client receives the correct inbox state on its next fetch.
+### Remaining work
+- Mention parsing and targeted recipients.
+- Invitation-specific notifications.
+- Cursor pagination and retention controls.
+- Email delivery is disabled until a provider, opt-in, unsubscribe, retry, and bounce policy are approved.
+- Add idempotency and background-job concurrency tests.
 
 ## Phase 4 — Shared files and documents
 
-### Scope
-- Workspace-level document library.
-- Attach files to a board or task.
-- Search and filter by file name, type, uploader, project, and upload date.
-- Show file details, preview supported formats, and maintain clear download permissions.
-- Add folder organization and file version history in a later increment if the initial library needs them.
+### Draft-branch scope
+- Workspace file listing and authenticated upload/download.
+- Optional project or task attachment.
+- Uploader-only delete.
+- 10 MB limit, opaque server-generated storage key, SHA-256 checksum, safe content-disposition, and nosniff response header.
 
-### Key product decisions
-- Store file metadata and ownership in PostgreSQL; store file bytes in an object-storage adapter, not in PostgreSQL rows.
-- Do not select a storage vendor until cost, region, access control, retention, and backup requirements are compared.
-- Use short-lived signed upload/download URLs or equivalent server-mediated transfers.
-- Validate file size, allowed media types, ownership, workspace scope, and object keys on the server.
-- Never treat a client-supplied storage key or URL as proof of authorization.
+### Local-only storage boundary
+The current branch stores file bytes in a private local server directory, configurable through CAMPUSFORGE_UPLOAD_DIR and defaulting to server/uploads. This is for local development only. It is not durable across host replacement or multiple API instances and is not suitable for production.
 
-### Acceptance criteria
-- A member can upload, list, attach, preview (where supported), download, and delete files within their permitted workspace scope.
-- Files attached to tasks/boards cannot be retrieved by users outside that workspace.
-- Upload failures, abandoned uploads, and deleted metadata do not leave unbounded orphaned objects.
-- File-size limits, MIME checks, and safe content-disposition behavior are tested.
-- Backups and retention rules cover metadata and stored objects.
+### Required production work
+- Choose private object storage after reviewing region, cost, durability, access controls, retention, backup, and deletion requirements.
+- Use short-lived signed transfer URLs or equivalent server-mediated transfers.
+- Add malware scanning, file-type allowlists, quotas, abandoned-upload cleanup, audit history, and backup/restore tests.
+- Never expose raw storage keys or treat client-provided URLs as authorization.
 
-## Phase 5 — AI project assistant
+## Phase 5 — Team chat and meeting notes
 
-### Scope
-- Generate a first-draft project plan from a user's brief.
-- Break a selected task or deliverable into suggested subtasks.
-- Suggest milestone dates and flag workload/dependency risks.
-- Summarize a selected board, task discussion, or explicitly selected documents.
-- Explain recommendations and allow a user to accept, edit, or reject each suggested change.
+### Draft-branch scope
+- Workspace-wide and project-specific message channels.
+- Persisted message history.
+- Meeting notes with title, date/time, project, attendees, agenda, discussion notes, and action items.
 
-### Key product decisions
-- Keep the provider integration behind a server-side AI adapter; no provider API key is exposed to the browser.
-- Do not select an AI vendor/model until cost, privacy, data-region, retention, and quality requirements have been reviewed.
-- The assistant is advisory. It must not create, assign, move, delete, or change project data without an explicit user action.
-- Only send context that the signed-in user is already authorized to access. The user must be able to see which workspace, board, task, or files are included in a request.
-- Treat comments, uploaded files, and other workspace content as untrusted input; never execute instructions embedded in that content.
-- Add usage limits, cost visibility, error handling, audit metadata, and user controls to clear stored assistant history.
-- Do not retain raw prompts, document contents, or model responses by default. Persistent conversation history requires a separate, explicit retention and deletion decision.
+### Remaining work
+- Real-time chat delivery and pagination.
+- Direct messages, mentions, presence/typing, pinned announcements, and message edit/delete policy.
+- Meeting-note permissions and collaborative editing.
+- Link action items to tasks and dates.
+- Add accessibility and two-user live acceptance tests.
 
-### Acceptance criteria
-- Suggestions are returned as structured data that the user can review before applying.
-- Applying a suggestion calls the existing authenticated task/calendar APIs and records normal activity history.
-- Tests prove that the assistant cannot retrieve another workspace's data.
-- Secrets remain server-side and usage/cost limits are enforced.
-- The user can see what context is sent and can clear any intentionally stored assistant history.
+## Phase 6 — Team productivity analytics
+
+### Draft-branch scope
+- Server-calculated total, completed, overdue, and unassigned task counts.
+- Per-project completion statistics.
+- Per-member open and completed assignment counts.
+- Analytics panel displays actual API metrics.
+
+### Remaining work
+- Historical snapshots for trend charts rather than inferring history from current task state.
+- Date-range filters and export.
+- Metric definitions for reopened/cancelled tasks and shared assignments.
+- Review privacy and fairness before individual rankings or contribution scores.
+
+## Phase 7 — AI project assistant
+
+### Approved future scope
+- Draft a project plan from a user brief.
+- Suggest subtasks and milestone dates.
+- Explain workload and dependency risks.
+- Summarize explicitly selected boards, discussions, or documents.
+
+### Decisions
+- Keep provider credentials and the AI adapter server-side.
+- Select a provider only after privacy, retention, region, cost, latency, and quality review.
+- AI output is advisory and cannot mutate project data without explicit user approval.
+- Show which resources are included; verify access server-side.
+- Treat comments and uploaded files as untrusted content.
+- Default to no raw prompt/document/response retention.
 
 ## Cross-feature release requirements
 
-- Authorization is enforced on the server for every record and every file/object operation.
-- Add migration up/down or rollback guidance for every new schema change.
-- Add unit, API integration, migration, and browser tests for each feature.
-- Add accessibility checks for keyboard navigation, screen readers, focus states, and responsive layouts.
-- Add observability for failed jobs, notification retries, file transfers, AI provider errors, and background scheduling.
-- Document data retention, export, deletion, privacy, and backup behavior before public launch.
+- Enforce workspace/resource authorization on every request and file operation.
+- Add migration and rollback guidance for every schema change.
+- Add unit, API integration, migration, browser, accessibility, and multi-user acceptance tests.
+- Add observability for background jobs, notification retries, file transfer failures, and WebSocket disconnects.
+- Define export, deletion, privacy, retention, and backup behavior before public launch.
+- Use shared pub/sub before running more than one API instance.
 
 ## Deployment gate
 
-This roadmap update changes documentation only. No application runtime code, hosting configuration, environment secrets, or deployment services are being changed. Keep the feature branch unmerged and do not deploy the application unless the user explicitly authorizes it after implementation, review, and release testing.
+PR #12 is a draft feature branch. Its work is not in the main branch and has not been deployed. Do not merge or deploy until implementation, tests, security review, object-storage decisions, provider configuration, and production-readiness checks are complete and the user explicitly authorizes release.
