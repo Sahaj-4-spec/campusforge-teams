@@ -44,11 +44,31 @@ jobs:
             echo "::error::SQLite or RSA is present in the active backend dependency graph"
             exit 1
           fi
-      - name: Inspect legacy HTTP and TLS dependency paths
+      - name: Verify legacy vulnerable HTTP and TLS crates are absent
         run: |
-          cargo tree --manifest-path server/Cargo.toml --invert h2@0.3.27 || true
-          cargo tree --manifest-path server/Cargo.toml --invert rustls@0.21.12 || true
-          cargo tree --manifest-path server/Cargo.toml --invert rustls-webpki@0.101.7 || true
+          cargo tree --manifest-path server/Cargo.toml --edges normal,build --prefix none > /tmp/campusforge-active-dependencies.txt
+          if grep -E '^(h2 v0\\.3\\.27|rustls v0\\.21\\.12|rustls-webpki v0\\.101\\.7)
+      - name: Audit Rust dependencies
+        run: cargo audit --file server/Cargo.lock --ignore RUSTSEC-2026-0459 --ignore RUSTSEC-2023-0071
+
+  codeql:
+    name: CodeQL JavaScript analysis
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+      - uses: github/codeql-action/autobuild@v3
+      - uses: github/codeql-action/analyze@v3
+ /tmp/campusforge-active-dependencies.txt; then
+            echo "::error::A vulnerable legacy HTTP/TLS crate remains in the active dependency graph"
+            exit 1
+          fi
       - name: Audit Rust dependencies
         run: cargo audit --file server/Cargo.lock --ignore RUSTSEC-2026-0459 --ignore RUSTSEC-2023-0071
 
