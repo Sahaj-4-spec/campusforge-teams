@@ -129,7 +129,20 @@ export const advancedTaskApi = {
 };
 
 export const calendarApi = {
-  list: (from, to) => request("/api/calendar?from=" + encodeURIComponent(from) + "&to=" + encodeURIComponent(to)),
+  list: (from, to) => {
+    const [fromYear, fromMonth, fromDay] = from.split("-").map(Number);
+    const [toYear, toMonth, toDay] = to.split("-").map(Number);
+    const localStart = new Date(fromYear, fromMonth - 1, fromDay);
+    const localEnd = new Date(toYear, toMonth - 1, toDay);
+    localEnd.setDate(localEnd.getDate() + 1);
+    const params = new URLSearchParams({
+      from,
+      to,
+      start_at: localStart.toISOString(),
+      end_at: localEnd.toISOString()
+    });
+    return request("/api/calendar?" + params.toString());
+  },
   create: (values) => request("/api/calendar", { method: "POST", body: values }),
   update: (eventId, values) => request("/api/calendar/events/" + encodeURIComponent(eventId), { method: "PATCH", body: values }),
   remove: (eventId) => request("/api/calendar/events/" + encodeURIComponent(eventId), { method: "DELETE" })
