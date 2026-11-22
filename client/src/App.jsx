@@ -35,6 +35,7 @@ import {
 import BoardView from "./components/BoardView.jsx";
 import TaskDialog from "./components/TaskDialog.jsx";
 import AuthScreen from "./components/AuthScreen.jsx";
+import HelpPage from "./components/HelpPage.jsx";
 import ProjectDialog from "./components/ProjectDialog.jsx";
 import { DashboardOverview, WorkspaceTimeline, WorkspaceReports } from "./components/WorkspaceViews.jsx";
 import { CalendarPage, NotificationsPage, FilesPage, ChatAndMeetingsPage } from "./components/WorkspaceFeatures.jsx";
@@ -1087,12 +1088,7 @@ export default function App() {
           </div>
         );
       case "Help":
-        return (
-          <div className="page-stack">
-            <div className="page-title-row"><div><p className="eyebrow">WE'RE HERE TO HELP</p><h1>Help & support</h1><p className="page-subtitle">A quick guide to your shared workspace.</p></div></div>
-            <section className="surface-panel help-panel"><h2>Working with your workspace</h2><p>Create tasks, move them between board columns, assign workspace members, add comments, and search your task list. Changes are saved to the CampusForge API and PostgreSQL.</p><p>Your session is protected by a server-set HttpOnly cookie that JavaScript cannot read. Workspace records are returned only to authenticated workspace members.</p></section>
-          </div>
-        );
+        return <HelpPage onNavigate={navigate} />;
       case "Overview":
       default:
         return (
