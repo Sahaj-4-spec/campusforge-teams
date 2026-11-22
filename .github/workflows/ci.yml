@@ -1,0 +1,35 @@
+name: CampusForge CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package.json
+      - name: Install frontend dependencies
+        run: npm --prefix client install
+      - name: Build frontend
+        run: npm --prefix client run build
+
+  backend:
+    name: Rust backend check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check Rust backend
+        run: cargo check --manifest-path server/Cargo.toml
