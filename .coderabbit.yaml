@@ -1,0 +1,29 @@
+# yaml-language-server: $schema=https://www.coderabbit.ai/integrations/schema.v2.json
+language: "en-US"
+tone_instructions: "Be direct and constructive. Prioritize security, correctness, accessibility, and test coverage."
+
+reviews:
+  profile: "assertive"
+  request_changes_workflow: false
+  high_level_summary: true
+  auto_review:
+    enabled: true
+    drafts: true
+    auto_incremental_review: true
+  path_filters:
+    - "!client/node_modules/**"
+    - "!server/target/**"
+    - "!**/*.lock"
+  path_instructions:
+    - path: "server/src/oauth.rs"
+      instructions: |
+        Review OAuth authorization-code handling for state validation and replay prevention, provider token exchange, verified email checks, account linking, error handling, timeout behavior, and accidental logging or exposure of secrets and tokens. Flag any unverified identity or unsafe account linking.
+    - path: "server/src/auth.rs"
+      instructions: |
+        Confirm password-based registration and login still work for accounts with nullable password hashes. Check input validation, password hashing, JWT validation, and error-message consistency.
+    - path: "server/migrations/**"
+      instructions: |
+        Check migration safety, foreign keys, unique constraints, index coverage, and compatibility with existing users and password accounts.
+    - path: "client/src/components/AuthScreen.jsx"
+      instructions: |
+        Review responsive behavior, semantic labels, keyboard navigation, focus visibility, password visibility control, error announcements, and correct OAuth redirect handling.
