@@ -48,7 +48,8 @@ async fn claim_email_jobs(state: &AppState) -> Vec<EmailJob> {
         "WITH next_jobs AS (
             SELECT id
               FROM notification_email_outbox
-             WHERE status = 'queued' AND available_at <= NOW()
+             WHERE (status = 'queued' AND available_at <= NOW())
+                OR (status = 'processing' AND locked_at < NOW() - INTERVAL '5 minutes')
              ORDER BY available_at, created_at
              FOR UPDATE SKIP LOCKED
              LIMIT 10
@@ -131,6 +132,8 @@ async fn send_one(
         "SELECT u.email AS recipient_email, n.title, n.body
            FROM notifications n
            JOIN users u ON u.id=n.recipient_user_id
+           JOIN workspace_members wm
+             ON wm.workspace_id=n.workspace_id AND wm.user_id=n.recipient_user_id
           WHERE n.id=$1 AND n.recipient_user_id=$2",
     )
     .bind(job.notification_id)
