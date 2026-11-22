@@ -444,12 +444,13 @@ async fn add_activity(
 
     let notification_type = match event_type {
         "comment_added" => "comment",
-        "task_created" => "task_assigned",
+        "task_created" | "task_assigned" => "task_assigned",
         _ => "project_update",
     };
     let title = match event_type {
         "comment_added" => "New task comment",
         "task_created" => "New task created",
+        "task_assigned" => "Task assigned to you",
         "task_moved" => "Task moved",
         "task_updated" => "Task updated",
         _ => "Workspace update",
