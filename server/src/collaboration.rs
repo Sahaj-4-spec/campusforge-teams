@@ -345,7 +345,7 @@ struct NotificationPreference {
 async fn notification_preferences(
     State(state): State<AppState>,
     AuthUser(user_id): AuthUser,
-) -> ApiResult<Json<Vec<NotificationPreference>>> {
+) -> ApiResult<Json<Value>> {
     let rows = sqlx::query_as::<_, NotificationPreference>(
         "SELECT notification_type, in_app_enabled, email_enabled
          FROM notification_preferences WHERE user_id=$1 ORDER BY notification_type",
@@ -354,13 +354,17 @@ async fn notification_preferences(
     .fetch_all(&state.db)
     .await
     .map_err(|error| internal(error, "Could not load notification preferences"))?;
-    Ok(Json(rows))
+    Ok(Json(json!({
+        "items": rows,
+        "email_delivery_available": crate::notifications::email_delivery_available()
+    })))
 }
 
 #[derive(Debug, Deserialize)]
 struct PreferenceInput {
     notification_type: String,
     in_app_enabled: bool,
+    email_enabled: Option<bool>,
 }
 
 async fn notification_preference_update(
@@ -372,15 +376,22 @@ async fn notification_preference_update(
     if kind.is_empty() || kind.len() > 60 {
         return Err(fail(StatusCode::BAD_REQUEST, "Notification category is invalid"));
     }
+    if input.email_enabled == Some(true) && !crate::notifications::email_delivery_available() {
+        return Err(fail(StatusCode::SERVICE_UNAVAILABLE, "Email delivery is not configured on this server"));
+    }
     sqlx::query(
-        "INSERT INTO notification_preferences (user_id, notification_type, in_app_enabled)
-         VALUES ($1,$2,$3)
+        "INSERT INTO notification_preferences (user_id, notification_type, in_app_enabled, email_enabled)
+         VALUES ($1,$2,$3,COALESCE($4,FALSE))
          ON CONFLICT (user_id, notification_type)
-         DO UPDATE SET in_app_enabled=EXCLUDED.in_app_enabled, updated_at=NOW()",
+         DO UPDATE SET
+            in_app_enabled=EXCLUDED.in_app_enabled,
+            email_enabled=COALESCE($4,notification_preferences.email_enabled),
+            updated_at=NOW()",
     )
     .bind(user_id)
     .bind(kind)
     .bind(input.in_app_enabled)
+    .bind(input.email_enabled)
     .execute(&state.db)
     .await
     .map_err(|error| internal(error, "Could not update notification preference"))?;
