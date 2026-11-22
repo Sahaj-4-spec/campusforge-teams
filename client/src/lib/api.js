@@ -140,8 +140,12 @@ export const notificationApi = {
   read: (notificationId) => request("/api/notifications/" + encodeURIComponent(notificationId) + "/read", { method: "PATCH" }),
   readAll: () => request("/api/notifications/read-all", { method: "POST", body: {} }),
   preferences: () => request("/api/notification-preferences"),
-  updatePreference: (notificationType, inAppEnabled) => request("/api/notification-preferences", {
-    method: "PUT", body: { notification_type: notificationType, in_app_enabled: inAppEnabled }
+  updatePreference: (notificationType, inAppEnabled, emailEnabled) => request("/api/notification-preferences", {
+    method: "PUT", body: {
+      notification_type: notificationType,
+      in_app_enabled: inAppEnabled,
+      email_enabled: emailEnabled
+    }
   })
 };
 
