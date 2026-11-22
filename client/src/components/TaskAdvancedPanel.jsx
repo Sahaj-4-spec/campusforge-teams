@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, Plus, Repeat2, Tag, Trash2, X } from "lucide-react";
 import { advancedTaskApi } from "../lib/api.js";
 
-export default function TaskAdvancedPanel({ task, lists, tasks, onChanged }) {
+export default function TaskAdvancedPanel({ task, lists, tasks, onChanged, refreshKey = 0 }) {
   const [details, setDetails] = useState({ subtasks: [], checklist: [], labels: [], dependencies: [], recurrence: null });
   const [availableLabels, setAvailableLabels] = useState([]);
   const [subtaskTitle, setSubtaskTitle] = useState("");
@@ -44,7 +44,7 @@ export default function TaskAdvancedPanel({ task, lists, tasks, onChanged }) {
   useEffect(() => {
     load();
     return () => { loadRequestRef.current += 1; };
-  }, [task?.id]);
+  }, [task?.id, refreshKey]);
 
   async function run(action, successMessage) {
     setBusy(true);
