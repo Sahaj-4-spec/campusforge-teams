@@ -2,9 +2,14 @@ use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
-use axum::{http::StatusCode, routing::post, Json, Router};
+use axum::{
+    extract::FromRequestParts,
+    http::{header, request::Parts, StatusCode},
+    routing::post,
+    Json, Router,
+};
 use chrono::{Duration, Utc};
-use jsonwebtoken::{encode, EncodingKey, Header};
+use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use validator::Validate;
@@ -78,6 +83,55 @@ struct Claims {
     iat: usize,
 }
 
+/// User identity extracted from a verified Authorization: Bearer token.
+pub struct AuthUser(pub uuid::Uuid);
+
+impl FromRequestParts<AppState> for AuthUser {
+    type Rejection = (StatusCode, Json<ApiError>);
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let token = parts
+            .headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .ok_or((
+                StatusCode::UNAUTHORIZED,
+                Json(ApiError {
+                    error: "Authentication is required",
+                }),
+            ))?;
+
+        let decoded = decode::<Claims>(
+            token,
+            &DecodingKey::from_secret(state.jwt_secret.as_bytes()),
+            &Validation::default(),
+        )
+        .map_err(|_| {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(ApiError {
+                    error: "Your session is invalid or has expired",
+                }),
+            )
+        })?;
+
+        let user_id = uuid::Uuid::parse_str(&decoded.claims.sub).map_err(|_| {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(ApiError {
+                    error: "Your session is invalid",
+                }),
+            )
+        })?;
+
+        Ok(Self(user_id))
+    }
+}
+
 fn issue_token(user_id: uuid::Uuid, email: &str, secret: &str) -> Result<(String, i64), StatusCode> {
     let now = Utc::now();
     let expires_in = Duration::hours(24).num_seconds();
@@ -133,9 +187,7 @@ async fn register(
         .to_string();
 
     let user = sqlx::query_as::<_, UserWithoutPassword>(
-        "INSERT INTO users (email, password_hash, full_name) \
-         VALUES ($1, $2, $3) \
-         RETURNING id, email, full_name, avatar_url, created_at",
+        "INSERT INTO users (email, password_hash, full_name)          VALUES ($1, $2, $3)          RETURNING id, email, full_name, avatar_url, created_at",
     )
     .bind(&email)
     .bind(password_hash)
@@ -197,8 +249,7 @@ async fn login(
 
     let email = request.email.trim().to_lowercase();
     let user = sqlx::query_as::<_, UserWithPassword>(
-        "SELECT id, email, full_name, avatar_url, password_hash, created_at \
-         FROM users WHERE email = $1",
+        "SELECT id, email, full_name, avatar_url, password_hash, created_at          FROM users WHERE email = $1",
     )
     .bind(email)
     .fetch_optional(&state.db)
