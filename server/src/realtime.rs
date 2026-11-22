@@ -3,7 +3,8 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         State,
     },
-    response::IntoResponse,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     routing::get,
     Router,
 };
@@ -13,21 +14,36 @@ use std::time::Duration;
 use tokio::time::timeout;
 use uuid::Uuid;
 
-use crate::{auth::verify_token, state::AppState};
+use crate::{
+    auth::{frontend_origin_matches, session_token_from_headers, verify_token},
+    state::AppState,
+};
 
 #[derive(Debug, Deserialize)]
 struct AuthenticateMessage {
     #[serde(rename = "type")]
     message_type: String,
-    token: String,
     workspace_id: Uuid,
 }
 
 async fn websocket_handler(
     State(state): State<AppState>,
+    headers: HeaderMap,
     websocket: WebSocketUpgrade,
-) -> impl IntoResponse {
-    websocket.on_upgrade(move |socket| handle_socket(socket, state))
+) -> Response {
+    if !frontend_origin_matches(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(token) = session_token_from_headers(&headers) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let (user_id, expires_at) = match verify_token(&token, &state.jwt_secret) {
+        Ok(identity) => identity,
+        Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
+    };
+    websocket
+        .on_upgrade(move |socket| handle_socket(socket, state, user_id, expires_at))
+        .into_response()
 }
 
 async fn send_error(socket: &mut WebSocket, message: &'static str) {
@@ -36,7 +52,7 @@ async fn send_error(socket: &mut WebSocket, message: &'static str) {
     let _ = socket.send(Message::Close(None)).await;
 }
 
-async fn handle_socket(mut socket: WebSocket, state: AppState) {
+async fn handle_socket(mut socket: WebSocket, state: AppState, user_id: Uuid, expires_at: usize) {
     let first_message = timeout(Duration::from_secs(10), socket.recv()).await;
     let message = match first_message {
         Ok(Some(Ok(Message::Text(text)))) => text,
@@ -50,14 +66,6 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         Ok(value) if value.message_type == "authenticate" => value,
         _ => {
             send_error(&mut socket, "Invalid WebSocket authentication message").await;
-            return;
-        }
-    };
-
-    let (user_id, expires_at) = match verify_token(&authentication.token, &state.jwt_secret) {
-        Ok(id) => id,
-        Err(_) => {
-            send_error(&mut socket, "Your session is invalid or has expired").await;
             return;
         }
     };
