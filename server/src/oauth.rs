@@ -1,6 +1,7 @@
 use axum::{
     extract::{Path, Query, State},
-    response::Redirect,
+    http::header,
+    response::{IntoResponse, Redirect, Response},
     routing::get,
     Router,
 };
@@ -13,7 +14,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    auth::issue_token,
+    auth::{issue_token, session_cookie_header},
     state::AppState,
 };
 
@@ -174,7 +175,7 @@ fn callback_uri(provider: Provider) -> Result<String, &'static str> {
     Ok(url.to_string())
 }
 
-fn frontend_redirect(token: Option<&str>, error: Option<&str>) -> Redirect {
+fn frontend_redirect(error: Option<&str>) -> Redirect {
     let origin = std::env::var("FRONTEND_ORIGIN")
         .unwrap_or_else(|_| "http://localhost:5173".to_owned());
     let mut url = Url::parse(&origin)
@@ -183,11 +184,8 @@ fn frontend_redirect(token: Option<&str>, error: Option<&str>) -> Redirect {
     url.set_query(None);
     url.set_fragment(None);
 
-    if let Some(token) = token {
-        url.set_fragment(Some(&format!("oauth_token={token}")));
-    } else {
-        url.query_pairs_mut()
-            .append_pair("oauth_error", error.unwrap_or("Sign-in could not be completed."));
+    if let Some(error) = error {
+        url.query_pairs_mut().append_pair("oauth_error", error);
     }
 
     Redirect::temporary(url.as_str())
@@ -198,15 +196,15 @@ async fn start(
     State(state): State<AppState>,
 ) -> Redirect {
     let Some(provider) = Provider::parse(&provider_name) else {
-        return frontend_redirect(None, Some("That sign-in provider is not supported."));
+        return frontend_redirect(Some("That sign-in provider is not supported."));
     };
     let config = match provider.config() {
         Ok(config) => config,
-        Err(message) => return frontend_redirect(None, Some(message)),
+        Err(message) => return frontend_redirect(Some(message)),
     };
     let redirect_uri = match callback_uri(provider) {
         Ok(uri) => uri,
-        Err(message) => return frontend_redirect(None, Some(message)),
+        Err(message) => return frontend_redirect(Some(message)),
     };
 
     // Use an opaque high-entropy state value; store only its SHA-256 digest.
@@ -218,7 +216,7 @@ async fn start(
         .await
     {
         tracing::error!(%error, "Could not clean expired OAuth state");
-        return frontend_redirect(None, Some("Sign-in is temporarily unavailable."));
+        return frontend_redirect(Some("Sign-in is temporarily unavailable."));
     }
 
     if let Err(error) = sqlx::query(
@@ -232,12 +230,12 @@ async fn start(
     .await
     {
         tracing::error!(%error, "Could not save OAuth state");
-        return frontend_redirect(None, Some("Sign-in is temporarily unavailable."));
+        return frontend_redirect(Some("Sign-in is temporarily unavailable."));
     }
 
     let mut authorization_url = match Url::parse(config.authorization_endpoint) {
         Ok(url) => url,
-        Err(_) => return frontend_redirect(None, Some("Sign-in is temporarily unavailable.")),
+        Err(_) => return frontend_redirect(Some("Sign-in is temporarily unavailable.")),
     };
 
     authorization_url
@@ -262,10 +260,18 @@ async fn callback(
     Path(provider_name): Path<String>,
     State(state): State<AppState>,
     Query(query): Query<OAuthCallbackQuery>,
-) -> Redirect {
+) -> Response {
     match complete_login(&state, &provider_name, query).await {
-        Ok(token) => frontend_redirect(Some(&token), None),
-        Err(message) => frontend_redirect(None, Some(message)),
+        Ok((token, expires_in)) => {
+            let cookie = match session_cookie_header(&token, expires_in) {
+                Ok(cookie) => cookie,
+                Err(_) => return frontend_redirect(Some("CampusForge could not create your session.")).into_response(),
+            };
+            let mut response = frontend_redirect(None).into_response();
+            response.headers_mut().append(header::SET_COOKIE, cookie);
+            response
+        }
+        Err(message) => frontend_redirect(Some(message)).into_response(),
     }
 }
 
@@ -273,7 +279,7 @@ async fn complete_login(
     state: &AppState,
     provider_name: &str,
     query: OAuthCallbackQuery,
-) -> Result<String, &'static str> {
+) -> Result<(String, i64), &'static str> {
     let provider = Provider::parse(provider_name)
         .ok_or("That sign-in provider is not supported.")?;
     let config = provider.config()?;
@@ -326,10 +332,10 @@ async fn complete_login(
     let profile = fetch_verified_profile(&client, provider, &access_token).await?;
     let user = find_or_create_user(state, provider, profile).await?;
 
-    let (token, _) = issue_token(user.id, &user.email, &state.jwt_secret)
+    let (token, expires_in) = issue_token(user.id, &user.email, &state.jwt_secret)
         .map_err(|_| "CampusForge could not create your session.")?;
 
-    Ok(token)
+    Ok((token, expires_in))
 }
 
 async fn consume_state(
