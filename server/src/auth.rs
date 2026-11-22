@@ -52,7 +52,7 @@ struct AuthResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct ApiError {
+pub struct ApiError {
     error: &'static str,
 }
 
