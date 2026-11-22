@@ -35,20 +35,20 @@ struct LoginRequest {
 }
 
 #[derive(Debug, Serialize)]
-struct UserResponse {
-    id: uuid::Uuid,
-    email: String,
-    full_name: String,
-    avatar_url: Option<String>,
-    created_at: chrono::DateTime<Utc>,
+pub(crate) struct UserResponse {
+    pub(crate) id: uuid::Uuid,
+    pub(crate) email: String,
+    pub(crate) full_name: String,
+    pub(crate) avatar_url: Option<String>,
+    pub(crate) created_at: chrono::DateTime<Utc>,
 }
 
 #[derive(Debug, Serialize)]
-struct AuthResponse {
-    token: String,
-    token_type: &'static str,
-    expires_in: i64,
-    user: UserResponse,
+pub(crate) struct AuthResponse {
+    pub(crate) token: String,
+    pub(crate) token_type: &'static str,
+    pub(crate) expires_in: i64,
+    pub(crate) user: UserResponse,
 }
 
 #[derive(Debug, Serialize)]
@@ -62,7 +62,7 @@ struct UserWithPassword {
     email: String,
     full_name: String,
     avatar_url: Option<String>,
-    password_hash: String,
+    password_hash: Option<String>,
     created_at: chrono::DateTime<Utc>,
 }
 
@@ -131,7 +131,7 @@ pub fn verify_token(token: &str, secret: &str) -> Result<(uuid::Uuid, usize), St
     Ok((user_id, decoded.claims.exp))
 }
 
-fn issue_token(user_id: uuid::Uuid, email: &str, secret: &str) -> Result<(String, i64), StatusCode> {
+pub(crate) fn issue_token(user_id: uuid::Uuid, email: &str, secret: &str) -> Result<(String, i64), StatusCode> {
     let now = Utc::now();
     let expires_in = Duration::hours(24).num_seconds();
     let claims = Claims {
@@ -186,7 +186,9 @@ async fn register(
         .to_string();
 
     let user = sqlx::query_as::<_, UserWithoutPassword>(
-        "INSERT INTO users (email, password_hash, full_name)          VALUES ($1, $2, $3)          RETURNING id, email, full_name, avatar_url, created_at",
+        "INSERT INTO users (email, password_hash, full_name)
+         VALUES ($1, $2, $3)
+         RETURNING id, email, full_name, avatar_url, created_at",
     )
     .bind(&email)
     .bind(password_hash)
@@ -248,7 +250,8 @@ async fn login(
 
     let email = request.email.trim().to_lowercase();
     let user = sqlx::query_as::<_, UserWithPassword>(
-        "SELECT id, email, full_name, avatar_url, password_hash, created_at          FROM users WHERE email = $1",
+        "SELECT id, email, full_name, avatar_url, password_hash, created_at
+         FROM users WHERE email = $1",
     )
     .bind(email)
     .fetch_optional(&state.db)
@@ -272,7 +275,16 @@ async fn login(
         ));
     };
 
-    let parsed_hash = PasswordHash::new(&user.password_hash).map_err(|_| {
+    let Some(password_hash) = user.password_hash.as_deref() else {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ApiError {
+                error: "Invalid email or password",
+            }),
+        ));
+    };
+
+    let parsed_hash = PasswordHash::new(password_hash).map_err(|_| {
         tracing::error!(user_id = %user.id, "Stored password hash is invalid");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -318,7 +330,7 @@ async fn login(
     }))
 }
 
-/// Public authentication endpoints; mount this router under /api/auth.
+/// Public authentication endpoints; OAuth routes are merged by the application router.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/register", post(register))
@@ -372,4 +384,3 @@ mod tests {
         );
     }
 }
-
