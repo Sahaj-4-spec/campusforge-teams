@@ -78,9 +78,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let frontend_origin = std::env::var("FRONTEND_ORIGIN")
         .unwrap_or_else(|_| "http://localhost:5173".to_string());
 
+    let database_host = url::Url::parse(&database_url)
+        .ok()
+        .and_then(|value| value.host_str().map(str::to_owned))
+        .unwrap_or_else(|| "unparsed-database-url".to_string());
     let pool = db::connect_and_migrate(&database_url).await?;
     let database_identity = db::identify(&pool).await?;
     tracing::info!(
+        database_host = %database_host,
         database_name = %database_identity.database_name,
         database_user = %database_identity.database_user,
         server_address = ?database_identity.server_address,
