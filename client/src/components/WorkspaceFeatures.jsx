@@ -30,7 +30,7 @@ function PageHeading({ eyebrow, title, subtitle, action }) {
   );
 }
 
-function CalendarPage({ data, onOpenTask }) {
+export function CalendarPage({ data, onOpenTask }) {
   const [selectedDate, setSelectedDate] = useState(() => new Date());
   const [viewMode, setViewMode] = useState("month");
   const [calendar, setCalendar] = useState({ events: [], tasks: [] });
