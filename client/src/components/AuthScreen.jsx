@@ -151,11 +151,12 @@ export default function AuthScreen({ onAuthenticated }) {
               />
             </span>
           </label>
-          <label className="field-group">
-            <span>Password</span>
+          <div className="field-group">
+            <label htmlFor="auth-password">Password</label>
             <span className="auth-input-wrap">
               <LockKeyhole size={17} aria-hidden="true" />
               <input
+                id="auth-password"
                 type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
@@ -174,7 +175,7 @@ export default function AuthScreen({ onAuthenticated }) {
                 {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
               </button>
             </span>
-          </label>
+          </div>
 
           {error && <p className="auth-error" role="alert">{error}</p>}
 
