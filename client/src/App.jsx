@@ -8,6 +8,9 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  Copy,
+  MailPlus,
+  XCircle,
   CircleHelp,
   Clock3,
   Command,
@@ -30,7 +33,7 @@ import BoardView from "./components/BoardView.jsx";
 import TaskDialog from "./components/TaskDialog.jsx";
 import AuthScreen from "./components/AuthScreen.jsx";
 import ProjectDialog from "./components/ProjectDialog.jsx";
-import { boardApi, clearStoredToken, createWorkspaceSocket, getStoredToken, workspaceApi, taskApi } from "./lib/api.js";
+import { boardApi, clearStoredToken, createWorkspaceSocket, getStoredToken, workspaceApi, taskApi, listApi, invitationApi } from "./lib/api.js";
 
 const navigation = [
   { id: "Overview", label: "Overview", icon: LayoutDashboard },
@@ -287,13 +290,101 @@ function MyTasksPage({ data, onOpenTask, search }) {
   );
 }
 
-function TeamPage({ data }) {
+function TeamPage({ data, invitations, canManageInvites, onInvite, onRevoke }) {
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState("member");
+  const [inviteLink, setInviteLink] = useState("");
+  const [inviteError, setInviteError] = useState("");
+  const [sending, setSending] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  async function submitInvite(event) {
+    event.preventDefault();
+    if (!email.trim()) return;
+    setSending(true);
+    setInviteError("");
+    setInviteLink("");
+    setCopied(false);
+    try {
+      const link = await onInvite({ email: email.trim(), role });
+      setInviteLink(link);
+      setEmail("");
+    } catch (error) {
+      setInviteError(error.message || "Could not create invitation");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function copyInviteLink() {
+    try {
+      await navigator.clipboard.writeText(inviteLink);
+      setCopied(true);
+    } catch {
+      setInviteError("Clipboard access is unavailable. Copy the invitation link from the field below.");
+    }
+  }
+
   return (
     <div className="page-stack">
       <div className="page-title-row">
         <div><p className="eyebrow">YOUR PEOPLE</p><h1>Team members</h1><p className="page-subtitle">The people collaborating across this workspace.</p></div>
         <span className="count-chip">{data.users.length} members</span>
       </div>
+      {canManageInvites && (
+        <section className="surface-panel team-panel">
+          <div className="team-panel-heading">
+            <div><h2>Invite a teammate</h2><p>Send a secure, single-use link that expires in seven days.</p></div>
+            <span className="role-badge"><MailPlus size={14} /> Invite</span>
+          </div>
+          <form className="task-form" onSubmit={submitInvite}>
+            <div className="field-grid">
+              <label className="field-group">
+                <span>Teammate email</span>
+                <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@college.edu" autoComplete="email" required />
+              </label>
+              <label className="field-group">
+                <span>Workspace role</span>
+                <select value={role} onChange={(event) => setRole(event.target.value)}>
+                  <option value="member">Member</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </label>
+            </div>
+            <div className="dialog-actions">
+              <span className="muted-copy">The invite must be accepted by an account using this email.</span>
+              <button className="primary-button" type="submit" disabled={sending || !email.trim()}>{sending ? "Creating…" : "Create invite link"}</button>
+            </div>
+            {inviteError && <p className="auth-error" role="alert">{inviteError}</p>}
+            {inviteLink && (
+              <div className="settings-row">
+                <div className="field-group" style={{ flex: 1, minWidth: 0 }}>
+                  <span>Share this invitation link</span>
+                  <input aria-label="Invitation link" readOnly value={inviteLink} onFocus={(event) => event.target.select()} />
+                </div>
+                <button className="secondary-button" type="button" onClick={copyInviteLink}><Copy size={15} /> {copied ? "Copied" : "Copy link"}</button>
+              </div>
+            )}
+          </form>
+        </section>
+      )}
+      {canManageInvites && (
+        <section className="surface-panel team-panel">
+          <div className="team-panel-heading"><div><h2>Pending invitations</h2><p>Links that have not yet been accepted.</p></div><span className="role-badge">{invitations.length} pending</span></div>
+          {invitations.length ? (
+            <div className="team-list">
+              {invitations.map((invitation) => (
+                <article className="team-member-row" key={invitation.id}>
+                  <span className="avatar avatar-small"><MailPlus size={16} /></span>
+                  <div className="team-member-copy"><strong>{invitation.email}</strong><span>Expires {new Date(invitation.expires_at).toLocaleDateString()}</span></div>
+                  <span className="member-role">{invitation.role}</span>
+                  <button className="secondary-button danger-outline" type="button" onClick={() => onRevoke(invitation.id)} aria-label={"Revoke invitation for " + invitation.email}><XCircle size={15} /> Revoke</button>
+                </article>
+              ))}
+            </div>
+          ) : <p className="muted-copy">No pending invitations.</p>}
+        </section>
+      )}
       <section className="surface-panel team-panel">
         <div className="team-panel-heading"><div><h2>Workspace members</h2><p>Member roles and profile details</p></div><span className="role-badge"><Users size={14} /> {data.users.length} active</span></div>
         <div className="team-list">
@@ -393,6 +484,7 @@ function AppSidebar({ activeView, activeBoardId, onNavigate, onOpenBoard, onCrea
 export default function App() {
   const [token, setToken] = useState(() => getStoredToken() || "");
   const [data, setData] = useState(null);
+  const [invitations, setInvitations] = useState([]);
   const [loading, setLoading] = useState(() => Boolean(getStoredToken()));
   const [loadError, setLoadError] = useState("");
   const [activeView, setActiveView] = useState("Overview");
@@ -415,7 +507,18 @@ export default function App() {
     let cancelled = false;
     setLoading(true);
     setLoadError("");
-    workspaceApi.get()
+    const pendingInvite = new URLSearchParams(window.location.search).get("invite");
+    const workspaceRequest = pendingInvite
+      ? invitationApi.accept(pendingInvite).then(() => {
+          const inviteUrl = new URL(window.location.href);
+          inviteUrl.searchParams.delete("invite");
+          window.history.replaceState({}, "", inviteUrl.toString());
+          setNotice("You joined the invited workspace");
+          return workspaceApi.get();
+        })
+      : workspaceApi.get();
+
+    workspaceRequest
       .then((workspace) => {
         if (cancelled) return;
         setData(workspace);
@@ -512,6 +615,25 @@ export default function App() {
   }, [token]);
 
   useEffect(() => {
+    if (!token || !data) {
+      setInvitations([]);
+      return undefined;
+    }
+    const membership = data.workspace_members.find((member) => member.user_id === data.current_user_id);
+    if (membership?.role !== "owner" && membership?.role !== "admin") {
+      setInvitations([]);
+      return undefined;
+    }
+    let cancelled = false;
+    invitationApi.list()
+      .then((items) => { if (!cancelled) setInvitations(items); })
+      .catch((error) => {
+        if (!cancelled) setNotice(error.message || "Could not load invitations");
+      });
+    return () => { cancelled = true; };
+  }, [token, data]);
+
+  useEffect(() => {
     if (!notice) return undefined;
     const timeout = window.setTimeout(() => setNotice(""), 3200);
     return () => window.clearTimeout(timeout);
@@ -590,6 +712,60 @@ export default function App() {
     } catch (error) {
       setNotice(error.message || "Could not create project");
       throw error;
+    }
+  }
+
+  async function createList() {
+    if (!activeBoard) return;
+    const name = window.prompt("Name this column");
+    if (name === null || !name.trim()) return;
+    try {
+      await listApi.create(activeBoard.id, name.trim());
+      await refreshWorkspace();
+      setNotice("Column created");
+    } catch (error) {
+      setNotice(error.message || "Could not create column");
+    }
+  }
+
+  async function renameList(list) {
+    const name = window.prompt("Rename column", list.name);
+    if (name === null || !name.trim() || name.trim() === list.name) return;
+    try {
+      await listApi.update(list.id, name.trim());
+      await refreshWorkspace();
+      setNotice("Column renamed");
+    } catch (error) {
+      setNotice(error.message || "Could not rename column");
+    }
+  }
+
+  async function deleteList(list) {
+    if (!window.confirm("Delete the empty column \"" + list.name + "\"? Columns must be empty before they can be deleted.")) return;
+    try {
+      await listApi.remove(list.id);
+      await refreshWorkspace();
+      setNotice("Column deleted");
+    } catch (error) {
+      setNotice(error.message || "Could not delete column");
+    }
+  }
+
+  async function createInvitation(values) {
+    const invitation = await invitationApi.create(values);
+    const items = await invitationApi.list();
+    setInvitations(items);
+    setNotice("Invitation link created");
+    return window.location.origin + "/?invite=" + encodeURIComponent(invitation.token);
+  }
+
+  async function revokeInvitation(invitationId) {
+    try {
+      await invitationApi.revoke(invitationId);
+      setInvitations((current) => current.filter((item) => item.id !== invitationId));
+      setNotice("Invitation revoked");
+    } catch (error) {
+      setNotice(error.message || "Could not revoke invitation");
     }
   }
 
@@ -692,12 +868,18 @@ export default function App() {
             onOpenTask={openTask}
             onAddTask={openNewTask}
             onMoveTask={moveTask}
+            onCreateList={createList}
+            onRenameList={renameList}
+            onDeleteList={deleteList}
           />
         ) : <EmptyState title="No project selected" description="Choose a project from the sidebar." />;
       case "My Tasks":
         return <MyTasksPage data={data} onOpenTask={openTask} search={search} />;
-      case "Team":
-        return <TeamPage data={data} />;
+      case "Team": {
+        const memberRole = data.workspace_members.find((member) => member.user_id === data.current_user_id)?.role;
+        const canManageInvites = memberRole === "owner" || memberRole === "admin";
+        return <TeamPage data={data} invitations={invitations} canManageInvites={canManageInvites} onInvite={createInvitation} onRevoke={revokeInvitation} />;
+      }
       case "Activity":
         return <ActivityPage data={data} />;
       case "Projects":
