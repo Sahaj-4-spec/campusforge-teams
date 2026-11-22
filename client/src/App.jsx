@@ -38,7 +38,10 @@ import AuthScreen from "./components/AuthScreen.jsx";
 import ProjectDialog from "./components/ProjectDialog.jsx";
 import { DashboardOverview, WorkspaceTimeline, WorkspaceReports } from "./components/WorkspaceViews.jsx";
 import { CalendarPage, NotificationsPage, FilesPage, ChatAndMeetingsPage } from "./components/WorkspaceFeatures.jsx";
-import { boardApi, clearStoredToken, createWorkspaceSocket, getStoredToken, workspaceApi, taskApi, listApi, invitationApi, notificationApi } from "./lib/api.js";
+import {
+  boardApi, clearStoredToken, clearStoredWorkspaceId, createWorkspaceSocket, getStoredToken,
+  getStoredWorkspaceId, setStoredWorkspaceId, workspaceApi, taskApi, listApi, invitationApi, notificationApi
+} from "./lib/api.js";
 
 const navigation = [
   { id: "Overview", label: "Dashboard", icon: LayoutDashboard },
@@ -457,7 +460,10 @@ function ProjectsPage({ data, onOpenBoard, onCreateBoard, canManageProjects }) {
   );
 }
 
-function AppSidebar({ activeView, activeBoardId, onNavigate, onOpenBoard, onCreateBoard, boards, currentUser, workspaceName, activityCount, canManageProjects }) {
+function AppSidebar({
+  activeView, activeBoardId, onNavigate, onOpenBoard, onCreateBoard, boards, currentUser,
+  workspaces, currentWorkspaceId, onWorkspaceChange, workspaceName, activityCount, canManageProjects
+}) {
   return (
     <aside className="sidebar">
       <a className="brand" href="#" onClick={(event) => { event.preventDefault(); onNavigate("Overview"); }} aria-label="CampusForge Teams home">
@@ -466,8 +472,17 @@ function AppSidebar({ activeView, activeBoardId, onNavigate, onOpenBoard, onCrea
       </a>
       <div className="workspace-switcher">
         <span className="workspace-avatar">{(workspaceName || "C").slice(0, 1).toUpperCase()}</span>
-        <span><strong>{workspaceName}</strong><small>Shared workspace</small></span>
-        <ChevronDown size={15} />
+        <span className="workspace-switcher-copy"><strong>{workspaceName}</strong><small>Switch workspace</small></span>
+        <select
+          aria-label="Switch workspace"
+          value={currentWorkspaceId || ""}
+          onChange={(event) => onWorkspaceChange(event.target.value)}
+          disabled={(workspaces || []).length < 2}
+        >
+          {(workspaces || []).map((workspace) => (
+            <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
+          ))}
+        </select>
       </div>
       <div className="sidebar-section-label">WORKSPACE</div>
       <nav className="sidebar-nav" aria-label="Main navigation">
@@ -533,13 +548,14 @@ export default function App() {
           inviteUrl.searchParams.delete("invite");
           window.history.replaceState({}, "", inviteUrl.toString());
           setNotice("You joined the invited workspace");
-          return workspaceApi.get();
+          return workspaceApi.get(null);
         })
-      : workspaceApi.get();
+      : workspaceApi.get(getStoredWorkspaceId());
 
     workspaceRequest
       .then((workspace) => {
         if (cancelled) return;
+        setStoredWorkspaceId(workspace.current_workspace_id);
         setData(workspace);
         setActiveBoardId((current) =>
           workspace.boards.some((board) => board.id === current)
@@ -600,9 +616,12 @@ export default function App() {
             notificationApi.list()
               .then((result) => { if (!stopped) setUnreadNotifications(result.unread_count || 0); })
               .catch(() => {});
-            workspaceApi.get()
+            workspaceApi.get(getStoredWorkspaceId())
               .then((snapshot) => {
-                if (!stopped) setData(snapshot);
+                if (!stopped) {
+                  setStoredWorkspaceId(snapshot.current_workspace_id);
+                  setData(snapshot);
+                }
               })
               .catch((error) => {
                 if (error.status === 401 && !stopped) {
@@ -695,12 +714,31 @@ export default function App() {
   }, [boardTasks, search]);
 
   async function refreshWorkspace() {
-    const workspace = await workspaceApi.get();
+    const workspace = await workspaceApi.get(getStoredWorkspaceId());
     setData(workspace);
     if (!workspace.boards.some((board) => board.id === activeBoardId)) {
       setActiveBoardId(workspace.boards[0]?.id || "");
     }
     return workspace;
+  }
+
+  async function switchWorkspace(workspaceId) {
+    if (!workspaceId || workspaceId === data?.current_workspace_id) return;
+    setLoading(true);
+    try {
+      const workspace = await workspaceApi.get(workspaceId);
+      setStoredWorkspaceId(workspace.current_workspace_id);
+      setData(workspace);
+      setActiveBoardId(workspace.boards[0]?.id || "");
+      setActiveView("Overview");
+      setMobileMenuOpen(false);
+      setRealtimeVersion((version) => version + 1);
+      setNotice("Workspace switched");
+    } catch (error) {
+      setNotice(error.message || "Could not switch workspace");
+    } finally {
+      setLoading(false);
+    }
   }
 
   function handleAuthenticated(nextToken) {
@@ -712,6 +750,7 @@ export default function App() {
 
   function logout() {
     clearStoredToken();
+    clearStoredWorkspaceId();
     setToken("");
     setData(null);
     setActiveView("Overview");
@@ -997,6 +1036,9 @@ export default function App() {
         activeView={activeView}
         activeBoardId={activeBoardId}
         workspaceName={workspaceName}
+        workspaces={data.workspaces}
+        currentWorkspaceId={data.current_workspace_id}
+        onWorkspaceChange={switchWorkspace}
         activityCount={data.activity_events.length}
         onNavigate={navigate}
         onOpenBoard={openBoard}
