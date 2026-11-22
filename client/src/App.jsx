@@ -467,6 +467,12 @@ export default function App() {
       socket.addEventListener("message", (message) => {
         try {
           const payload = JSON.parse(message.data);
+          if (payload.type === "error" && /session.*(invalid|expired)|sign in again/i.test(payload.error || "")) {
+            clearStoredToken();
+            setToken("");
+            setData(null);
+            return;
+          }
           if (payload.type === "workspace_event" || payload.type === "refresh_required") {
             workspaceApi.get()
               .then((snapshot) => {
