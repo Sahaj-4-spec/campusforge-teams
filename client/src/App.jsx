@@ -19,6 +19,8 @@ import {
   FolderKanban,
   LayoutDashboard,
   ListTodo,
+  FileText,
+  MessageSquare,
   LogOut,
   MoreHorizontal,
   Plus,
@@ -35,15 +37,20 @@ import TaskDialog from "./components/TaskDialog.jsx";
 import AuthScreen from "./components/AuthScreen.jsx";
 import ProjectDialog from "./components/ProjectDialog.jsx";
 import { DashboardOverview, WorkspaceTimeline, WorkspaceReports } from "./components/WorkspaceViews.jsx";
-import { boardApi, clearStoredToken, createWorkspaceSocket, getStoredToken, workspaceApi, taskApi, listApi, invitationApi } from "./lib/api.js";
+import { CalendarPage, NotificationsPage, FilesPage, ChatAndMeetingsPage } from "./components/WorkspaceFeatures.jsx";
+import { boardApi, clearStoredToken, createWorkspaceSocket, getStoredToken, workspaceApi, taskApi, listApi, invitationApi, notificationApi } from "./lib/api.js";
 
 const navigation = [
   { id: "Overview", label: "Dashboard", icon: LayoutDashboard },
   { id: "Projects", label: "Projects", icon: FolderKanban },
   { id: "My Tasks", label: "My tasks", icon: ListTodo },
+  { id: "Calendar", label: "Calendar", icon: CalendarDays },
+  { id: "Notifications", label: "Notifications", icon: Bell },
+  { id: "Files", label: "Files & docs", icon: FileText },
+  { id: "Chat", label: "Chat & notes", icon: MessageSquare },
   { id: "Team", label: "Team", icon: Users },
   { id: "Activity", label: "Timeline", icon: Activity },
-  { id: "Reports", label: "Reports", icon: BarChart3 }
+  { id: "Reports", label: "Analytics", icon: BarChart3 }
 ];
 
 function initials(name) {
@@ -506,6 +513,7 @@ export default function App() {
   const [defaultListId, setDefaultListId] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notice, setNotice] = useState("");
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
 
   useEffect(() => {
     if (!token) {
@@ -642,6 +650,18 @@ export default function App() {
       });
     return () => { cancelled = true; };
   }, [token, data]);
+
+  useEffect(() => {
+    if (!token) {
+      setUnreadNotifications(0);
+      return undefined;
+    }
+    let cancelled = false;
+    notificationApi.list()
+      .then((result) => { if (!cancelled) setUnreadNotifications(result.unread_count || 0); })
+      .catch(() => { if (!cancelled) setUnreadNotifications(0); });
+    return () => { cancelled = true; };
+  }, [token, activeView]);
 
   useEffect(() => {
     if (!notice) return undefined;
@@ -893,6 +913,14 @@ export default function App() {
         const canManageInvites = memberRole === "owner" || memberRole === "admin";
         return <TeamPage data={data} invitations={invitations} canManageInvites={canManageInvites} onInvite={createInvitation} onRevoke={revokeInvitation} />;
       }
+      case "Calendar":
+        return <CalendarPage data={data} onOpenTask={openTask} />;
+      case "Notifications":
+        return <NotificationsPage onChanged={() => notificationApi.list().then((result) => setUnreadNotifications(result.unread_count || 0)).catch(() => {})} />;
+      case "Files":
+        return <FilesPage data={data} />;
+      case "Chat":
+        return <ChatAndMeetingsPage data={data} />;
       case "Activity":
         return <WorkspaceTimeline data={data} />;
       case "Reports":
@@ -989,7 +1017,7 @@ export default function App() {
               </label>
             )}
             <span className="preview-status"><i /> Database-backed</span>
-            <button className="icon-button notification-button" type="button" aria-label="Notifications" onClick={() => navigate("Activity")}><Bell size={18} /><span className="notification-dot" /></button>
+            <button className="icon-button notification-button" type="button" aria-label={"Notifications" + (unreadNotifications ? ", " + unreadNotifications + " unread" : "")} onClick={() => navigate("Notifications")}><Bell size={18} />{unreadNotifications > 0 && <span className="notification-count-badge">{Math.min(unreadNotifications, 99)}</span>}</button>
             <Avatar name={currentUser?.full_name || "You"} />
           </div>
         </header>
@@ -1022,6 +1050,8 @@ export default function App() {
         onSave={saveTask}
         onDelete={deleteTask}
         onAddComment={addComment}
+        allTasks={data.tasks}
+        onAdvancedChanged={refreshWorkspace}
       />
       {notice && <div className="toast-message" role="status"><CheckCircle2 size={16} />{notice}</div>}
     </div>
