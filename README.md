@@ -6,7 +6,7 @@
   <strong>Plan Better. Collaborate Smarter. Build Together.</strong>
 </p>
 
-CampusForge Teams is a project management and collaboration platform being built for college students and development teams. It is designed to help teams create project boards, organize tasks, assign responsibilities, track deadlines, exchange comments, and follow board activity from one workspace.
+CampusForge Teams is a project management and collaboration platform for college students and development teams. Its deployed preview supports project boards, task assignment and tracking, comments, workspace invitations, and activity updates in one shared workspace.
 
 This project is being developed as part of the **ALTA BUILDER 30 Challenge — Track A (Full-Stack Product)**.
 
@@ -22,9 +22,9 @@ CampusForge Teams aims to bring project planning and collaboration into one stru
 
 ## 💡 Proposed Solution
 
-CampusForge Teams is planned as a Trello-inspired Kanban application. Team members will be able to create boards, invite collaborators, organize work into lists, assign tasks, discuss cards, and see board changes in real time.
+CampusForge Teams is a Trello-inspired Kanban application. Team members can create projects, organize tasks into columns, assign work, discuss tasks, invite collaborators, and receive workspace-scoped live updates.
 
-## ✨ Planned Features
+## ✨ Implemented Core Features
 
 ### 1. Authentication and User Profiles
 - User registration and login.
@@ -58,7 +58,7 @@ CampusForge Teams is planned as a Trello-inspired Kanban application. Team membe
 - Persist the new order in PostgreSQL.
 - Broadcast authorized board changes to connected members through native WebSockets.
 
-### 6. Additional Feature: Deadline Risk Radar
+### 6. Roadmap: Deadline Risk Radar (not yet implemented)
 - Identify overdue tasks and upcoming deadlines.
 - Display project completion statistics.
 - Highlight tasks without an assigned member.
@@ -80,7 +80,7 @@ CampusForge Teams is planned as a Trello-inspired Kanban application. Team membe
 
 **Architecture decision:** The backend is Rust + Axum, and the database is PostgreSQL accessed through SQLx. Node.js/Express, MongoDB/Mongoose, and Socket.IO are not part of the selected backend architecture.
 
-## 🏗️ Planned Architecture
+## 🏗️ Architecture
 
 ```text
                  CAMPUSFORGE TEAMS
@@ -112,7 +112,7 @@ CampusForge Teams is planned as a Trello-inspired Kanban application. Team membe
 
 ## 📁 Repository Structure
 
-Current files and the initial backend scaffold:
+Current application structure:
 
 ```text
 campusforge-teams/
@@ -225,7 +225,7 @@ The frontend milestone is connected to the authenticated Rust API.
 - JWT-backed sign-in and registration; the browser stores the session token and sends it with API requests.
 - Authenticated workspace WebSocket connection with reconnect handling and workspace snapshot refreshes after remote changes.
 
-The frontend uses sample records shaped around the planned relational entities: `workspaces`, `workspace_members`, `users`, `boards`, `board_members`, `lists`, `tasks`, `task_assignees`, `comments`, and `activity_events`. This is a UI prototype data layer, not a replacement for PostgreSQL.
+The active React application reads workspace, project, task, assignment, comment, and activity records from the authenticated Rust API backed by PostgreSQL. `client/src/data/demoData.js` remains as an unused legacy sample-data reference and is not the active application data source.
 
 **Connected:** account registration/sign-in, authenticated workspace loading, project creation, task CRUD, assignee persistence, comments, database-backed task reordering, column creation/rename/deletion, invitation creation/acceptance/revocation, workspace owner/admin checks, and workspace-scoped WebSocket event delivery. **Still pending:** automated browser end-to-end tests, live two-browser WebSocket acceptance tests, full workspace switching, and granular per-board permissions.
 
@@ -245,11 +245,11 @@ The Cal.com reference is an independent visual analysis and is not affiliated wi
 
 - Store passwords using Argon2 password hashing.
 - Keep secrets in environment variables.
-- Authenticate API requests and authorize board membership on the server.
+- Authenticate API requests and authorize workspace membership on the server; fine-grained per-board permissions are not implemented yet.
 - Validate all incoming request data.
 - Use parameterized SQL queries through SQLx.
 - Restrict CORS to the configured frontend origin.
-- Authorize WebSocket connections and board-room membership.
+- Authenticate WebSocket connections and scope broadcast events to the signed-in user's current workspace.
 - Never commit `.env`, database credentials, tokens, or private user files.
 
 ## 📖 What I Built and What I Understood
@@ -270,11 +270,19 @@ AI-assisted tools may be used to understand concepts, explore implementation app
 
 ## 🚧 Current Project Status
 
-**Status:** Core frontend/API integration and local/hosted database wiring are implemented. Full production acceptance testing is still required.
+**Status:** A hosted preview is deployed. The frontend production build, Rust compilation, Rust unit tests, CodeQL analysis, and configured dependency audits passed on the last fully completed CI/security run. The latest feature commits are being rebuilt and rechecked.
 
 The React client authenticates against the Rust API and loads workspace records from PostgreSQL. Task creation, editing, deletion, assignments, comments, project creation, column management, invitation workflows, and drag-and-drop ordering call protected Axum endpoints; they no longer rely on browser-local demo records. New accounts receive a starter workspace and project board when the workspace endpoint is first loaded. Authenticated WebSocket sessions receive workspace-scoped events after committed mutations, and the frontend reloads the snapshot when remote changes arrive.
 
-**Not yet complete:** automated browser end-to-end tests, live multi-user WebSocket acceptance testing, full workspace switching, and granular per-board permissions. GitHub Actions checks the frontend build and Rust backend; dependency audits and CodeQL analysis are also configured. The production API has connected to PostgreSQL and applied SQLx migrations. The real-time broadcast channel is process-local, so the current single-instance deployment is intentional; multiple API instances require shared pub/sub before scaling horizontally.
+**Known release limitations:** browser end-to-end tests and a two-account WebSocket acceptance test have not been completed; invitation links are created for manual sharing and are not emailed; the workspace selector is not yet a functional workspace switcher; fine-grained per-board roles are not implemented. WebSocket events use an in-process broadcast channel, so run one API instance until shared pub/sub is added. The current Render database is a temporary free test database and expires on December 22, 2026; migrate to durable database hosting and configure backups before production use.
+
+## 🌐 Hosted Preview
+
+- Frontend: https://campusforge-preview.onrender.com
+- API health endpoint: https://campusforge-api-test.onrender.com/api/health
+- API and frontend are separate Render services. The frontend is built with `VITE_API_BASE_URL`; the API CORS origin is set to the deployed frontend origin.
+
+> This is a test preview hosted on Render's free service/database plans, not a production SLA or durable production database setup. The temporary test database expires on December 22, 2026.
 
 ## 🎓 Challenge Information
 
