@@ -1085,8 +1085,7 @@ async fn cleanup_pending_files(state: &AppState) {
                     "UPDATE workspace_files
                         SET delete_attempts=delete_attempts+1,
                             delete_error=$2,
-                            delete_after=NOW()+make_interval(secs=>$3),
-                            updated_at=NOW()
+                            delete_after=NOW()+make_interval(secs=>$3)
                       WHERE id=$1 AND is_deleting=TRUE",
                 )
                 .bind(row.id)
