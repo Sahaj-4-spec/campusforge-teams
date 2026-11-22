@@ -209,7 +209,7 @@ async fn get_workspace(
         .map_err(|cause| internal_error(cause, "Could not initialize the user's workspace"))?;
 
     let workspace = sqlx::query_as::<_, WorkspaceRow>(
-        "SELECT w.id, w.name, w.description, w.created_at          FROM workspaces w          JOIN workspace_members wm ON wm.workspace_id = w.id          WHERE wm.user_id = $1 ORDER BY wm.joined_at ASC LIMIT 1",
+        "SELECT w.id, w.name, w.description, w.created_at          FROM workspaces w          JOIN workspace_members wm ON wm.workspace_id = w.id          WHERE wm.user_id = $1 ORDER BY wm.joined_at DESC LIMIT 1",
     )
     .bind(user_id)
     .fetch_one(&state.db)
