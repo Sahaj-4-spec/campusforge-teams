@@ -22,11 +22,11 @@ async function request(path, options = {}) {
   }
 
   const token = getStoredToken();
-  if (token) headers.set("Authorization", `Bearer ${token}`);
+  if (token) headers.set("Authorization", "Bearer " + token);
 
   let response;
   try {
-    response = await fetch(`${API_BASE}${path}`, {
+    response = await fetch(API_BASE + path, {
       ...options,
       headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body)
@@ -46,7 +46,7 @@ async function request(path, options = {}) {
   }
 
   if (!response.ok) {
-    const error = new Error(payload?.error || `Request failed (${response.status})`);
+    const error = new Error(payload?.error || "Request failed (" + response.status + ")");
     error.status = response.status;
     throw error;
   }
@@ -56,7 +56,8 @@ async function request(path, options = {}) {
 
 export const authApi = {
   register: (values) => request("/api/auth/register", { method: "POST", body: values }),
-  login: (values) => request("/api/auth/login", { method: "POST", body: values })
+  login: (values) => request("/api/auth/login", { method: "POST", body: values }),
+  oauthStartUrl: (provider) => (API_BASE || window.location.origin) + "/api/auth/oauth/" + encodeURIComponent(provider) + "/start"
 };
 
 export const workspaceApi = {
@@ -68,34 +69,34 @@ export const boardApi = {
 };
 
 export const listApi = {
-  create: (boardId, name) => request(`/api/boards/${encodeURIComponent(boardId)}/lists`, {
+  create: (boardId, name) => request("/api/boards/" + encodeURIComponent(boardId) + "/lists", {
     method: "POST",
     body: { name }
   }),
-  update: (listId, name) => request(`/api/lists/${encodeURIComponent(listId)}`, {
+  update: (listId, name) => request("/api/lists/" + encodeURIComponent(listId), {
     method: "PATCH",
     body: { name }
   }),
-  remove: (listId) => request(`/api/lists/${encodeURIComponent(listId)}`, { method: "DELETE" })
+  remove: (listId) => request("/api/lists/" + encodeURIComponent(listId), { method: "DELETE" })
 };
 
 export const invitationApi = {
   list: () => request("/api/invitations/"),
   create: (values) => request("/api/invitations/", { method: "POST", body: values }),
-  revoke: (invitationId) => request(`/api/invitations/${encodeURIComponent(invitationId)}`, { method: "DELETE" }),
+  revoke: (invitationId) => request("/api/invitations/" + encodeURIComponent(invitationId), { method: "DELETE" }),
   accept: (token) => request("/api/invitations/accept", { method: "POST", body: { token } })
 };
 
 export const taskApi = {
   create: (values) => request("/api/tasks", { method: "POST", body: values }),
-  update: (taskId, values) => request(`/api/tasks/${encodeURIComponent(taskId)}`, { method: "PATCH", body: values }),
-  remove: (taskId) => request(`/api/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" }),
-  addComment: (taskId, body) => request(`/api/tasks/${encodeURIComponent(taskId)}/comments`, {
+  update: (taskId, values) => request("/api/tasks/" + encodeURIComponent(taskId), { method: "PATCH", body: values }),
+  remove: (taskId) => request("/api/tasks/" + encodeURIComponent(taskId), { method: "DELETE" }),
+  addComment: (taskId, body) => request("/api/tasks/" + encodeURIComponent(taskId) + "/comments", {
     method: "POST",
     body: { body }
   }),
   move: (taskId, destinationListId, orderedTaskIds) => request(
-    `/api/tasks/${encodeURIComponent(taskId)}/move`,
+    "/api/tasks/" + encodeURIComponent(taskId) + "/move",
     { method: "PATCH", body: { destination_list_id: destinationListId, ordered_task_ids: orderedTaskIds } }
   )
 };
@@ -105,7 +106,7 @@ export function createWorkspaceSocket(token) {
   const websocketOrigin = origin
     .replace(/^https:/i, "wss:")
     .replace(/^http:/i, "ws:");
-  const socket = new WebSocket(`${websocketOrigin}/ws`);
+  const socket = new WebSocket(websocketOrigin + "/ws");
 
   socket.addEventListener("open", () => {
     socket.send(JSON.stringify({ type: "authenticate", token }));
