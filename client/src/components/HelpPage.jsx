@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import {
   ArrowRight, BarChart3, BookOpen, CalendarDays, CheckCircle2, ChevronDown,
   CircleHelp, FileText, FolderKanban, ListTodo, MessageCircle, Search,
-  Settings, ShieldCheck, Users, Bell, Activity
+  Settings, ShieldCheck, Users, Bell
 } from "lucide-react";
 
 const guideSections = [
