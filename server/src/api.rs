@@ -366,6 +366,7 @@ async fn create_board(
     add_activity(&mut tx, workspace_id, board_id, None, user_id, "board_created", format!("created project {name}"))
         .await.map_err(|cause| internal_error(cause, "Could not record project activity"))?;
     tx.commit().await.map_err(|cause| internal_error(cause, "Could not save project"))?;
+    state.publish_workspace_event(workspace_id, Some(board_id), "board_created", format!("created project {name}"));
     Ok(StatusCode::CREATED)
 }
 
@@ -494,6 +495,7 @@ async fn create_task(
     add_activity(&mut tx, workspace_id, board_id, Some(task_id), user_id, "task_created", format!("created {title}"))
         .await.map_err(|cause| internal_error(cause, "Could not record task activity"))?;
     tx.commit().await.map_err(|cause| internal_error(cause, "Could not save task"))?;
+    state.publish_workspace_event(workspace_id, Some(board_id), "task_created", format!("created {title}"));
     Ok(StatusCode::CREATED)
 }
 
@@ -610,6 +612,12 @@ async fn update_task(
     add_activity(&mut tx, workspace_id, board_id, Some(task_id), user_id, if moved { "task_moved" } else { "task_updated" }, description)
         .await.map_err(|cause| internal_error(cause, "Could not record task activity"))?;
     tx.commit().await.map_err(|cause| internal_error(cause, "Could not save task update"))?;
+    state.publish_workspace_event(
+        workspace_id,
+        Some(board_id),
+        if moved { "task_moved" } else { "task_updated" },
+        if moved { format!("moved {old_title} to another list") } else { format!("updated {title}") },
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -639,6 +647,7 @@ async fn delete_task(
     add_activity(&mut tx, workspace_id, board_id, None, user_id, "task_deleted", format!("deleted {title}"))
         .await.map_err(|cause| internal_error(cause, "Could not record task deletion"))?;
     tx.commit().await.map_err(|cause| internal_error(cause, "Could not save task deletion"))?;
+    state.publish_workspace_event(workspace_id, Some(board_id), "task_deleted", format!("deleted {title}"));
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -681,6 +690,7 @@ async fn add_comment(
     add_activity(&mut tx, workspace_id, board_id, Some(task_id), user_id, "comment_added", "added a comment to a task".to_string())
         .await.map_err(|cause| internal_error(cause, "Could not record comment activity"))?;
     tx.commit().await.map_err(|cause| internal_error(cause, "Could not save comment"))?;
+    state.publish_workspace_event(workspace_id, Some(board_id), "comment_added", "added a comment to a task");
     Ok(StatusCode::CREATED)
 }
 
@@ -788,6 +798,7 @@ async fn move_task(
     add_activity(&mut tx, workspace_id, board_id, Some(task_id), user_id, "task_moved", "moved a task to another list or position".to_string())
         .await.map_err(|cause| internal_error(cause, "Could not record task move"))?;
     tx.commit().await.map_err(|cause| internal_error(cause, "Could not save task order"))?;
+    state.publish_workspace_event(workspace_id, Some(board_id), "task_moved", "moved a task to another list or position");
     Ok(StatusCode::NO_CONTENT)
 }
 
