@@ -30,7 +30,7 @@ function PageHeading({ eyebrow, title, subtitle, action }) {
   );
 }
 
-export function CalendarPage({ data, onOpenTask }) {
+export function CalendarPage({ data, onOpenTask, realtimeVersion = 0 }) {
   const [selectedDate, setSelectedDate] = useState(() => new Date());
   const [viewMode, setViewMode] = useState("month");
   const [calendar, setCalendar] = useState({ events: [], tasks: [] });
@@ -80,7 +80,7 @@ export function CalendarPage({ data, onOpenTask }) {
     }
   }
 
-  useEffect(() => { loadCalendar(); }, [range.from, range.to]);
+  useEffect(() => { loadCalendar(); }, [range.from, range.to, realtimeVersion]);
 
   const itemsByDate = useMemo(() => {
     const map = new Map();
@@ -265,9 +265,10 @@ const notificationCategories = [
   ["overdue_task", "Overdue tasks", "Tasks that have passed their due date"]
 ];
 
-export function NotificationsPage({ onChanged }) {
+export function NotificationsPage({ onChanged, realtimeVersion = 0 }) {
   const [items, setItems] = useState([]);
   const [preferences, setPreferences] = useState([]);
+  const [emailDeliveryAvailable, setEmailDeliveryAvailable] = useState(false);
   const [unread, setUnread] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -279,14 +280,15 @@ export function NotificationsPage({ onChanged }) {
       const [result, settings] = await Promise.all([notificationApi.list(), notificationApi.preferences()]);
       setItems(result.items || []);
       setUnread(result.unread_count || 0);
-      setPreferences(settings || []);
+      setPreferences(settings.items || []);
+      setEmailDeliveryAvailable(settings.email_delivery_available === true);
     } catch (requestError) {
       setError(requestError.message || "Could not load notifications.");
     } finally {
       setLoading(false);
     }
   }
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [realtimeVersion]);
 
   async function markRead(item) {
     try {
@@ -306,13 +308,15 @@ export function NotificationsPage({ onChanged }) {
     } catch (requestError) { setError(requestError.message || "Could not update notifications."); }
   }
 
-  async function togglePreference(type, enabled) {
+  async function togglePreference(type, inAppEnabled, emailEnabled) {
     try {
-      await notificationApi.updatePreference(type, enabled);
+      await notificationApi.updatePreference(type, inAppEnabled, emailEnabled);
       setPreferences((current) => {
         const found = current.some((row) => row.notification_type === type);
-        return found ? current.map((row) => row.notification_type === type ? { ...row, in_app_enabled: enabled } : row)
-          : [...current, { notification_type: type, in_app_enabled: enabled, email_enabled: false }];
+        return found ? current.map((row) => row.notification_type === type
+          ? { ...row, in_app_enabled: inAppEnabled, email_enabled: emailEnabled }
+          : row)
+          : [...current, { notification_type: type, in_app_enabled: inAppEnabled, email_enabled: emailEnabled }];
       });
     } catch (requestError) { setError(requestError.message || "Could not update preferences."); }
   }
@@ -339,18 +343,23 @@ export function NotificationsPage({ onChanged }) {
           <div className="feature-preference-list">
             {notificationCategories.map(([type, title, description]) => {
               const preference = preferences.find((row) => row.notification_type === type);
-              const enabled = preference?.in_app_enabled ?? true;
-              return <label className="feature-preference" key={type}><span><strong>{title}</strong><small>{description}</small></span><input type="checkbox" checked={enabled} onChange={(event) => togglePreference(type, event.target.checked)} /></label>;
+              const inAppEnabled = preference?.in_app_enabled ?? true;
+              const emailEnabled = preference?.email_enabled ?? false;
+              return <div className="feature-preference" key={type}>
+                <span className="feature-preference-copy"><strong>{title}</strong><small>{description}</small></span>
+                <label className="feature-pref-toggle"><span>In-app</span><input type="checkbox" checked={inAppEnabled} onChange={(event) => togglePreference(type, event.target.checked, emailEnabled)} /></label>
+                <label className="feature-pref-toggle"><span>Email</span><input type="checkbox" checked={emailEnabled} disabled={!emailDeliveryAvailable} onChange={(event) => togglePreference(type, inAppEnabled, event.target.checked)} /></label>
+              </div>;
             })}
           </div>
-          <p className="feature-muted">Email notifications are currently disabled and no mail service is connected.</p>
+          <p className="feature-muted">{emailDeliveryAvailable ? "Email delivery is configured. Enable email per notification category to receive messages." : "Email delivery is not configured on the server. Add RESEND_API_KEY and EMAIL_FROM to enable the email preferences."}</p>
         </section>
       </div>
     </div>
   );
 }
 
-export function FilesPage({ data }) {
+export function FilesPage({ data, realtimeVersion = 0 }) {
   const [files, setFiles] = useState([]);
   const [boardId, setBoardId] = useState("");
   const [taskId, setTaskId] = useState("");
@@ -365,7 +374,7 @@ export function FilesPage({ data }) {
     catch (requestError) { setError(requestError.message || "Could not load files."); }
     finally { setLoading(false); }
   }
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [realtimeVersion]);
 
   async function upload(event) {
     event.preventDefault();
@@ -420,7 +429,7 @@ export function FilesPage({ data }) {
   );
 }
 
-export function ChatAndMeetingsPage({ data }) {
+export function ChatAndMeetingsPage({ data, realtimeVersion = 0 }) {
   const [tab, setTab] = useState("chat");
   const [boardId, setBoardId] = useState("");
   const [messages, setMessages] = useState([]);
@@ -446,7 +455,7 @@ export function ChatAndMeetingsPage({ data }) {
     catch (requestError) { setError(requestError.message || "Could not load meeting notes."); }
     finally { setLoading(false); }
   }
-  useEffect(() => { if (tab === "chat") loadChat(); else loadNotes(); }, [tab, boardId]);
+  useEffect(() => { if (tab === "chat") loadChat(); else loadNotes(); }, [tab, boardId, realtimeVersion]);
 
   async function sendMessage(event) {
     event.preventDefault();
