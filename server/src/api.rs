@@ -456,14 +456,29 @@ async fn add_activity(
     };
     let resource_type = if task_id.is_some() { "task" } else { "project" };
     sqlx::query(
-        "INSERT INTO notifications
-            (workspace_id, recipient_user_id, actor_user_id, notification_type, title, body, resource_type, resource_id)
-         SELECT wm.workspace_id, wm.user_id, $2, $3, $4, $5, $6, $7
-         FROM workspace_members wm
-         LEFT JOIN notification_preferences np
-           ON np.user_id = wm.user_id AND np.notification_type = $3
-         WHERE wm.workspace_id = $1 AND wm.user_id <> $2
-           AND COALESCE(np.in_app_enabled, TRUE)",
+        "WITH recipient_preferences AS (
+            SELECT wm.workspace_id, wm.user_id,
+                   COALESCE(np.in_app_enabled, TRUE) AS in_app_enabled,
+                   COALESCE(np.email_enabled, FALSE) AS email_enabled
+              FROM workspace_members wm
+              LEFT JOIN notification_preferences np
+                ON np.user_id = wm.user_id AND np.notification_type = $3
+             WHERE wm.workspace_id = $1 AND wm.user_id <> $2
+               AND (COALESCE(np.in_app_enabled, TRUE) OR COALESCE(np.email_enabled, FALSE))
+         ),
+         inserted_notifications AS (
+            INSERT INTO notifications
+                (workspace_id, recipient_user_id, actor_user_id, notification_type, title, body, resource_type, resource_id)
+            SELECT rp.workspace_id, rp.user_id, $2, $3, $4, $5, $6, $7
+              FROM recipient_preferences rp
+            RETURNING id, recipient_user_id
+         )
+         INSERT INTO notification_email_outbox (notification_id, recipient_user_id)
+         SELECT n.id, n.recipient_user_id
+           FROM inserted_notifications n
+           JOIN recipient_preferences rp ON rp.user_id = n.recipient_user_id
+          WHERE rp.email_enabled
+         ON CONFLICT (notification_id) DO NOTHING",
     )
     .bind(workspace_id)
     .bind(actor_id)
