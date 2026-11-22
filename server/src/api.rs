@@ -325,7 +325,7 @@ async fn create_board(
 
     let mut tx = state.db.begin().await.map_err(|cause| internal_error(cause, "Could not begin project creation"))?;
     let membership: Option<(Uuid, String)> = sqlx::query_as(
-        "SELECT workspace_id, role FROM workspace_members WHERE user_id = $1 ORDER BY joined_at ASC LIMIT 1",
+        "SELECT workspace_id, role FROM workspace_members WHERE user_id = $1 ORDER BY joined_at DESC LIMIT 1",
     )
     .bind(user_id)
     .fetch_optional(&mut *tx)
