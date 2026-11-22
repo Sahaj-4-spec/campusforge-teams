@@ -484,11 +484,7 @@ async fn update_task(
         .fetch_one(&mut *tx)
         .await
         .map_err(|cause| internal_error(cause, "Could not find task position"))?;
-        sqlx::query("UPDATE tasks SET position = position + 1000000 WHERE list_id = $1")
-            .bind(input.list_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(|cause| internal_error(cause, "Could not reserve destination positions"))?;
+
         sqlx::query("UPDATE tasks SET list_id = $1, position = $2 WHERE id = $3")
             .bind(input.list_id)
             .bind(position)
@@ -496,6 +492,7 @@ async fn update_task(
             .execute(&mut *tx)
             .await
             .map_err(|cause| internal_error(cause, "Could not move task"))?;
+
         let source_ids: Vec<Uuid> = sqlx::query_scalar(
             "SELECT id FROM tasks WHERE list_id = $1 ORDER BY position",
         )
@@ -511,12 +508,6 @@ async fn update_task(
                 .await
                 .map_err(|cause| internal_error(cause, "Could not normalize source positions"))?;
         }
-    } else {
-        sqlx::query("UPDATE tasks SET position = position + 1000000 WHERE list_id = $1")
-            .bind(input.list_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(|cause| internal_error(cause, "Could not reserve task positions"))?;
     }
 
     sqlx::query(
