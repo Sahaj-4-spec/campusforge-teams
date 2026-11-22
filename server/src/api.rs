@@ -10,7 +10,7 @@ use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use std::collections::HashSet;
 use uuid::Uuid;
 
-use crate::{auth::AuthUser, state::AppState};
+use crate::{auth::{AuthUser, WorkspaceUser}, state::AppState};
 
 #[derive(Debug, Serialize)]
 struct ErrorBody {
@@ -341,7 +341,7 @@ struct BoardInput {
 
 async fn create_board(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Json(input): Json<BoardInput>,
 ) -> ApiResult<StatusCode> {
     let name = input.name.trim();
@@ -353,15 +353,16 @@ async fn create_board(
     }
 
     let mut tx = state.db.begin().await.map_err(|cause| internal_error(cause, "Could not begin project creation"))?;
-    let membership: Option<(Uuid, String)> = sqlx::query_as(
-        "SELECT workspace_id, role FROM workspace_members WHERE user_id = $1 ORDER BY joined_at DESC LIMIT 1",
+    let workspace_role: Option<String> = sqlx::query_scalar(
+        "SELECT role FROM workspace_members WHERE user_id=$1 AND workspace_id=$2",
     )
     .bind(user_id)
+    .bind(workspace_id)
     .fetch_optional(&mut *tx)
     .await
-    .map_err(|cause| internal_error(cause, "Could not find the user's workspace"))?;
-    let Some((workspace_id, workspace_role)) = membership else {
-        return Err(error(StatusCode::NOT_FOUND, "Workspace not found"));
+    .map_err(|cause| internal_error(cause, "Could not verify workspace project permissions"))?;
+    let Some(workspace_role) = workspace_role else {
+        return Err(error(StatusCode::FORBIDDEN, "You are not a member of the selected workspace"));
     };
     if workspace_role != "owner" && workspace_role != "admin" {
         return Err(error(StatusCode::FORBIDDEN, "Only workspace owners and admins can create projects"));
