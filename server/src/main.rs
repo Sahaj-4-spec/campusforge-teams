@@ -8,6 +8,7 @@ mod lists;
 mod oauth;
 mod realtime;
 mod state;
+mod storage;
 
 use axum::{
     extract::State,
@@ -79,7 +80,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = db::connect_and_migrate(&database_url).await?;
     tracing::info!("PostgreSQL connected and migrations applied");
 
-    let state = AppState::new(pool, jwt_secret);
+    let storage = storage::StorageService::from_env().await?;
+    let state = AppState::new(pool, jwt_secret, storage);
     let background_state = state.clone();
     tokio::spawn(async move {
         advanced_tasks::run_background_jobs(background_state).await;
