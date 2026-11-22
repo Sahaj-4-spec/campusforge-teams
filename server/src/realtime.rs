@@ -9,7 +9,6 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
-use sqlx::PgPool;
 use std::time::Duration;
 use tokio::time::timeout;
 use uuid::Uuid;
@@ -21,6 +20,7 @@ struct AuthenticateMessage {
     #[serde(rename = "type")]
     message_type: String,
     token: String,
+    workspace_id: Uuid,
 }
 
 async fn websocket_handler(
@@ -34,15 +34,6 @@ async fn send_error(socket: &mut WebSocket, message: &'static str) {
     let payload = json!({ "type": "error", "error": message }).to_string();
     let _ = socket.send(Message::Text(payload.into())).await;
     let _ = socket.send(Message::Close(None)).await;
-}
-
-async fn user_workspace(pool: &PgPool, user_id: Uuid) -> Result<Option<Uuid>, sqlx::Error> {
-    sqlx::query_scalar(
-        "SELECT workspace_id FROM workspace_members          WHERE user_id = $1 ORDER BY joined_at DESC LIMIT 1",
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await
 }
 
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
@@ -71,18 +62,25 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         }
     };
 
-    let workspace_id = match user_workspace(&state.db, user_id).await {
-        Ok(Some(id)) => id,
-        Ok(None) => {
-            send_error(&mut socket, "No workspace is available for this account").await;
-            return;
-        }
+    let is_member = match sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM workspace_members WHERE user_id=$1 AND workspace_id=$2)",
+    )
+    .bind(user_id)
+    .bind(authentication.workspace_id)
+    .fetch_one(&state.db)
+    .await {
+        Ok(value) => value,
         Err(error) => {
-            tracing::error!(%error, "Could not resolve WebSocket workspace");
+            tracing::error!(%error, "Could not verify WebSocket workspace membership");
             send_error(&mut socket, "Unable to join the workspace right now").await;
             return;
         }
     };
+    if !is_member {
+        send_error(&mut socket, "You are not a member of the selected workspace").await;
+        return;
+    }
+    let workspace_id = authentication.workspace_id;
 
     let mut events = state.workspace_events.subscribe();
     let now = chrono::Utc::now().timestamp().max(0) as usize;
