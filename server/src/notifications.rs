@@ -164,6 +164,19 @@ async fn send_one(
     sender: &str,
     job: &EmailJob,
 ) {
+    // Hold the outbox row lock through the provider request. Preference changes
+    // suppress this row in the same transaction, so they cannot race between the
+    // final eligibility check and dispatch. A request already in flight is allowed
+    // to finish before the preference change can commit.
+    let mut transaction = match state.db.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => {
+            tracing::error!(%error, notification_id=%job.notification_id, "Could not begin email dispatch");
+            update_email_job(state, job, false, Some("Could not begin email dispatch".to_string())).await;
+            return;
+        }
+    };
+
     let content = sqlx::query_as::<_, EmailContent>(
         "SELECT u.email AS recipient_email, n.title, n.body,
                 COALESCE(np.email_enabled,FALSE) AS email_enabled
@@ -176,22 +189,38 @@ async fn send_one(
            JOIN notification_email_outbox outbox
              ON outbox.notification_id=n.id AND outbox.recipient_user_id=n.recipient_user_id
           WHERE n.id=$1 AND n.recipient_user_id=$2
-            AND outbox.id=$3 AND outbox.status='processing' AND outbox.attempts=$4",
+            AND outbox.id=$3 AND outbox.status='processing' AND outbox.attempts=$4
+          FOR UPDATE OF outbox",
     )
     .bind(job.notification_id)
     .bind(job.recipient_user_id)
     .bind(job.id)
     .bind(job.attempts)
-    .fetch_optional(&state.db)
+    .fetch_optional(&mut *transaction)
     .await;
 
     let content = match content {
         Ok(Some(content)) => content,
         Ok(None) => {
-            suppress_email_job(state, job, "Notification or current workspace membership no longer exists").await;
+            if let Err(error) = sqlx::query(
+                "UPDATE notification_email_outbox
+                    SET status='suppressed', locked_at=NULL,
+                        last_error='Notification or current workspace membership no longer exists', updated_at=NOW()
+                  WHERE id=$1 AND status='processing' AND attempts=$2",
+            )
+            .bind(job.id)
+            .bind(job.attempts)
+            .execute(&mut *transaction)
+            .await {
+                tracing::error!(%error, job_id=%job.id, "Could not suppress ineligible email job");
+            }
+            if let Err(error) = transaction.commit().await {
+                tracing::error!(%error, job_id=%job.id, "Could not commit email suppression");
+            }
             return;
         }
         Err(error) => {
+            drop(transaction);
             tracing::error!(%error, notification_id=%job.notification_id, "Could not load email notification");
             update_email_job(state, job, false, Some("Could not load notification".to_string())).await;
             return;
@@ -199,12 +228,26 @@ async fn send_one(
     };
 
     if !content.email_enabled {
-        suppress_email_job(state, job, "Recipient disabled email notifications").await;
+        if let Err(error) = sqlx::query(
+            "UPDATE notification_email_outbox
+                SET status='suppressed', locked_at=NULL,
+                    last_error='Recipient disabled email notifications', updated_at=NOW()
+              WHERE id=$1 AND status='processing' AND attempts=$2",
+        )
+        .bind(job.id)
+        .bind(job.attempts)
+        .execute(&mut *transaction)
+        .await {
+            tracing::error!(%error, job_id=%job.id, "Could not suppress disabled email job");
+        }
+        if let Err(error) = transaction.commit().await {
+            tracing::error!(%error, job_id=%job.id, "Could not commit disabled email suppression");
+        }
         return;
     }
 
     let body = format!(
-        "{}\n\n{}\n\nOpen CampusForge Teams to review this update.",
+        "{}\\n\\n{}\\n\\nOpen CampusForge Teams to review this update.",
         content.title, content.body
     );
     let request = ResendEmail {
@@ -221,19 +264,66 @@ async fn send_one(
         .send()
         .await;
 
-    match response {
+    let update = match response {
         Ok(response) if response.status().is_success() => {
-            update_email_job(state, job, true, None).await;
+            sqlx::query(
+                "UPDATE notification_email_outbox
+                    SET status='sent', sent_at=NOW(), locked_at=NULL, last_error=NULL, updated_at=NOW()
+                  WHERE id=$1 AND status='processing' AND attempts=$2",
+            )
+            .bind(job.id)
+            .bind(job.attempts)
+            .execute(&mut *transaction)
+            .await
         }
         Ok(response) => {
             let status = response.status();
             tracing::warn!(%status, notification_id=%job.notification_id, attempt=job.attempts, "Email provider rejected notification");
-            update_email_job(state, job, false, Some(format!("Email provider returned HTTP {status}"))).await;
+            let terminal = job.attempts >= 5;
+            let next_status = if terminal { "failed" } else { "queued" };
+            let retry_seconds = (60_i64 * 2_i64.pow((job.attempts.saturating_sub(1)).clamp(0, 6) as u32)).min(3600);
+            sqlx::query(
+                "UPDATE notification_email_outbox
+                    SET status=$2,
+                        available_at=CASE WHEN $2='queued' THEN statement_timestamp()+make_interval(secs=>$3) ELSE available_at END,
+                        locked_at=NULL, last_error=$4, updated_at=NOW()
+                  WHERE id=$1 AND status='processing' AND attempts=$5",
+            )
+            .bind(job.id)
+            .bind(next_status)
+            .bind(retry_seconds as f64)
+            .bind(format!("Email provider returned HTTP {status}"))
+            .bind(job.attempts)
+            .execute(&mut *transaction)
+            .await
         }
         Err(error) => {
             tracing::warn!(%error, notification_id=%job.notification_id, attempt=job.attempts, "Email provider request failed");
-            update_email_job(state, job, false, Some("Email provider request failed".to_string())).await;
+            let terminal = job.attempts >= 5;
+            let next_status = if terminal { "failed" } else { "queued" };
+            let retry_seconds = (60_i64 * 2_i64.pow((job.attempts.saturating_sub(1)).clamp(0, 6) as u32)).min(3600);
+            sqlx::query(
+                "UPDATE notification_email_outbox
+                    SET status=$2,
+                        available_at=CASE WHEN $2='queued' THEN statement_timestamp()+make_interval(secs=>$3) ELSE available_at END,
+                        locked_at=NULL, last_error='Email provider request failed', updated_at=NOW()
+                  WHERE id=$1 AND status='processing' AND attempts=$5",
+            )
+            .bind(job.id)
+            .bind(next_status)
+            .bind(retry_seconds as f64)
+            .bind(job.attempts)
+            .execute(&mut *transaction)
+            .await
         }
+    };
+
+    if let Err(error) = update {
+        tracing::error!(%error, job_id=%job.id, "Could not persist email delivery result");
+        return;
+    }
+    if let Err(error) = transaction.commit().await {
+        tracing::error!(%error, job_id=%job.id, "Could not commit email delivery result");
     }
 }
 
