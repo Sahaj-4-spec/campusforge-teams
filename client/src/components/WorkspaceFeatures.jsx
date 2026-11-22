@@ -373,7 +373,7 @@ export function NotificationsPage({ onChanged, realtimeVersion = 0 }) {
             </article>
           )) : <div className="feature-empty"><Bell size={24} /><strong>You're all caught up</strong><span>New assignments, comments, and deadline reminders will appear here.</span></div>}
         </section>
-        <section className="ref-panel feature-preferences-panel">
+        <section className={"ref-panel feature-preferences-panel" + (preferencesExpanded ? " is-expanded" : " is-collapsed")}>
           <div className="ref-panel-title feature-preferences-heading">
             <button
               className="feature-preferences-toggle"
@@ -383,7 +383,7 @@ export function NotificationsPage({ onChanged, realtimeVersion = 0 }) {
               aria-controls="notification-preferences-content"
               onClick={() => setPreferencesExpanded((expanded) => !expanded)}
             >
-              <h2><Check size={16} /> Notification preferences</h2>
+              <span className="feature-preferences-label"><Check size={16} /> Notification preferences</span>
               <ChevronDown size={19} aria-hidden="true" />
             </button>
           </div>
