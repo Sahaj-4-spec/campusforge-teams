@@ -6,6 +6,7 @@ mod db;
 mod invitations;
 mod lists;
 mod oauth;
+mod notifications;
 mod realtime;
 mod state;
 mod storage;
@@ -85,6 +86,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let background_state = state.clone();
     tokio::spawn(async move {
         advanced_tasks::run_background_jobs(background_state).await;
+    });
+    let email_state = state.clone();
+    tokio::spawn(async move {
+        notifications::run_email_worker(email_state).await;
     });
     let cors = CorsLayer::new()
         .allow_origin(frontend_origin.parse::<HeaderValue>()?)
