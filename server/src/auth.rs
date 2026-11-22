@@ -348,8 +348,10 @@ mod tests {
         let secret = "test-only-secret-with-more-than-32-characters";
         let (mut token, _) = issue_token(user_id, "student@example.edu", secret).unwrap();
 
-        let last = token.pop().unwrap();
-        token.push(if last == 'a' { 'b' } else { 'a' });
+        let signature_start = token.rfind('.').unwrap() + 1;
+        let first_signature_byte = token.as_bytes()[signature_start];
+        let replacement = if first_signature_byte == b'a' { 'b' } else { 'a' };
+        token.replace_range(signature_start..signature_start + 1, &replacement.to_string());
 
         assert_eq!(verify_token(&token, secret), Err(StatusCode::UNAUTHORIZED));
     }
