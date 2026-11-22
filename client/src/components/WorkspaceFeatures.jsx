@@ -102,9 +102,12 @@ export function CalendarPage({ data, onOpenTask, realtimeVersion = 0 }) {
   const itemsByDate = useMemo(() => {
     const map = new Map();
     for (const event of calendar.events) {
-      const cursor = new Date(event.start_at);
+      const eventStart = new Date(event.start_at);
+      const eventEnd = new Date(event.end_at);
+      if (!Number.isFinite(eventStart.getTime()) || !Number.isFinite(eventEnd.getTime()) || eventEnd <= range.start || eventStart > new Date(range.end.getTime() + 86400000)) continue;
+      const cursor = new Date(Math.max(eventStart.getTime(), range.start.getTime()));
       cursor.setHours(0, 0, 0, 0);
-      const endBoundary = new Date(new Date(event.end_at).getTime() - 1);
+      const endBoundary = new Date(Math.min(eventEnd.getTime() - 1, new Date(range.end.getTime() + 86400000).getTime() - 1));
       endBoundary.setHours(0, 0, 0, 0);
       while (cursor <= endBoundary) {
         const key = dateKey(cursor);
@@ -122,7 +125,7 @@ export function CalendarPage({ data, onOpenTask, realtimeVersion = 0 }) {
       items.sort((a, b) => new Date(a.start_at || a.due_date + "T00:00:00") - new Date(b.start_at || b.due_date + "T00:00:00"));
     }
     return map;
-  }, [calendar]);
+  }, [calendar, range]);
 
   const gridDays = useMemo(() => {
     if (viewMode === "month") {
@@ -305,6 +308,7 @@ export function NotificationsPage({ onChanged, realtimeVersion = 0 }) {
   const [unread, setUnread] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [savingPreference, setSavingPreference] = useState(null);
 
   async function load() {
     setLoading(true);
@@ -342,11 +346,14 @@ export function NotificationsPage({ onChanged, realtimeVersion = 0 }) {
   }
 
   async function togglePreference(type, inAppEnabled, emailEnabled) {
+    if (savingPreference) return;
+    setSavingPreference(type);
     try {
       await notificationApi.updatePreference(type, inAppEnabled, emailEnabled);
       await load();
       onChanged?.();
     } catch (requestError) { setError(requestError.message || "Could not update preferences."); }
+    finally { setSavingPreference(null); }
   }
 
   return (
@@ -375,8 +382,8 @@ export function NotificationsPage({ onChanged, realtimeVersion = 0 }) {
               const emailEnabled = preference?.email_enabled ?? false;
               return <div className="feature-preference" key={type}>
                 <span className="feature-preference-copy"><strong>{title}</strong><small>{description}</small></span>
-                <label className="feature-pref-toggle"><span>In-app</span><input type="checkbox" checked={inAppEnabled} onChange={(event) => togglePreference(type, event.target.checked, emailEnabled)} /></label>
-                <label className="feature-pref-toggle"><span>Email</span><input type="checkbox" checked={emailEnabled} disabled={!emailDeliveryAvailable} onChange={(event) => togglePreference(type, inAppEnabled, event.target.checked)} /></label>
+                <label className="feature-pref-toggle"><span>In-app</span><input type="checkbox" checked={inAppEnabled} disabled={savingPreference === type} onChange={(event) => togglePreference(type, event.target.checked, emailEnabled)} /></label>
+                <label className="feature-pref-toggle"><span>Email</span><input type="checkbox" checked={emailEnabled} disabled={!emailDeliveryAvailable || savingPreference === type} onChange={(event) => togglePreference(type, inAppEnabled, event.target.checked)} /></label>
               </div>;
             })}
           </div>
@@ -505,6 +512,7 @@ export function ChatAndMeetingsPage({ data, realtimeVersion = 0 }) {
     }
   }
   async function loadNotes() {
+    if (activeTabRef.current !== "notes") return;
     const requestId = ++notesRequestRef.current;
     setLoading(true);
     setError("");
