@@ -573,7 +573,7 @@ async fn files_upload(
     };
 
     let storage_key = Uuid::new_v4().to_string();
-    state.storage.put_file(&storage_key, &temporary.path, normalized_media_type)
+    state.storage.put_file(&storage_key, &temporary.path, normalized_media_type, &checksum)
         .await
         .map_err(|error| {
             tracing::error!(%error, "Could not store workspace file");
