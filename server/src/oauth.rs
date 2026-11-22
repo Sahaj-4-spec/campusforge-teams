@@ -1,6 +1,7 @@
 use axum::{
     extract::{Path, Query, State},
-    response::Redirect,
+    http::{header, HeaderMap, HeaderValue},
+    response::{IntoResponse, Redirect, Response},
     routing::get,
     Router,
 };
@@ -168,7 +169,7 @@ fn callback_uri(provider: Provider) -> Result<String, &'static str> {
         return Err("OAuth callback base URL must not contain credentials.");
     }
     let prefix = url.path().trim_end_matches('/');
-    url.set_path(&format!("{prefix}/api/auth/oauth/{}/callback", provider.as_str()));
+    url.set_path(&format!("{prefix}/api/auth/{}/callback", provider.as_str()));
     url.set_query(None);
     url.set_fragment(None);
     Ok(url.to_string())
@@ -193,12 +194,33 @@ fn frontend_redirect(token: Option<&str>, error: Option<&str>) -> Redirect {
     Redirect::temporary(url.as_str())
 }
 
+fn oauth_cookie_name(state_value: &str) -> String {
+    let digest = Sha256::digest(state_value.as_bytes());
+    format!("cf_oauth_{}", hex_prefix(&digest, 12))
+}
+
+fn hex_prefix(bytes: &[u8], count: usize) -> String {
+    bytes.iter().take(count).map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn state_digest(state_value: &str, browser_binding: &str) -> Vec<u8> {
+    Sha256::digest(format!("{state_value}:{browser_binding}").as_bytes()).to_vec()
+}
+
+fn browser_binding_from_headers(headers: &HeaderMap, cookie_name: &str) -> Option<String> {
+    let cookie_header = headers.get(header::COOKIE)?.to_str().ok()?;
+    cookie_header.split(';').find_map(|cookie| {
+        let (name, value) = cookie.trim().split_once('=')?;
+        (name == cookie_name && !value.is_empty()).then(|| value.to_owned())
+    })
+}
+
 async fn start(
     Path(provider_name): Path<String>,
     State(state): State<AppState>,
-) -> Redirect {
+) -> Response {
     let Some(provider) = Provider::parse(&provider_name) else {
-        return frontend_redirect(None, Some("That sign-in provider is not supported."));
+        return frontend_redirect(None, Some("That sign-in provider is not supported.")).into_response();
     };
     let config = match provider.config() {
         Ok(config) => config,
@@ -209,16 +231,22 @@ async fn start(
         Err(message) => return frontend_redirect(None, Some(message)),
     };
 
-    // Use an opaque high-entropy state value; store only its SHA-256 digest.
+    // Bind OAuth state to a short-lived HttpOnly browser cookie, preventing
+    // an attacker from completing a login in a victim's unrelated browser.
     let state_value = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-    let state_hash = Sha256::digest(state_value.as_bytes()).to_vec();
+    let browser_binding = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let state_hash = state_digest(&state_value, &browser_binding);
+    let cookie_name = oauth_cookie_name(&state_value);
+    let secure_cookie = std::env::var("OAUTH_REDIRECT_BASE_URL")
+        .unwrap_or_else(|_| "http://localhost:5000".to_owned())
+        .starts_with("https://");
 
     if let Err(error) = sqlx::query("DELETE FROM oauth_states WHERE expires_at <= NOW()")
         .execute(&state.db)
         .await
     {
         tracing::error!(%error, "Could not clean expired OAuth state");
-        return frontend_redirect(None, Some("Sign-in is temporarily unavailable."));
+        return frontend_redirect(None, Some("Sign-in is temporarily unavailable.")).into_response();
     }
 
     if let Err(error) = sqlx::query(
@@ -255,24 +283,58 @@ async fn start(
         authorization_url.query_pairs_mut().append_pair("allow_signup", "true");
     }
 
-    Redirect::temporary(authorization_url.as_str())
+    let mut response = Redirect::temporary(authorization_url.as_str()).into_response();
+    let secure_attribute = if secure_cookie { "; Secure" } else { "" };
+    let cookie = format!(
+        "{cookie_name}={browser_binding}; HttpOnly; SameSite=Lax; Path=/api/auth; Max-Age=600{secure_attribute}"
+    );
+    match HeaderValue::from_str(&cookie) {
+        Ok(value) => {
+            response.headers_mut().insert(header::SET_COOKIE, value);
+            response
+        }
+        Err(error) => {
+            tracing::error!(%error, "Could not create OAuth browser binding cookie");
+            frontend_redirect(None, Some("Sign-in is temporarily unavailable.")).into_response()
+        }
+    }
 }
 
 async fn callback(
     Path(provider_name): Path<String>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(query): Query<OAuthCallbackQuery>,
-) -> Redirect {
-    match complete_login(&state, &provider_name, query).await {
-        Ok(token) => frontend_redirect(Some(&token), None),
-        Err(message) => frontend_redirect(None, Some(message)),
+) -> Response {
+    let cookie_name = query.state.as_deref().map(oauth_cookie_name);
+    let browser_binding = cookie_name.as_deref()
+        .and_then(|name| browser_binding_from_headers(&headers, name));
+    let result = match browser_binding.as_deref() {
+        Some(binding) => complete_login(&state, &provider_name, query, binding).await,
+        None => Err("The sign-in session expired. Please start sign-in again."),
+    };
+    let mut response = match result {
+        Ok(token) => frontend_redirect(Some(&token), None).into_response(),
+        Err(message) => frontend_redirect(None, Some(message)).into_response(),
+    };
+    if let Some(cookie_name) = cookie_name {
+        let secure_attribute = if std::env::var("OAUTH_REDIRECT_BASE_URL")
+            .unwrap_or_default().starts_with("https://") { "; Secure" } else { "" };
+        let expired = format!(
+            "{cookie_name}=; HttpOnly; SameSite=Lax; Path=/api/auth; Max-Age=0{secure_attribute}"
+        );
+        if let Ok(value) = HeaderValue::from_str(&expired) {
+            response.headers_mut().append(header::SET_COOKIE, value);
+        }
     }
+    response
 }
 
 async fn complete_login(
     state: &AppState,
     provider_name: &str,
     query: OAuthCallbackQuery,
+    browser_binding: &str,
 ) -> Result<String, &'static str> {
     let provider = Provider::parse(provider_name)
         .ok_or("That sign-in provider is not supported.")?;
@@ -280,7 +342,7 @@ async fn complete_login(
 
     let state_value = query.state.as_deref()
         .ok_or("The sign-in session expired. Please try again.")?;
-    consume_state(state, provider, state_value).await?;
+    consume_state(state, provider, state_value, browser_binding).await?;
 
     if query.error.is_some() {
         return Err("Sign-in was cancelled. You can try again.");
@@ -336,12 +398,13 @@ async fn consume_state(
     state: &AppState,
     provider: Provider,
     state_value: &str,
+    browser_binding: &str,
 ) -> Result<(), &'static str> {
     if state_value.len() < 32 || state_value.len() > 256 {
         return Err("The sign-in session expired. Please try again.");
     }
 
-    let state_hash = Sha256::digest(state_value.as_bytes()).to_vec();
+    let state_hash = state_digest(state_value, browser_binding);
     let stored_provider = sqlx::query_scalar::<_, String>(
         "DELETE FROM oauth_states
          WHERE state_hash = $1 AND provider = $2 AND expires_at > NOW()
@@ -502,6 +565,19 @@ async fn find_or_create_user(
         "Sign-in is temporarily unavailable."
     })?;
 
+    let subject_lock_digest = Sha256::digest(
+        format!("{}:{}", provider.as_str(), profile.provider_user_id).as_bytes()
+    );
+    let subject_lock_key = i64::from_be_bytes(subject_lock_digest[..8].try_into().unwrap());
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(subject_lock_key)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "Could not lock social identity");
+            "Sign-in is temporarily unavailable."
+        })?;
+
     let existing = sqlx::query_as::<_, OAuthUser>(
         "SELECT u.id, u.email
          FROM oauth_accounts oa
@@ -536,7 +612,9 @@ async fn find_or_create_user(
         })?;
 
         let user = match existing_user {
-            Some(user) => user,
+            Some(_) => {
+                return Err("A CampusForge account already uses this email. Sign in with that account first; automatic social linking is disabled.");
+            }
             None => sqlx::query_as::<_, OAuthUser>(
                 "INSERT INTO users (email, password_hash, full_name, avatar_url)
                  VALUES ($1, NULL, $2, $3)
@@ -600,7 +678,7 @@ mod tests {
     #[test]
     fn oauth_state_hash_is_not_the_original_value() {
         let state = "a-long-random-state-value-used-for-a-test";
-        let digest = Sha256::digest(state.as_bytes());
+        let digest = state_digest(state, "browser-binding");
         assert_ne!(digest.as_slice(), state.as_bytes());
         assert_eq!(digest.len(), 32);
     }
