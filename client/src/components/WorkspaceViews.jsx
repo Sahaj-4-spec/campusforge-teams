@@ -264,9 +264,12 @@ export function WorkspaceReports({ data, realtimeVersion = 0 }) {
   const [serverAnalytics, setServerAnalytics] = useState(null);
   useEffect(() => {
     let cancelled = false;
-    analyticsApi.get().then((result) => { if (!cancelled) setServerAnalytics(result); }).catch(() => {});
+    setServerAnalytics(null);
+    analyticsApi.get()
+      .then((result) => { if (!cancelled) setServerAnalytics(result); })
+      .catch(() => { if (!cancelled) setServerAnalytics(null); });
     return () => { cancelled = true; };
-  }, []);
+  }, [data, realtimeVersion]);
   const projectRows = metrics.boards.map((board) => {
     const tasks = metrics.tasks.filter((task) => task.board_id === board.id);
     const done = tasks.filter((task) => metrics.doneIds.has(task.id)).length;
