@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bell, CalendarDays, Check, CheckCheck, ChevronLeft, ChevronRight, Clock3, Download,
   FileText, Folder, MessageCircle, Plus, Send, Trash2, Upload, Users, X
@@ -43,6 +43,8 @@ export function CalendarPage({ data, onOpenTask, realtimeVersion = 0 }) {
     start: localDateTimeValue(new Date(), "10:00"), end: localDateTimeValue(new Date(), "11:00"),
     board_id: "", description: "", all_day: false
   });
+  const calendarRequestRef = useRef(0);
+  const eventDialogRef = useRef(null);
 
   const range = useMemo(() => {
     const anchor = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate());
@@ -68,26 +70,48 @@ export function CalendarPage({ data, onOpenTask, realtimeVersion = 0 }) {
   }, [selectedDate, viewMode]);
 
   async function loadCalendar() {
+    const requestId = ++calendarRequestRef.current;
     setLoading(true);
     setError("");
     try {
       const result = await calendarApi.list(range.from, range.to);
-      setCalendar({ events: result.events || [], tasks: result.tasks || [] });
+      if (requestId === calendarRequestRef.current) {
+        setCalendar({ events: result.events || [], tasks: result.tasks || [] });
+      }
     } catch (requestError) {
-      setError(requestError.message || "Could not load the calendar.");
+      if (requestId === calendarRequestRef.current) {
+        setError(requestError.message || "Could not load the calendar.");
+      }
     } finally {
-      setLoading(false);
+      if (requestId === calendarRequestRef.current) setLoading(false);
     }
   }
 
-  useEffect(() => { loadCalendar(); }, [range.from, range.to, realtimeVersion]);
+  useEffect(() => {
+    loadCalendar();
+    return () => { calendarRequestRef.current += 1; };
+  }, [range.from, range.to, realtimeVersion]);
+
+  useEffect(() => {
+    const dialog = eventDialogRef.current;
+    if (!dialog) return;
+    if (showForm && !dialog.open) dialog.showModal();
+    else if (!showForm && dialog.open) dialog.close();
+  }, [showForm]);
 
   const itemsByDate = useMemo(() => {
     const map = new Map();
     for (const event of calendar.events) {
-      const key = dateKey(event.start_at);
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push({ ...event, kind: "event" });
+      const cursor = new Date(event.start_at);
+      cursor.setHours(0, 0, 0, 0);
+      const endBoundary = new Date(new Date(event.end_at).getTime() - 1);
+      endBoundary.setHours(0, 0, 0, 0);
+      while (cursor <= endBoundary) {
+        const key = dateKey(cursor);
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push({ ...event, kind: "event" });
+        cursor.setDate(cursor.getDate() + 1);
+      }
     }
     for (const task of calendar.tasks) {
       const key = dateKey(task.due_at);
@@ -127,7 +151,13 @@ export function CalendarPage({ data, onOpenTask, realtimeVersion = 0 }) {
     const next = new Date(selectedDate);
     if (viewMode === "day") next.setDate(next.getDate() + direction);
     else if (viewMode === "week") next.setDate(next.getDate() + direction * 7);
-    else next.setMonth(next.getMonth() + direction);
+    else {
+      const originalDay = next.getDate();
+      const targetMonth = new Date(next.getFullYear(), next.getMonth() + direction, 1);
+      const lastDay = new Date(targetMonth.getFullYear(), targetMonth.getMonth() + 1, 0).getDate();
+      targetMonth.setDate(Math.min(originalDay, lastDay));
+      next.setTime(targetMonth.getTime());
+    }
     setSelectedDate(next);
   }
 
@@ -235,9 +265,14 @@ export function CalendarPage({ data, onOpenTask, realtimeVersion = 0 }) {
         {error && <p className="auth-error" role="alert">{error}</p>}
       </section>
 
-      {showForm && (
-        <div className="feature-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowForm(false); }}>
-          <section className="feature-modal" role="dialog" aria-modal="true" aria-labelledby="event-form-title">
+      <dialog
+        ref={eventDialogRef}
+        className="feature-modal"
+        aria-labelledby="event-form-title"
+        onCancel={() => setShowForm(false)}
+        onClose={() => { if (showForm) setShowForm(false); }}
+        onClick={(event) => { if (event.target === event.currentTarget) setShowForm(false); }}
+      >
             <div className="feature-modal-heading"><div><p className="ref-eyebrow">CALENDAR</p><h2 id="event-form-title">Add an event</h2></div><button className="feature-icon-button" type="button" onClick={() => setShowForm(false)} aria-label="Close"><X size={17} /></button></div>
             <form className="feature-form" onSubmit={createEvent}>
               <label>Title<input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Project review meeting" maxLength={180} required /></label>
@@ -250,9 +285,7 @@ export function CalendarPage({ data, onOpenTask, realtimeVersion = 0 }) {
               {form.all_day ? <label>Date<input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} required /></label> : <div className="feature-form-grid"><label>Starts<input type="datetime-local" value={form.start} onChange={(e) => setForm({ ...form, start: e.target.value })} required /></label><label>Ends<input type="datetime-local" value={form.end} onChange={(e) => setForm({ ...form, end: e.target.value })} required /></label></div>}
               <div className="feature-form-actions"><button className="secondary-button" type="button" onClick={() => setShowForm(false)}>Cancel</button><button className="ref-primary-button" type="submit" disabled={saving}>{saving ? "Saving…" : "Save event"}</button></div>
             </form>
-          </section>
-        </div>
-      )}
+      </dialog>
     </div>
   );
 }
@@ -379,6 +412,7 @@ export function FilesPage({ data, realtimeVersion = 0 }) {
   async function upload(event) {
     event.preventDefault();
     if (!selectedFile) return;
+    const formElement = event.currentTarget;
     setUploading(true);
     setError("");
     try {
@@ -388,10 +422,19 @@ export function FilesPage({ data, realtimeVersion = 0 }) {
       else if (boardId) form.append("board_id", boardId);
       await filesApi.upload(form);
       setSelectedFile(null);
-      event.currentTarget.reset();
+      formElement.reset();
       await load();
     } catch (requestError) { setError(requestError.message || "File upload failed."); }
     finally { setUploading(false); }
+  }
+
+  async function downloadFile(file) {
+    setError("");
+    try {
+      await filesApi.download(file.id, file.original_name);
+    } catch (requestError) {
+      setError(requestError.message || "Could not download this file. It may have been removed.");
+    }
   }
 
   async function remove(file) {
@@ -419,7 +462,7 @@ export function FilesPage({ data, realtimeVersion = 0 }) {
           {files.map((file) => <article className="feature-file-row" key={file.id}>
             <span className="feature-file-icon"><FileText size={19} /></span>
             <div className="feature-file-copy"><strong>{file.original_name}</strong><small>{formatBytes(file.size_bytes)} · {file.media_type} · {displayDate(file.created_at, { month: "short", day: "numeric", year: "numeric" })}</small><small>{file.task_id ? "Attached to task" : file.board_id ? "Attached to project" : "Workspace file"}</small></div>
-            <button className="feature-icon-button" type="button" onClick={() => filesApi.download(file.id, file.original_name)} aria-label={"Download " + file.original_name}><Download size={16} /></button>
+            <button className="feature-icon-button" type="button" onClick={() => downloadFile(file)} aria-label={"Download " + file.original_name}><Download size={16} /></button>
             {file.uploaded_by === data.current_user_id && <button className="feature-icon-button feature-danger-button" type="button" onClick={() => remove(file)} aria-label={"Delete " + file.original_name}><Trash2 size={16} /></button>}
           </article>)}
         </div> : <div className="feature-empty"><Folder size={24} /><strong>Your library is ready</strong><span>Upload your first shared project resource.</span></div>}
@@ -440,33 +483,73 @@ export function ChatAndMeetingsPage({ data, realtimeVersion = 0 }) {
   const [sending, setSending] = useState(false);
   const [noteForm, setNoteForm] = useState({ title: "", meeting_at: "", board_id: "", attendees: "", agenda: "", notes: "", action_items: "" });
   const [savingNote, setSavingNote] = useState(false);
+  const chatRequestRef = useRef(0);
+  const notesRequestRef = useRef(0);
+  const activeChannelRef = useRef(boardId);
+  const activeTabRef = useRef(tab);
+  activeChannelRef.current = boardId;
+  activeTabRef.current = tab;
 
-  async function loadChat() {
+  async function loadChat(channel = boardId) {
+    const requestId = ++chatRequestRef.current;
     setLoading(true);
     setError("");
-    try { setMessages(await chatApi.list(boardId || null)); }
-    catch (requestError) { setError(requestError.message || "Could not load team chat."); }
-    finally { setLoading(false); }
+    try {
+      const rows = await chatApi.list(channel || null);
+      if (requestId === chatRequestRef.current && activeChannelRef.current === channel && activeTabRef.current === "chat") {
+        setMessages(rows);
+      }
+    } catch (requestError) {
+      if (requestId === chatRequestRef.current && activeChannelRef.current === channel && activeTabRef.current === "chat") {
+        setError(requestError.message || "Could not load team chat.");
+      }
+    } finally {
+      if (requestId === chatRequestRef.current && activeChannelRef.current === channel && activeTabRef.current === "chat") {
+        setLoading(false);
+      }
+    }
   }
   async function loadNotes() {
+    const requestId = ++notesRequestRef.current;
     setLoading(true);
     setError("");
-    try { setNotes(await meetingNotesApi.list()); }
-    catch (requestError) { setError(requestError.message || "Could not load meeting notes."); }
-    finally { setLoading(false); }
+    try {
+      const rows = await meetingNotesApi.list();
+      if (requestId === notesRequestRef.current && activeTabRef.current === "notes") setNotes(rows);
+    } catch (requestError) {
+      if (requestId === notesRequestRef.current && activeTabRef.current === "notes") {
+        setError(requestError.message || "Could not load meeting notes.");
+      }
+    } finally {
+      if (requestId === notesRequestRef.current && activeTabRef.current === "notes") setLoading(false);
+    }
   }
-  useEffect(() => { if (tab === "chat") loadChat(); else loadNotes(); }, [tab, boardId, realtimeVersion]);
+  useEffect(() => {
+    if (tab === "chat") loadChat(boardId);
+    else loadNotes();
+    return () => {
+      chatRequestRef.current += 1;
+      notesRequestRef.current += 1;
+    };
+  }, [tab, boardId, realtimeVersion]);
 
   async function sendMessage(event) {
     event.preventDefault();
     if (!message.trim()) return;
+    const channel = boardId;
+    const body = message.trim();
     setSending(true);
     try {
-      await chatApi.send({ board_id: boardId || null, body: message.trim() });
-      setMessage("");
-      await loadChat();
-    } catch (requestError) { setError(requestError.message || "Could not send message."); }
-    finally { setSending(false); }
+      await chatApi.send({ board_id: channel || null, body });
+      if (activeChannelRef.current === channel && activeTabRef.current === "chat") {
+        setMessage("");
+        await loadChat(channel);
+      }
+    } catch (requestError) {
+      if (activeChannelRef.current === channel) setError(requestError.message || "Could not send message.");
+    } finally {
+      setSending(false);
+    }
   }
 
   async function saveNote(event) {
