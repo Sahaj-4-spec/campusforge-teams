@@ -401,12 +401,6 @@ struct WorkspaceFile {
     created_at: chrono::DateTime<Utc>,
 }
 
-fn upload_directory() -> PathBuf {
-    std::env::var("CAMPUSFORGE_UPLOAD_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("server/uploads"))
-}
-
 async fn files_list(
     State(state): State<AppState>,
     AuthUser(user_id): AuthUser,
@@ -477,14 +471,12 @@ async fn files_upload(
 
     let checksum = format!("{:x}", Sha256::digest(&bytes));
     let storage_key = Uuid::new_v4().to_string();
-    let directory = upload_directory();
-    tokio::fs::create_dir_all(&directory)
+    state.storage.put(&storage_key, &bytes, &media_type)
         .await
-        .map_err(|error| internal(error, "Could not prepare local file storage"))?;
-    let path = directory.join(&storage_key);
-    tokio::fs::write(&path, &bytes)
-        .await
-        .map_err(|error| internal(error, "Could not store uploaded file"))?;
+        .map_err(|error| {
+            tracing::error!(%error, "Could not store workspace file");
+            fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not store uploaded file")
+        })?;
 
     let file = sqlx::query_as::<_, WorkspaceFile>(
         "INSERT INTO workspace_files
@@ -505,7 +497,13 @@ async fn files_upload(
     .fetch_one(&state.db)
     .await
     .map_err(|error| {
-        let _ = std::fs::remove_file(&path);
+        let storage = state.storage.clone();
+        let key = storage_key.clone();
+        tokio::spawn(async move {
+            if let Err(cleanup_error) = storage.delete(&key).await {
+                tracing::error!(%cleanup_error, "Could not clean up file after metadata insert failed");
+            }
+        });
         internal(error, "Could not save uploaded file metadata")
     })?;
 
@@ -531,9 +529,10 @@ async fn file_download(
         return Err(fail(StatusCode::NOT_FOUND, "File not found"));
     };
 
-    let bytes = tokio::fs::read(upload_directory().join(storage_key))
-        .await
-        .map_err(|error| internal(error, "Could not read stored file"))?;
+    let bytes = state.storage.get(&storage_key).await.map_err(|error| {
+        tracing::error!(%error, "Could not read workspace file");
+        fail(StatusCode::NOT_FOUND, "Stored file is unavailable")
+    })?;
     let safe_name: String = original_name.chars()
         .map(|character| if character.is_ascii_alphanumeric() || "._- ".contains(character) { character } else { '_' })
         .collect();
@@ -557,20 +556,33 @@ async fn file_delete(
     Path(file_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
     let workspace_id = workspace_for_user(&state, user_id).await?;
-    let row: Option<String> = sqlx::query_scalar(
-        "DELETE FROM workspace_files WHERE id=$1 AND workspace_id=$2 AND uploaded_by=$3 RETURNING storage_key",
+    let storage_key: Option<String> = sqlx::query_scalar(
+        "SELECT storage_key FROM workspace_files WHERE id=$1 AND workspace_id=$2 AND uploaded_by=$3",
     )
     .bind(file_id)
     .bind(workspace_id)
     .bind(user_id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|error| internal(error, "Could not delete file metadata"))?;
-    let Some(storage_key) = row else {
+    .map_err(|error| internal(error, "Could not load file metadata"))?;
+    let Some(storage_key) = storage_key else {
         return Err(fail(StatusCode::NOT_FOUND, "File not found or you did not upload it"));
     };
-    if let Err(error) = tokio::fs::remove_file(upload_directory().join(storage_key)).await {
-        tracing::warn!(%error, "Stored file could not be removed after metadata deletion");
+    state.storage.delete(&storage_key).await.map_err(|error| {
+        tracing::error!(%error, "Could not remove workspace file from storage");
+        fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not delete stored file")
+    })?;
+    let result = sqlx::query(
+        "DELETE FROM workspace_files WHERE id=$1 AND workspace_id=$2 AND uploaded_by=$3",
+    )
+    .bind(file_id)
+    .bind(workspace_id)
+    .bind(user_id)
+    .execute(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not delete file metadata"))?;
+    if result.rows_affected() == 0 {
+        return Err(fail(StatusCode::CONFLICT, "File metadata changed before deletion completed"));
     }
     state.publish_workspace_event(workspace_id, None, "file_deleted", "deleted a workspace file");
     Ok(StatusCode::NO_CONTENT)
