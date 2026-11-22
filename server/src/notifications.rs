@@ -48,8 +48,9 @@ async fn claim_email_jobs(state: &AppState) -> Vec<EmailJob> {
     let stale_ambiguous = sqlx::query(
         "UPDATE notification_email_outbox SET status='reconciliation', locked_at=NULL,
                 last_error='Provider idempotency window expired; reconcile delivery before retrying', updated_at=NOW()
-          WHERE status='processing' AND locked_at < NOW() - INTERVAL '5 minutes'
-            AND first_provider_attempt_at < NOW() - INTERVAL '24 hours'"
+          WHERE status IN ('queued','processing')
+            AND first_provider_attempt_at < NOW() - INTERVAL '24 hours'
+            AND (status='queued' OR locked_at < NOW() - INTERVAL '5 minutes')"
     ).execute(&mut *transaction).await;
     if let Err(error) = stale_ambiguous { tracing::error!(%error, "Could not quarantine ambiguous notification jobs"); return Vec::new(); }
 
@@ -63,7 +64,8 @@ async fn claim_email_jobs(state: &AppState) -> Vec<EmailJob> {
         "WITH next_jobs AS (
             SELECT id
               FROM notification_email_outbox
-             WHERE (status = 'queued' AND available_at <= NOW() AND attempts < 5)
+             WHERE (status = 'queued' AND available_at <= NOW() AND attempts < 5
+                    AND (first_provider_attempt_at IS NULL OR first_provider_attempt_at >= NOW() - INTERVAL '24 hours'))
                 OR (status = 'processing' AND locked_at < NOW() - INTERVAL '5 minutes' AND attempts < 5
                     AND (first_provider_attempt_at IS NULL OR first_provider_attempt_at >= NOW() - INTERVAL '24 hours'))
              ORDER BY available_at, created_at
