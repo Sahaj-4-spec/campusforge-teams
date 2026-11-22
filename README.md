@@ -10,7 +10,7 @@ CampusForge Teams is a project management and collaboration platform being built
 
 This project is being developed as part of the **ALTA BUILDER 30 Challenge — Track A (Full-Stack Product)**.
 
-> **Development status:** The React dashboard foundation and an initial Rust/Axum health API scaffold are in the repository. PostgreSQL integration, authentication, board/task APIs, and real-time collaboration are still under development. Feature lists below describe the intended implementation, not features that are already complete.
+> **Development status:** The React dashboard foundation and Rust/Axum backend are in the repository. PostgreSQL connection pooling and automatic SQLx migrations are implemented, along with registration/login endpoints using Argon2 and JWT. Protected application APIs, board/task CRUD, frontend authentication, and real-time collaboration are still under development. Feature lists below describe the intended implementation, not features that are already complete.
 
 ---
 
