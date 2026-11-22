@@ -307,7 +307,7 @@ async fn send_one(
                     SET status=$2,
                         available_at=CASE WHEN $2='queued' THEN statement_timestamp()+make_interval(secs=>$3) ELSE available_at END,
                         locked_at=NULL, last_error='Email provider request failed', updated_at=NOW()
-                  WHERE id=$1 AND status='processing' AND attempts=$5",
+                  WHERE id=$1 AND status='processing' AND attempts=$4",
             )
             .bind(job.id)
             .bind(next_status)
