@@ -8,8 +8,8 @@ use uuid::Uuid;
 use crate::state::AppState;
 
 pub fn email_delivery_available() -> bool {
-    env::var("RESEND_API_KEY").is_ok()
-        && env::var("EMAIL_FROM").is_ok()
+    env::var("RESEND_API_KEY").is_ok_and(|value| !value.trim().is_empty())
+        && env::var("EMAIL_FROM").is_ok_and(|value| !value.trim().is_empty())
 }
 
 #[derive(Debug, FromRow)]
