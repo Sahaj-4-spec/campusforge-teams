@@ -33,3 +33,5 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Check Rust backend
         run: cargo check --manifest-path server/Cargo.toml
+      - name: Run Rust unit tests
+        run: cargo test --manifest-path server/Cargo.toml
