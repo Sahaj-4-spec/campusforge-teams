@@ -78,7 +78,7 @@ function SortableTask({ task, users, assigneeIds, onOpen }) {
   );
 }
 
-function BoardColumn({ list, tasks, users, assigneesByTask, onOpenTask, onAddTask, onRenameList, onDeleteList }) {
+function BoardColumn({ list, tasks, users, assigneesByTask, onOpenTask, onAddTask, onRenameList, onDeleteList, canManageLists }) {
   const { setNodeRef, isOver } = useDroppable({
     id: "list:" + list.id,
     data: { type: "column", listId: list.id }
@@ -93,12 +93,16 @@ function BoardColumn({ list, tasks, users, assigneesByTask, onOpenTask, onAddTas
           <span className="column-count">{tasks.length}</span>
         </div>
         <div className="column-actions">
-          <button className="column-add" type="button" onClick={() => onRenameList(list)} aria-label={"Rename " + list.name} title="Rename column">
-            <Pencil size={14} />
-          </button>
-          <button className="column-add column-delete" type="button" onClick={() => onDeleteList(list)} aria-label={"Delete " + list.name} title="Delete empty column">
-            <Trash2 size={14} />
-          </button>
+          {canManageLists && (
+            <>
+              <button className="column-add" type="button" onClick={() => onRenameList(list)} aria-label={"Rename " + list.name} title="Rename column">
+                <Pencil size={14} />
+              </button>
+              <button className="column-add column-delete" type="button" onClick={() => onDeleteList(list)} aria-label={"Delete " + list.name} title="Delete empty column">
+                <Trash2 size={14} />
+              </button>
+            </>
+          )}
           <button className="column-add" type="button" onClick={() => onAddTask(list.id)} aria-label={"Add a task to " + list.name} title="Add task">
             <Plus size={16} />
           </button>
@@ -139,7 +143,8 @@ export default function BoardView({
   onMoveTask,
   onCreateList,
   onRenameList,
-  onDeleteList
+  onDeleteList,
+  canManageLists
 }) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 7 } })
@@ -187,9 +192,9 @@ export default function BoardView({
       <div className="board-toolbar">
         <div className="board-toolbar-note"><span className="live-dot" /> Workspace board <span className="toolbar-divider">·</span> Drag cards to update their list</div>
         <div className="board-toolbar-actions">
-          <button className="secondary-button" type="button" onClick={onCreateList}>
+          {canManageLists && <button className="secondary-button" type="button" onClick={onCreateList}>
             <Plus size={16} /> Add column
-          </button>
+          </button>}
           <button className="primary-button" type="button" onClick={() => onAddTask(lists[0]?.id)}>
             <Plus size={17} /> New task
           </button>
@@ -213,6 +218,7 @@ export default function BoardView({
                 onAddTask={onAddTask}
                 onRenameList={onRenameList}
                 onDeleteList={onDeleteList}
+                canManageLists={canManageLists}
               />
             );
           })}
