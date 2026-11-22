@@ -443,36 +443,78 @@ async fn task_label_remove(
 struct DependencyInput { depends_on_task_id:Uuid }
 
 async fn dependency_add(
-    State(state):State<AppState>,AuthUser(user_id):AuthUser,
-    Path(task_id):Path<Uuid>,Json(input):Json<DependencyInput>,
-)->ApiResult<StatusCode>{
-    let (workspace_id,board_id,_)=task_scope(&state,user_id,task_id).await?;
-    task_in_workspace(&state,input.depends_on_task_id,workspace_id).await?;
-    if task_id==input.depends_on_task_id{return Err(fail(StatusCode::BAD_REQUEST,"A task cannot depend on itself"));}
-    let same_board:bool=sqlx::query_scalar(
-        "SELECT (a.list_id IS NOT NULL AND b.id=(
-             SELECT b2.id FROM tasks x JOIN lists l2 ON l2.id=x.list_id JOIN boards b2 ON b2.id=l2.board_id
-             WHERE x.id=$2
-         ))
-         FROM tasks a JOIN lists l ON l.id=a.list_id JOIN boards b ON b.id=l.board_id WHERE a.id=$1")
-        .bind(task_id).bind(input.depends_on_task_id).fetch_one(&state.db).await
-        .map_err(|error|internal(error,"Could not compare dependency projects"))?;
-    if !same_board{return Err(fail(StatusCode::BAD_REQUEST,"Dependencies must be within the same project"));}
-    let creates_cycle:bool=sqlx::query_scalar(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+    Path(task_id): Path<Uuid>,
+    Json(input): Json<DependencyInput>,
+) -> ApiResult<StatusCode> {
+    let (workspace_id, board_id, _) = task_scope(&state, user_id, task_id).await?;
+    task_in_workspace(&state, input.depends_on_task_id, workspace_id).await?;
+    if task_id == input.depends_on_task_id {
+        return Err(fail(StatusCode::BAD_REQUEST, "A task cannot depend on itself"));
+    }
+
+    let mut transaction = state.db.begin().await
+        .map_err(|error| internal(error, "Could not begin dependency update"))?;
+    sqlx::query("SELECT pg_advisory_xact_lock(7712345)")
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| internal(error, "Could not lock dependency graph"))?;
+
+    let same_board: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+            SELECT 1
+              FROM tasks a
+              JOIN lists la ON la.id=a.list_id
+              JOIN boards ba ON ba.id=la.board_id
+              JOIN tasks b ON b.id=$2
+              JOIN lists lb ON lb.id=b.list_id
+              JOIN boards bb ON bb.id=lb.board_id
+             WHERE a.id=$1 AND ba.id=bb.id
+         )",
+    )
+    .bind(task_id)
+    .bind(input.depends_on_task_id)
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(|error| internal(error, "Could not compare dependency projects"))?;
+    if !same_board {
+        return Err(fail(StatusCode::BAD_REQUEST, "Dependencies must be within the same project"));
+    }
+
+    let creates_cycle: bool = sqlx::query_scalar(
         "WITH RECURSIVE dependency_path(task_id) AS (
             SELECT depends_on_task_id FROM task_dependencies WHERE task_id=$1
             UNION
-            SELECT td.depends_on_task_id FROM task_dependencies td
-            JOIN dependency_path dp ON td.task_id=dp.task_id
+            SELECT td.depends_on_task_id
+              FROM task_dependencies td
+              JOIN dependency_path dp ON td.task_id=dp.task_id
          )
-         SELECT EXISTS(SELECT 1 FROM dependency_path WHERE task_id=$2)")
-        .bind(input.depends_on_task_id).bind(task_id).fetch_one(&state.db).await
-        .map_err(|error|internal(error,"Could not validate dependency graph"))?;
-    if creates_cycle{return Err(fail(StatusCode::CONFLICT,"This dependency would create a cycle"));}
-    sqlx::query("INSERT INTO task_dependencies(task_id,depends_on_task_id,created_by) VALUES($1,$2,$3) ON CONFLICT DO NOTHING")
-        .bind(task_id).bind(input.depends_on_task_id).bind(user_id).execute(&state.db).await
-        .map_err(|error|internal(error,"Could not add task dependency"))?;
-    state.publish_workspace_event(workspace_id,Some(board_id),"task_dependency_added","added a task dependency");
+         SELECT EXISTS(SELECT 1 FROM dependency_path WHERE task_id=$2)",
+    )
+    .bind(input.depends_on_task_id)
+    .bind(task_id)
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(|error| internal(error, "Could not validate dependency graph"))?;
+    if creates_cycle {
+        return Err(fail(StatusCode::CONFLICT, "This dependency would create a cycle"));
+    }
+
+    sqlx::query(
+        "INSERT INTO task_dependencies(task_id,depends_on_task_id,created_by)
+         VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
+    )
+    .bind(task_id)
+    .bind(input.depends_on_task_id)
+    .bind(user_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| internal(error, "Could not add task dependency"))?;
+
+    transaction.commit().await
+        .map_err(|error| internal(error, "Could not save task dependency"))?;
+    state.publish_workspace_event(workspace_id, Some(board_id), "task_dependency_added", "added a task dependency");
     Ok(StatusCode::CREATED)
 }
 
