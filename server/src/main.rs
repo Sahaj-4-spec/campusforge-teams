@@ -9,7 +9,7 @@ mod state;
 
 use axum::{
     extract::State,
-    http::{header, HeaderValue, Method, StatusCode},
+    http::{header, HeaderName, HeaderValue, Method, StatusCode},
     routing::get,
     Json, Router,
 };
@@ -92,7 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .allow_headers([
             header::AUTHORIZATION,
             header::CONTENT_TYPE,
-            header::HeaderName::from_static("x-workspace-id"),
+            HeaderName::from_static("x-workspace-id"),
         ]);
 
     let api_router = Router::new()
