@@ -1,6 +1,8 @@
 mod api;
 mod auth;
 mod db;
+mod invitations;
+mod lists;
 mod realtime;
 mod state;
 
@@ -87,11 +89,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
 
+    let api_router = Router::new()
+        .merge(api::router())
+        .merge(lists::router());
+
     let app = Router::new()
         .route("/health", get(health))
         .route("/api/health", get(health))
         .nest("/api/auth", auth::router())
-        .nest("/api", api::router())
+        .nest("/api/invitations", invitations::router())
+        .nest("/api", api_router)
         .nest("/ws", realtime::router())
         .with_state(state)
         .layer(cors)
