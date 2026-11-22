@@ -190,6 +190,9 @@ async fn subtask_create(
     if input.estimated_minutes.is_some_and(|minutes| minutes < 1 || minutes > 100000) {
         return Err(fail(StatusCode::BAD_REQUEST, "Estimated time must be between 1 and 100000 minutes"));
     }
+    if input.description.as_ref().is_some_and(|description| description.chars().count() > 4000) {
+        return Err(fail(StatusCode::BAD_REQUEST, "Subtask description is too long"));
+    }
     let due_at = input.due_date.map(|date| date.and_hms_opt(0,0,0).unwrap().and_utc());
     let mut tx = state.db.begin().await.map_err(|error| internal(error, "Could not begin subtask creation"))?;
     let position: i32 = sqlx::query_scalar("SELECT COALESCE(MAX(position),0)+1 FROM tasks WHERE list_id=$1")
@@ -200,7 +203,7 @@ async fn subtask_create(
          VALUES ($1,$2,$3,'medium',$4,$5,$6,$7,$8) RETURNING id",
     )
     .bind(list_id).bind(title)
-    .bind(input.description.as_deref().filter(|value| value.chars().count() <= 4000))
+    .bind(input.description.as_deref())
     .bind(due_at).bind(position).bind(user_id).bind(parent_task_id).bind(input.estimated_minutes)
     .fetch_one(&mut *tx).await
     .map_err(|error| internal(error, "Could not create subtask"))?;
@@ -314,6 +317,11 @@ async fn checklist_create(
         return Err(fail(StatusCode::BAD_REQUEST,"Checklist item must be between 1 and 240 characters"));
     }
     let mut tx=state.db.begin().await.map_err(|error| internal(error,"Could not begin checklist update"))?;
+    sqlx::query("SELECT id FROM tasks WHERE id=$1 FOR UPDATE")
+        .bind(task_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|error| internal(error,"Could not lock parent task for checklist update"))?;
     let position:i32=sqlx::query_scalar("SELECT COALESCE(MAX(position),0)+1 FROM task_checklist_items WHERE task_id=$1")
         .bind(task_id).fetch_one(&mut *tx).await.map_err(|error| internal(error,"Could not determine checklist position"))?;
     let row=sqlx::query_as::<_,ChecklistItem>(
@@ -594,15 +602,19 @@ struct RecurrenceJob {
     template_task_id:Uuid,
     target_list_id:Uuid,
     interval_days:i32,
+    workspace_id:Uuid,
+    board_id:Uuid,
 }
 
 async fn process_recurrences(state:&AppState){
     let mut tx=match state.db.begin().await{Ok(tx)=>tx,Err(error)=>{tracing::error!(%error,"Could not begin recurrence job");return;}};
     let jobs=match sqlx::query_as::<_,RecurrenceJob>(
-        "SELECT r.id,r.template_task_id,r.target_list_id,r.interval_days
+        "SELECT r.id,r.template_task_id,r.target_list_id,r.interval_days,b.workspace_id,b.id AS board_id
          FROM task_recurrence_rules r
          JOIN tasks t ON t.id=r.template_task_id
          JOIN lists status_list ON status_list.id=t.list_id
+         JOIN lists target_list ON target_list.id=r.target_list_id
+         JOIN boards b ON b.id=target_list.board_id
          WHERE r.is_active AND r.next_run_at<=NOW()
            AND lower(status_list.name) IN ('done','complete','completed')
          ORDER BY r.next_run_at
@@ -610,6 +622,7 @@ async fn process_recurrences(state:&AppState){
         .fetch_all(&mut *tx).await{
             Ok(rows)=>rows,Err(error)=>{tracing::error!(%error,"Could not load due recurrence rules");return;}
         };
+    let mut committed_events: Vec<(Uuid, Uuid, Uuid)> = Vec::new();
     for job in jobs{
         let template=match sqlx::query_as::<_,(String,Option<String>,String,Option<chrono::DateTime<Utc>>,Uuid,Option<Uuid>,Option<i32>)>(
             "SELECT t.title,t.description,t.priority,t.due_at,t.created_by,t.parent_task_id,t.estimated_minutes
@@ -642,17 +655,28 @@ async fn process_recurrences(state:&AppState){
             .bind(new_id).bind(job.interval_days).bind(job.id).execute(&mut *tx).await{
                 tracing::error!(%error,"Could not advance recurring task rule");continue;
         }
-        let workspace:Option<(Uuid,Uuid)>=sqlx::query_as(
-            "SELECT b.workspace_id,b.id FROM lists l JOIN boards b ON b.id=l.board_id WHERE l.id=$1")
-            .bind(job.target_list_id).fetch_optional(&mut *tx).await.unwrap_or(None);
-        if let Some((workspace_id,board_id))=workspace{
-            let _=sqlx::query(
-                "INSERT INTO activity_events(workspace_id,board_id,task_id,actor_id,event_type,payload)
-                 VALUES($1,$2,$3,NULL,'recurring_task_created',jsonb_build_object('description','created the next recurring task'))")
-                .bind(workspace_id).bind(board_id).bind(new_id).execute(&mut *tx).await;
+        if let Err(error)=sqlx::query(
+            "INSERT INTO activity_events(workspace_id,board_id,task_id,actor_id,event_type,payload)
+             VALUES($1,$2,$3,NULL,'recurring_task_created',jsonb_build_object('description','created the next recurring task'))")
+            .bind(job.workspace_id).bind(job.board_id).bind(new_id).execute(&mut *tx).await {
+                tracing::error!(%error,"Could not record recurring task activity");
+                continue;
         }
+        committed_events.push((job.workspace_id, job.board_id, new_id));
     }
-    if let Err(error)=tx.commit().await{tracing::error!(%error,"Could not commit recurrence jobs");}
+    match tx.commit().await {
+        Ok(()) => {
+            for (workspace_id, board_id, task_id) in committed_events {
+                state.publish_workspace_event(
+                    workspace_id,
+                    Some(board_id),
+                    "recurring_task_created",
+                    format!("created recurring task {task_id}"),
+                );
+            }
+        }
+        Err(error) => tracing::error!(%error,"Could not commit recurrence jobs"),
+    }
 }
 
 async fn process_deadline_notifications(state:&AppState){
