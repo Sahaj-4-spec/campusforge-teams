@@ -1,0 +1,276 @@
+use argon2::{
+    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
+};
+use axum::{http::StatusCode, routing::post, Json, Router};
+use chrono::{Duration, Utc};
+use jsonwebtoken::{encode, EncodingKey, Header};
+use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
+use validator::Validate;
+
+use crate::state::AppState;
+
+#[derive(Debug, Deserialize, Validate)]
+struct RegisterRequest {
+    #[validate(email)]
+    email: String,
+    #[validate(length(min = 2, max = 80))]
+    full_name: String,
+    #[validate(length(min = 8, max = 128))]
+    password: String,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+struct LoginRequest {
+    #[validate(email)]
+    email: String,
+    #[validate(length(min = 1, max = 128))]
+    password: String,
+}
+
+#[derive(Debug, Serialize)]
+struct UserResponse {
+    id: uuid::Uuid,
+    email: String,
+    full_name: String,
+    avatar_url: Option<String>,
+    created_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct AuthResponse {
+    token: String,
+    token_type: &'static str,
+    expires_in: i64,
+    user: UserResponse,
+}
+
+#[derive(Debug, Serialize)]
+struct ApiError {
+    error: &'static str,
+}
+
+#[derive(Debug, FromRow)]
+struct UserWithPassword {
+    id: uuid::Uuid,
+    email: String,
+    full_name: String,
+    avatar_url: Option<String>,
+    password_hash: String,
+    created_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow)]
+struct UserWithoutPassword {
+    id: uuid::Uuid,
+    email: String,
+    full_name: String,
+    avatar_url: Option<String>,
+    created_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Claims {
+    sub: String,
+    email: String,
+    exp: usize,
+    iat: usize,
+}
+
+fn issue_token(user_id: uuid::Uuid, email: &str, secret: &str) -> Result<(String, i64), StatusCode> {
+    let now = Utc::now();
+    let expires_in = Duration::hours(24).num_seconds();
+    let claims = Claims {
+        sub: user_id.to_string(),
+        email: email.to_owned(),
+        iat: now.timestamp() as usize,
+        exp: (now + Duration::seconds(expires_in)).timestamp() as usize,
+    };
+
+    let token = encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok((token, expires_in))
+}
+
+fn invalid_request() -> (StatusCode, Json<ApiError>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ApiError {
+            error: "Please provide valid account details",
+        }),
+    )
+}
+
+async fn register(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    Json(request): Json<RegisterRequest>,
+) -> Result<(StatusCode, Json<AuthResponse>), (StatusCode, Json<ApiError>)> {
+    request.validate().map_err(|_| invalid_request())?;
+
+    let email = request.email.trim().to_lowercase();
+    let full_name = request.full_name.trim().to_owned();
+    if full_name.chars().count() < 2 {
+        return Err(invalid_request());
+    }
+
+    let salt = SaltString::generate(&mut OsRng);
+    let password_hash = Argon2::default()
+        .hash_password(request.password.as_bytes(), &salt)
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Unable to create account",
+                }),
+            )
+        })?
+        .to_string();
+
+    let user = sqlx::query_as::<_, UserWithoutPassword>(
+        "INSERT INTO users (email, password_hash, full_name) \
+         VALUES ($1, $2, $3) \
+         RETURNING id, email, full_name, avatar_url, created_at",
+    )
+    .bind(&email)
+    .bind(password_hash)
+    .bind(&full_name)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|error| {
+        if let sqlx::Error::Database(database_error) = &error {
+            if database_error.code().as_deref() == Some("23505") {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(ApiError {
+                        error: "An account with this email already exists",
+                    }),
+                );
+            }
+        }
+        tracing::error!(%error, "Account registration failed");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Unable to create account",
+            }),
+        )
+    })?;
+
+    let (token, expires_in) = issue_token(user.id, &user.email, &state.jwt_secret)
+        .map_err(|status| {
+            (
+                status,
+                Json(ApiError {
+                    error: "Unable to create session",
+                }),
+            )
+        })?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(AuthResponse {
+            token,
+            token_type: "Bearer",
+            expires_in,
+            user: UserResponse {
+                id: user.id,
+                email: user.email,
+                full_name: user.full_name,
+                avatar_url: user.avatar_url,
+                created_at: user.created_at,
+            },
+        }),
+    ))
+}
+
+async fn login(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    Json(request): Json<LoginRequest>,
+) -> Result<Json<AuthResponse>, (StatusCode, Json<ApiError>)> {
+    request.validate().map_err(|_| invalid_request())?;
+
+    let email = request.email.trim().to_lowercase();
+    let user = sqlx::query_as::<_, UserWithPassword>(
+        "SELECT id, email, full_name, avatar_url, password_hash, created_at \
+         FROM users WHERE email = $1",
+    )
+    .bind(email)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "Account lookup failed");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Unable to sign in",
+            }),
+        )
+    })?;
+
+    let Some(user) = user else {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ApiError {
+                error: "Invalid email or password",
+            }),
+        ));
+    };
+
+    let parsed_hash = PasswordHash::new(&user.password_hash).map_err(|_| {
+        tracing::error!(user_id = %user.id, "Stored password hash is invalid");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Unable to sign in",
+            }),
+        )
+    })?;
+
+    if Argon2::default()
+        .verify_password(request.password.as_bytes(), &parsed_hash)
+        .is_err()
+    {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ApiError {
+                error: "Invalid email or password",
+            }),
+        ));
+    }
+
+    let (token, expires_in) = issue_token(user.id, &user.email, &state.jwt_secret)
+        .map_err(|status| {
+            (
+                status,
+                Json(ApiError {
+                    error: "Unable to create session",
+                }),
+            )
+        })?;
+
+    Ok(Json(AuthResponse {
+        token,
+        token_type: "Bearer",
+        expires_in,
+        user: UserResponse {
+            id: user.id,
+            email: user.email,
+            full_name: user.full_name,
+            avatar_url: user.avatar_url,
+            created_at: user.created_at,
+        },
+    }))
+}
+
+/// Public authentication endpoints; mount this router under /api/auth.
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/register", post(register))
+        .route("/login", post(login))
+}
