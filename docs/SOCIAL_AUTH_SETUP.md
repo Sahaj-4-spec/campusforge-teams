@@ -14,7 +14,7 @@ Copy the root .env.example to server/.env (or create a root .env used by the ser
 - GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET
 - DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET
 
-The client starts OAuth at /api/auth/oauth/{provider}/start. The API callback URLs for local development are:
+The client starts OAuth at /api/auth/oauth/{provider}/start. For local Vite development, leave VITE_API_BASE_URL blank in client/.env; Vite proxies API traffic to localhost:5000. If the frontend and API are hosted on different origins, set VITE_API_BASE_URL to the public HTTPS API origin and set FRONTEND_ORIGIN to the frontend origin. The API callback URLs for local development are:
 
 - Google: http://localhost:5000/api/auth/oauth/google/callback
 - GitHub: http://localhost:5000/api/auth/oauth/github/callback
