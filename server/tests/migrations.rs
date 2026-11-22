@@ -77,5 +77,84 @@ async fn applies_all_postgres_migrations_and_creates_collaboration_tables() {
     .expect("email outbox status constraint should be readable");
     assert!(suppressed_email_jobs_supported);
 
+    // Deleting a board cascades its workspace_files metadata. The trigger must
+    // preserve the object key in a table that is not part of the workspace cascade.
+    let user_id = uuid::Uuid::new_v4();
+    let workspace_id = uuid::Uuid::new_v4();
+    let board_id = uuid::Uuid::new_v4();
+    let storage_key = format!("cascade-test-{}", uuid::Uuid::new_v4());
+    let test_email = format!("{}@example.test", uuid::Uuid::new_v4());
+    let mut transaction = pool.begin().await.expect("cascade fixture transaction should start");
+
+    sqlx::query(
+        "INSERT INTO users(id,email,password_hash,full_name)
+         VALUES($1,$2,NULL,'Cascade Test User')",
+    )
+    .bind(user_id)
+    .bind(test_email)
+    .execute(&mut *transaction)
+    .await
+    .expect("cascade fixture user should be inserted");
+
+    sqlx::query(
+        "INSERT INTO workspaces(id,name,owner_id) VALUES($1,'Cascade Test Workspace',$2)",
+    )
+    .bind(workspace_id)
+    .bind(user_id)
+    .execute(&mut *transaction)
+    .await
+    .expect("cascade fixture workspace should be inserted");
+
+    sqlx::query(
+        "INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner')",
+    )
+    .bind(workspace_id)
+    .bind(user_id)
+    .execute(&mut *transaction)
+    .await
+    .expect("cascade fixture owner membership should be inserted");
+
+    sqlx::query(
+        "INSERT INTO boards(id,workspace_id,name,created_by)
+         VALUES($1,$2,'Cascade Test Project',$3)",
+    )
+    .bind(board_id)
+    .bind(workspace_id)
+    .bind(user_id)
+    .execute(&mut *transaction)
+    .await
+    .expect("cascade fixture board should be inserted");
+
+    sqlx::query(
+        "INSERT INTO workspace_files
+            (workspace_id,board_id,uploaded_by,original_name,storage_key,media_type,size_bytes,checksum_sha256)
+         VALUES($1,$2,$3,'cascade-test.txt',$4,'text/plain',1,$5)",
+    )
+    .bind(workspace_id)
+    .bind(board_id)
+    .bind(user_id)
+    .bind(&storage_key)
+    .bind("0".repeat(64))
+    .execute(&mut *transaction)
+    .await
+    .expect("cascade fixture file metadata should be inserted");
+
+    sqlx::query("DELETE FROM boards WHERE id=$1")
+        .bind(board_id)
+        .execute(&mut *transaction)
+        .await
+        .expect("deleting the board should cascade file metadata");
+
+    let cascade_object_is_queued: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM object_deletion_outbox WHERE storage_key=$1)",
+    )
+    .bind(&storage_key)
+    .fetch_one(&mut *transaction)
+    .await
+    .expect("object deletion outbox should be queryable");
+    assert!(cascade_object_is_queued, "a board cascade must retain the deleted file's object key");
+
+    transaction.rollback().await.expect("cascade fixture should roll back");
+
     pool.close().await;
 }
