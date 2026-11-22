@@ -95,7 +95,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let storage = storage::StorageService::from_env().await?;
-    if storage.verify_remote().await? {
+    if storage.verify_remote().await.map_err(|error| {
+        std::io::Error::new(std::io::ErrorKind::Other, error)
+    })? {
         tracing::info!("S3-compatible object storage PUT/GET/DELETE verification passed");
     }
     let state = AppState::new(pool, jwt_secret, storage);
