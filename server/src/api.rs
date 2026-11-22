@@ -324,16 +324,19 @@ async fn create_board(
     }
 
     let mut tx = state.db.begin().await.map_err(|cause| internal_error(cause, "Could not begin project creation"))?;
-    let workspace_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT workspace_id FROM workspace_members WHERE user_id = $1 ORDER BY joined_at ASC LIMIT 1",
+    let membership: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT workspace_id, role FROM workspace_members WHERE user_id = $1 ORDER BY joined_at ASC LIMIT 1",
     )
     .bind(user_id)
     .fetch_optional(&mut *tx)
     .await
     .map_err(|cause| internal_error(cause, "Could not find the user's workspace"))?;
-    let Some(workspace_id) = workspace_id else {
+    let Some((workspace_id, workspace_role)) = membership else {
         return Err(error(StatusCode::NOT_FOUND, "Workspace not found"));
     };
+    if workspace_role != "owner" && workspace_role != "admin" {
+        return Err(error(StatusCode::FORBIDDEN, "Only workspace owners and admins can create projects"));
+    }
 
     let board_id: Uuid = sqlx::query_scalar(
         "INSERT INTO boards (workspace_id, name, description, created_by)          VALUES ($1, $2, $3, $4) RETURNING id",
@@ -524,10 +527,12 @@ async fn update_task(
     };
 
     let target_is_valid: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM lists l JOIN boards b ON b.id = l.board_id          WHERE l.id = $1 AND b.workspace_id = $2)",
+        "SELECT EXISTS(SELECT 1 FROM lists l JOIN boards b ON b.id = l.board_id
+         WHERE l.id = $1 AND b.workspace_id = $2 AND b.id = $3)",
     )
     .bind(input.list_id)
     .bind(workspace_id)
+    .bind(board_id)
     .fetch_one(&mut *tx)
     .await
     .map_err(|cause| internal_error(cause, "Could not verify destination list"))?;
