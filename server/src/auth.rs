@@ -118,6 +118,80 @@ impl FromRequestParts<AppState> for AuthUser {
     }
 }
 
+/// Authenticated user scoped to one explicitly selected workspace.
+/// Requests without a workspace header are accepted only when the account has
+/// exactly one workspace membership.
+pub struct WorkspaceUser(pub uuid::Uuid, pub uuid::Uuid);
+
+impl FromRequestParts<AppState> for WorkspaceUser {
+    type Rejection = (StatusCode, Json<ApiError>);
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let AuthUser(user_id) = AuthUser::from_request_parts(parts, state).await?;
+        let requested_workspace = parts.headers.get("x-workspace-id")
+            .map(|value| value.to_str().map_err(|_| {
+                (StatusCode::BAD_REQUEST, Json(ApiError {
+                    error: "Workspace selection is invalid",
+                }))
+            }))
+            .transpose()?
+            .map(|value| uuid::Uuid::parse_str(value).map_err(|_| {
+                (StatusCode::BAD_REQUEST, Json(ApiError {
+                    error: "Workspace selection is invalid",
+                }))
+            }))
+            .transpose()?;
+
+        let workspace_id = match requested_workspace {
+            Some(workspace_id) => workspace_id,
+            None => {
+                let memberships = sqlx::query_scalar::<_, uuid::Uuid>(
+                    "SELECT workspace_id FROM workspace_members
+                     WHERE user_id=$1 ORDER BY joined_at DESC LIMIT 2",
+                )
+                .bind(user_id)
+                .fetch_all(&state.db)
+                .await
+                .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError {
+                    error: "Could not resolve the selected workspace",
+                })))?;
+                match memberships.as_slice() {
+                    [workspace_id] => *workspace_id,
+                    [] => return Err((StatusCode::NOT_FOUND, Json(ApiError {
+                        error: "Workspace not found",
+                    }))),
+                    _ => return Err((StatusCode::BAD_REQUEST, Json(ApiError {
+                        error: "Select a workspace before continuing",
+                    }))),
+                }
+            }
+        };
+
+        let is_member: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM workspace_members
+             WHERE user_id=$1 AND workspace_id=$2)",
+        )
+        .bind(user_id)
+        .bind(workspace_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError {
+            error: "Could not verify workspace membership",
+        })))?;
+
+        if !is_member {
+            return Err((StatusCode::FORBIDDEN, Json(ApiError {
+                error: "You are not a member of the selected workspace",
+            })));
+        }
+
+        Ok(Self(user_id, workspace_id))
+    }
+}
+
 /// Verify a bearer JWT and return the authenticated user ID.
 pub fn verify_token(token: &str, secret: &str) -> Result<(uuid::Uuid, usize), StatusCode> {
     let decoded = decode::<Claims>(
