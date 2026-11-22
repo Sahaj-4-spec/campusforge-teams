@@ -39,7 +39,7 @@ import ProjectDialog from "./components/ProjectDialog.jsx";
 import { DashboardOverview, WorkspaceTimeline, WorkspaceReports } from "./components/WorkspaceViews.jsx";
 import { CalendarPage, NotificationsPage, FilesPage, ChatAndMeetingsPage } from "./components/WorkspaceFeatures.jsx";
 import {
-  boardApi, clearStoredToken, clearStoredWorkspaceId, createWorkspaceSocket, getStoredToken,
+  authApi, boardApi, clearStoredWorkspaceId, createWorkspaceSocket,
   getStoredWorkspaceId, setStoredWorkspaceId, workspaceApi, taskApi, listApi, invitationApi, notificationApi
 } from "./lib/api.js";
 
@@ -514,10 +514,10 @@ function AppSidebar({
 }
 
 export default function App() {
-  const [token, setToken] = useState(() => getStoredToken() || "");
+  const [isAuthenticated, setIsAuthenticated] = useState(true);
   const [data, setData] = useState(null);
   const [invitations, setInvitations] = useState([]);
-  const [loading, setLoading] = useState(() => Boolean(getStoredToken()));
+  const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [activeView, setActiveView] = useState("Overview");
   const [activeBoardId, setActiveBoardId] = useState("");
@@ -532,7 +532,7 @@ export default function App() {
   const [realtimeVersion, setRealtimeVersion] = useState(0);
 
   useEffect(() => {
-    if (!token) {
+    if (!isAuthenticated) {
       setData(null);
       setLoading(false);
       return undefined;
@@ -566,8 +566,7 @@ export default function App() {
       .catch((error) => {
         if (cancelled) return;
         if (error.status === 401) {
-          clearStoredToken();
-          setToken("");
+          setIsAuthenticated(false);
           setData(null);
         } else {
           setLoadError(error.message || "Unable to load your workspace.");
@@ -578,10 +577,10 @@ export default function App() {
       });
 
     return () => { cancelled = true; };
-  }, [token]);
+  }, [isAuthenticated]);
 
   useEffect(() => {
-    if (!token || !data?.current_workspace_id) return undefined;
+    if (!isAuthenticated || !data?.current_workspace_id) return undefined;
 
     let stopped = false;
     let retryTimer = null;
@@ -591,7 +590,7 @@ export default function App() {
     function connect() {
       if (stopped) return;
       try {
-        socket = createWorkspaceSocket(token);
+        socket = createWorkspaceSocket();
       } catch (error) {
         setNotice("Live updates are temporarily unavailable");
         retryTimer = window.setTimeout(connect, 5000);
@@ -606,8 +605,7 @@ export default function App() {
         try {
           const payload = JSON.parse(message.data);
           if (payload.type === "error" && /session.*(invalid|expired)|sign in again/i.test(payload.error || "")) {
-            clearStoredToken();
-            setToken("");
+            setIsAuthenticated(false);
             setData(null);
             return;
           }
@@ -625,8 +623,7 @@ export default function App() {
               })
               .catch((error) => {
                 if (error.status === 401 && !stopped) {
-                  clearStoredToken();
-                  setToken("");
+                  setIsAuthenticated(false);
                   setData(null);
                 }
               });
@@ -654,10 +651,10 @@ export default function App() {
       if (retryTimer) window.clearTimeout(retryTimer);
       socket?.close();
     };
-  }, [token, data?.current_workspace_id]);
+  }, [isAuthenticated, data?.current_workspace_id]);
 
   useEffect(() => {
-    if (!token || !data) {
+    if (!isAuthenticated || !data) {
       setInvitations([]);
       return undefined;
     }
@@ -673,10 +670,10 @@ export default function App() {
         if (!cancelled) setNotice(error.message || "Could not load invitations");
       });
     return () => { cancelled = true; };
-  }, [token, data]);
+  }, [isAuthenticated, data]);
 
   useEffect(() => {
-    if (!token) {
+    if (!isAuthenticated) {
       setUnreadNotifications(0);
       return undefined;
     }
@@ -685,7 +682,7 @@ export default function App() {
       .then((result) => { if (!cancelled) setUnreadNotifications(result.unread_count || 0); })
       .catch(() => { if (!cancelled) setUnreadNotifications(0); });
     return () => { cancelled = true; };
-  }, [token, activeView]);
+  }, [isAuthenticated, activeView]);
 
   useEffect(() => {
     if (!notice) return undefined;
@@ -741,17 +738,21 @@ export default function App() {
     }
   }
 
-  function handleAuthenticated(nextToken) {
+  function handleAuthenticated() {
     setLoading(true);
-    setToken(nextToken);
+    setIsAuthenticated(true);
     setActiveView("Overview");
     setLoadError("");
   }
 
-  function logout() {
-    clearStoredToken();
+  async function logout() {
+    try {
+      await authApi.logout();
+    } catch {
+      // Clear the local workspace view even when the API is unreachable.
+    }
     clearStoredWorkspaceId();
-    setToken("");
+    setIsAuthenticated(false);
     setData(null);
     setActiveView("Overview");
     setActiveBoardId("");
@@ -986,7 +987,7 @@ export default function App() {
         return (
           <div className="page-stack">
             <div className="page-title-row"><div><p className="eyebrow">WE'RE HERE TO HELP</p><h1>Help & support</h1><p className="page-subtitle">A quick guide to your shared workspace.</p></div></div>
-            <section className="surface-panel help-panel"><h2>Working with your workspace</h2><p>Create tasks, move them between board columns, assign workspace members, add comments, and search your task list. Changes are saved to the CampusForge API and PostgreSQL.</p><p>Your session is protected by a signed access token. Workspace records are returned only to authenticated workspace members.</p></section>
+            <section className="surface-panel help-panel"><h2>Working with your workspace</h2><p>Create tasks, move them between board columns, assign workspace members, add comments, and search your task list. Changes are saved to the CampusForge API and PostgreSQL.</p><p>Your session is protected by a server-set HttpOnly cookie that JavaScript cannot read. Workspace records are returned only to authenticated workspace members.</p></section>
           </div>
         );
       case "Overview":
@@ -1008,7 +1009,7 @@ export default function App() {
     return <main className="auth-screen"><section className="auth-card"><p className="eyebrow">CAMPUSFORGE TEAMS</p><h1>Loading your workspace…</h1><p>Connecting to your account and retrieving your projects.</p></section></main>;
   }
 
-  if (!token) return <AuthScreen onAuthenticated={handleAuthenticated} />;
+  if (!isAuthenticated) return <AuthScreen onAuthenticated={handleAuthenticated} />;
 
   if (loadError || !data) {
     return (
