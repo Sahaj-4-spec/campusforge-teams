@@ -10,11 +10,24 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::FromRow;
+use std::path::PathBuf;
+use tokio::io::AsyncWriteExt;
+use tokio::time::{interval, Duration as TokioDuration};
 use uuid::Uuid;
 
 use crate::{auth::AuthUser, state::AppState};
 
 const MAX_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
+
+struct TemporaryUpload {
+    path: PathBuf,
+}
+
+impl Drop for TemporaryUpload {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
 
 #[derive(Debug, Serialize)]
 struct ErrorBody {
@@ -459,7 +472,7 @@ async fn files_list(
     let rows = sqlx::query_as::<_, WorkspaceFile>(
         "SELECT id, workspace_id, board_id, task_id, uploaded_by, original_name, media_type,
                 size_bytes, checksum_sha256, created_at
-         FROM workspace_files WHERE workspace_id=$1 ORDER BY created_at DESC",
+         FROM workspace_files WHERE workspace_id=$1 AND is_deleting=FALSE ORDER BY created_at DESC",
     )
     .bind(workspace_id)
     .fetch_all(&state.db)
@@ -478,7 +491,9 @@ async fn files_upload(
     let mut task_id: Option<Uuid> = None;
     let mut original_name = String::new();
     let mut media_type = "application/octet-stream".to_string();
-    let mut file_bytes: Option<Vec<u8>> = None;
+    let mut temp_upload: Option<TemporaryUpload> = None;
+    let mut size_bytes: i64 = 0;
+    let mut checksum = String::new();
 
     while let Some(field) = multipart.next_field().await
         .map_err(|error| fail(StatusCode::BAD_REQUEST, format!("Invalid upload form: {error}")))? {
@@ -493,13 +508,44 @@ async fn files_upload(
                 task_id = Some(Uuid::parse_str(value.trim()).map_err(|_| fail(StatusCode::BAD_REQUEST, "Invalid task reference"))?);
             }
             "file" => {
+                if temp_upload.is_some() {
+                    return Err(fail(StatusCode::BAD_REQUEST, "Upload one file at a time"));
+                }
                 original_name = field.file_name().unwrap_or("upload.bin").to_owned();
                 media_type = field.content_type().unwrap_or("application/octet-stream").to_owned();
-                let bytes = field.bytes().await.map_err(|_| fail(StatusCode::BAD_REQUEST, "Could not read uploaded file"))?;
-                if bytes.is_empty() || bytes.len() > MAX_UPLOAD_BYTES {
-                    return Err(fail(StatusCode::BAD_REQUEST, "Files must be between 1 byte and 10 MB"));
+
+                let temporary = TemporaryUpload {
+                    path: std::env::temp_dir().join(format!("campusforge-upload-{}", Uuid::new_v4())),
+                };
+                let mut output = tokio::fs::File::create(&temporary.path)
+                    .await
+                    .map_err(|error| internal(error, "Could not create temporary upload"))?;
+                let mut hasher = Sha256::new();
+                let mut total_bytes: usize = 0;
+
+                while let Some(chunk) = field.chunk().await
+                    .map_err(|_| fail(StatusCode::BAD_REQUEST, "Could not read uploaded file"))? {
+                    total_bytes = total_bytes.saturating_add(chunk.len());
+                    if total_bytes > MAX_UPLOAD_BYTES {
+                        return Err(fail(StatusCode::BAD_REQUEST, "Files must not exceed 10 MB"));
+                    }
+                    hasher.update(&chunk);
+                    output.write_all(&chunk)
+                        .await
+                        .map_err(|error| internal(error, "Could not write temporary upload"))?;
                 }
-                file_bytes = Some(bytes.to_vec());
+
+                if total_bytes == 0 {
+                    return Err(fail(StatusCode::BAD_REQUEST, "Files must not be empty"));
+                }
+                output.flush()
+                    .await
+                    .map_err(|error| internal(error, "Could not finish temporary upload"))?;
+                drop(output);
+
+                size_bytes = total_bytes as i64;
+                checksum = format!("{:x}", hasher.finalize());
+                temp_upload = Some(temporary);
             }
             _ => {}
         }
@@ -514,7 +560,8 @@ async fn files_upload(
     if let Some(task_id) = task_id {
         task_in_workspace(&state, task_id, workspace_id).await?;
     }
-    let bytes = file_bytes.ok_or_else(|| fail(StatusCode::BAD_REQUEST, "Choose a file to upload"))?;
+    let temporary = temp_upload.as_ref()
+        .ok_or_else(|| fail(StatusCode::BAD_REQUEST, "Choose a file to upload"))?;
     if original_name.trim().is_empty() || original_name.chars().count() > 240 || media_type.len() > 160 {
         return Err(fail(StatusCode::BAD_REQUEST, "File name or media type is invalid"));
     }
@@ -542,9 +589,8 @@ async fn files_upload(
         _ => return Err(fail(StatusCode::BAD_REQUEST, "This file type is not supported")),
     };
 
-    let checksum = format!("{:x}", Sha256::digest(&bytes));
     let storage_key = Uuid::new_v4().to_string();
-    state.storage.put(&storage_key, &bytes, normalized_media_type)
+    state.storage.put_file(&storage_key, &temporary.path, normalized_media_type)
         .await
         .map_err(|error| {
             tracing::error!(%error, "Could not store workspace file");
@@ -565,7 +611,7 @@ async fn files_upload(
     .bind(original_name.trim())
     .bind(&storage_key)
     .bind(normalized_media_type)
-    .bind(bytes.len() as i64)
+    .bind(size_bytes)
     .bind(&checksum)
     .fetch_one(&state.db)
     .await
@@ -591,7 +637,7 @@ async fn file_download(
 ) -> ApiResult<Response<axum::body::Body>> {
     let workspace_id = workspace_for_user(&state, user_id).await?;
     let row: Option<(String, String, String)> = sqlx::query_as(
-        "SELECT storage_key, original_name, media_type FROM workspace_files WHERE id=$1 AND workspace_id=$2",
+        "SELECT storage_key, original_name, media_type FROM workspace_files WHERE id=$1 AND workspace_id=$2 AND is_deleting=FALSE",
     )
     .bind(file_id)
     .bind(workspace_id)
