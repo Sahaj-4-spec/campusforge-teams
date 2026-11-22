@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Bell, CalendarDays, Check, CheckCheck, ChevronLeft, ChevronRight, Clock3, Download,
+  Bell, CalendarDays, Check, CheckCheck, ChevronDown, ChevronLeft, ChevronRight, Clock3, Download,
   FileText, Folder, MessageCircle, Plus, Send, Trash2, Upload, Users, X
 } from "lucide-react";
 import {
@@ -309,6 +309,7 @@ export function NotificationsPage({ onChanged, realtimeVersion = 0 }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [savingPreference, setSavingPreference] = useState(null);
+  const [preferencesExpanded, setPreferencesExpanded] = useState(true);
 
   async function load() {
     setLoading(true);
@@ -372,10 +373,31 @@ export function NotificationsPage({ onChanged, realtimeVersion = 0 }) {
             </article>
           )) : <div className="feature-empty"><Bell size={24} /><strong>You're all caught up</strong><span>New assignments, comments, and deadline reminders will appear here.</span></div>}
         </section>
-        <section className="ref-panel">
-          <div className="ref-panel-title"><h2><Check size={16} /> Notification preferences</h2></div>
-          <p className="feature-panel-description">Choose which updates appear in your in-app inbox. Email delivery can be enabled after an email provider is configured.</p>
-          <div className="feature-preference-list">
+        <section className={"ref-panel feature-preferences-panel" + (preferencesExpanded ? " is-expanded" : " is-collapsed")}>
+          <div className="ref-panel-title feature-preferences-heading">
+            <button
+              className="feature-preferences-toggle"
+              type="button"
+              id="notification-preferences-toggle"
+              aria-expanded={preferencesExpanded}
+              aria-controls="notification-preferences-content"
+              onClick={() => setPreferencesExpanded((expanded) => !expanded)}
+            >
+              <span className="feature-preferences-label"><Check size={16} /> Notification preferences</span>
+              <ChevronDown size={19} aria-hidden="true" />
+            </button>
+          </div>
+          <div
+            className={"feature-preferences-content" + (preferencesExpanded ? "" : " is-collapsed")}
+            id="notification-preferences-content"
+            role="region"
+            aria-labelledby="notification-preferences-toggle"
+            aria-hidden={!preferencesExpanded}
+            inert={!preferencesExpanded}
+          >
+            <div className="feature-preferences-content-inner">
+              <p className="feature-panel-description">Choose which updates appear in your in-app inbox. Email delivery can be enabled after an email provider is configured.</p>
+              <div className="feature-preference-list">
             {notificationCategories.map(([type, title, description]) => {
               const preference = preferences.find((row) => row.notification_type === type);
               const inAppEnabled = preference?.in_app_enabled ?? true;
@@ -386,8 +408,10 @@ export function NotificationsPage({ onChanged, realtimeVersion = 0 }) {
                 <label className="feature-pref-toggle"><span>Email</span><input type="checkbox" checked={emailEnabled} disabled={!emailDeliveryAvailable || savingPreference === type} onChange={(event) => togglePreference(type, inAppEnabled, event.target.checked)} /></label>
               </div>;
             })}
+              </div>
+              <p className="feature-muted">{emailDeliveryAvailable ? "Email delivery is configured. Enable email per notification category to receive messages." : "Email delivery is not configured on the server. Add RESEND_API_KEY and EMAIL_FROM to enable the email preferences."}</p>
+            </div>
           </div>
-          <p className="feature-muted">{emailDeliveryAvailable ? "Email delivery is configured. Enable email per notification category to receive messages." : "Email delivery is not configured on the server. Add RESEND_API_KEY and EMAIL_FROM to enable the email preferences."}</p>
         </section>
       </div>
     </div>
