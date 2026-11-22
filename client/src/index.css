@@ -41,10 +41,15 @@ a { color: inherit; text-decoration: none; }
   border: 1px solid #efeff5; border-radius: 11px; background: #fbfbfe;
 }
 .workspace-avatar { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 9px; color: #fff; background: #302c59; font-size: 12px; font-weight: 800; }
-.workspace-switcher > span:nth-child(2) { display: flex; flex: 1; flex-direction: column; gap: 3px; }
+.workspace-switcher-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 3px; }
 .workspace-switcher strong { color: #42465c; font-size: 10px; }
 .workspace-switcher small { color: #a0a4b5; font-size: 9px; }
-.workspace-switcher > svg { color: #969bad; }
+.workspace-switcher select {
+  width: 20px; min-width: 20px; max-width: 20px; padding: 3px 0;
+  border: 0; outline: 0; color: #969bad; background: transparent;
+  font-size: 9px; cursor: pointer;
+}
+.workspace-switcher select:disabled { cursor: default; appearance: none; }
 .sidebar-section-label { padding: 0 10px; margin-bottom: 11px; color: #a3a7b7; font-size: 9px; font-weight: 700; letter-spacing: 1.45px; }
 .sidebar-nav { display: grid; gap: 5px; }
 .nav-item {
