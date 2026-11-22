@@ -10,7 +10,7 @@ CampusForge Teams is a project management and collaboration platform being built
 
 This project is being developed as part of the **ALTA BUILDER 30 Challenge — Track A (Full-Stack Product)**.
 
-> **Development status:** The React dashboard foundation and Rust/Axum backend are in the repository. PostgreSQL connection pooling and automatic SQLx migrations are implemented, along with registration/login endpoints using Argon2 and JWT. Protected application APIs, board/task CRUD, frontend authentication, and real-time collaboration are still under development. Feature lists below describe the intended implementation, not features that are already complete.
+> **Development status:** The React dashboard is connected to an authenticated Rust/Axum API for workspace loading, task creation/editing/deletion, task assignment, comments, and persisted drag-and-drop ordering. Authentication uses Argon2 password hashing and 24-hour JWT sessions. PostgreSQL access and SQLx migrations are implemented. Board creation, invitations, richer role administration, and real-time WebSocket synchronization remain to be completed and tested.
 
 ---
 
@@ -99,10 +99,12 @@ CampusForge Teams is planned as a Trello-inspired Kanban application. Team membe
 ```
 
 ### Communication
-- REST endpoints under `/api` will handle authentication and application data.
-- A native WebSocket endpoint under `/ws` will handle real-time board events.
-- SQLx will provide asynchronous access to PostgreSQL.
-- The Vite development server proxies `/api` and `/ws` to the backend on port `5000`.
+- `POST /api/auth/register` and `POST /api/auth/login` create and authenticate accounts.
+- `GET /api/workspace` returns the signed-in user's workspace, members, boards, lists, tasks, assignments, comments, and activity.
+- `POST /api/tasks`, `PATCH /api/tasks/:id`, and `DELETE /api/tasks/:id` persist task changes.
+- `POST /api/tasks/:id/comments` saves discussion comments; `PATCH /api/tasks/:id/move` persists drag-and-drop order.
+- Protected routes require an `Authorization: Bearer <token>` header. SQLx provides asynchronous access to PostgreSQL.
+- The Vite development server proxies `/api` and `/ws` to the backend on port `5000`. For a separately hosted frontend, set `VITE_API_BASE_URL` to the API service's HTTPS origin.
 
 ## 📁 Repository Structure
 
@@ -121,6 +123,10 @@ campusforge-teams/
 │   ├── vite.config.js
 │   └── src/
 │       ├── App.jsx
+│       ├── components/
+│       │   └── AuthScreen.jsx
+│       ├── lib/
+│       │   └── api.js
 │       ├── index.css
 │       ├── main.jsx
 │       ├── components/
@@ -162,10 +168,11 @@ npm install
 npm --prefix client install
 ```
 
-Create your local environment file:
+Create the local backend and frontend environment files:
 
 ```bash
 cp .env.example .env
+cp client/.env.example client/.env
 ```
 
 Edit `.env` and replace placeholder values with your local configuration. Never commit `.env` or real credentials.
@@ -175,9 +182,10 @@ Edit `.env` and replace placeholder values with your local configuration. Never 
 | `PORT` | Axum API port (default: `5000`) |
 | `DATABASE_URL` | PostgreSQL connection string |
 | `JWT_SECRET` | Secret reserved for token signing |
-| `FRONTEND_ORIGIN` | Frontend origin for CORS configuration |
+| `FRONTEND_ORIGIN` | Exact frontend origin allowed by API CORS (local: `http://localhost:5173`) |
+| `VITE_API_BASE_URL` | API origin for a separately hosted frontend; leave blank locally to use the Vite proxy |
 
-> The initial health API currently reads `PORT`. PostgreSQL connection handling, authentication, and CORS configuration will be wired in during backend implementation.
+> For Neon, use the pooled or direct PostgreSQL connection string supplied by your Neon project and retain `sslmode=require`. Keep secrets in environment files or the hosting provider's secret store; never commit them.
 
 Run the frontend and Rust backend concurrently from the repository root:
 
@@ -214,7 +222,7 @@ The first frontend milestone is implemented with the selected React + Vite stack
 
 The frontend uses sample records shaped around the planned relational entities: `workspaces`, `workspace_members`, `users`, `boards`, `board_members`, `lists`, `tasks`, `task_assignees`, `comments`, and `activity_events`. This is a UI prototype data layer, not a replacement for PostgreSQL.
 
-**Not yet connected:** login/registration, invitations, backend CRUD, server-side authorization, cross-user updates, and native WebSocket events.
+**Connected:** account registration/sign-in, authenticated workspace loading, task CRUD, assignee persistence, comments, and database-backed task reordering. **Still pending:** invitations, board/list creation and administration, granular per-board permissions, native WebSocket synchronization, and full automated integration tests.
 
 ## 🎨 UI Design System
 
@@ -257,11 +265,11 @@ AI-assisted tools may be used to understand concepts, explore implementation app
 
 ## 🚧 Current Project Status
 
-**Status:** Initial development.
+**Status:** Core frontend/API integration is in progress.
 
-The repository now contains a responsive React workspace frontend with dashboard, project list, Kanban board, task editor, comments, team directory, activity feed, search, filters, drag-and-drop interactions, and browser-local demo persistence. The Rust server still exposes only a minimal health endpoint. PostgreSQL connectivity, authentication, application APIs, server persistence, WebSocket collaboration, automated tests, and deployment are not yet complete.
+The React client now authenticates against the Rust API and loads workspace records from PostgreSQL. Task creation, editing, deletion, assignments, comments, and drag-and-drop ordering call protected Axum endpoints; they no longer rely on browser-local demo records. New accounts receive a starter workspace and project board when the workspace endpoint is first loaded.
 
-**Frontend demo limitation:** Changes made in the browser preview are saved in local storage on that browser only. The current UI does not yet authenticate users or sync changes across devices/team members.
+**Not yet complete:** board/list management, invitation acceptance, granular role administration, WebSocket live collaboration, automated end-to-end tests, and deployment configuration validation. The code must pass CI and be tested against a real Neon database before it is considered ready for production.
 
 ## 🎓 Challenge Information
 
