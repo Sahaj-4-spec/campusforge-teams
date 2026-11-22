@@ -3,6 +3,7 @@ mod auth;
 mod db;
 mod invitations;
 mod lists;
+mod oauth;
 mod realtime;
 mod state;
 
@@ -65,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let database_url = std::env::var("DATABASE_URL")
         .map_err(|_| "DATABASE_URL must be set before starting CampusForge API")?;
     let jwt_secret = std::env::var("JWT_SECRET")
-        .map_err(|_| "JWT_SECRET must be set before starting CampusForge API")?;
+        .map_err(|_| "JWT_SECRET must contain at least 32 characters")?;
     if jwt_secret.len() < 32 {
         return Err("JWT_SECRET must contain at least 32 characters".into());
     }
@@ -92,11 +93,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_router = Router::new()
         .merge(api::router())
         .merge(lists::router());
+    let auth_router = auth::router().merge(oauth::router());
 
     let app = Router::new()
         .route("/health", get(health))
         .route("/api/health", get(health))
-        .nest("/api/auth", auth::router())
+        .nest("/api/auth", auth_router)
         .nest("/api/invitations", invitations::router())
         .nest("/api", api_router)
         .nest("/ws", realtime::router())
