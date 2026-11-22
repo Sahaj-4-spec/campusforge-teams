@@ -324,3 +324,50 @@ pub fn router() -> Router<AppState> {
         .route("/register", post(register))
         .route("/login", post(login))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn issued_hs256_token_verifies_user_and_expiration() {
+        let user_id = uuid::Uuid::new_v4();
+        let secret = "test-only-secret-with-more-than-32-characters";
+        let (token, lifetime) = issue_token(user_id, "student@example.edu", secret).unwrap();
+
+        let (verified_user, expires_at) = verify_token(&token, secret).unwrap();
+
+        assert_eq!(verified_user, user_id);
+        assert!(lifetime > 0);
+        assert!(expires_at > Utc::now().timestamp() as usize);
+    }
+
+    #[test]
+    fn token_with_a_modified_signature_is_rejected() {
+        let user_id = uuid::Uuid::new_v4();
+        let secret = "test-only-secret-with-more-than-32-characters";
+        let (mut token, _) = issue_token(user_id, "student@example.edu", secret).unwrap();
+
+        let last = token.pop().unwrap();
+        token.push(if last == 'a' { 'b' } else { 'a' });
+
+        assert_eq!(verify_token(&token, secret), Err(StatusCode::UNAUTHORIZED));
+    }
+
+    #[test]
+    fn token_signed_with_a_different_secret_is_rejected() {
+        let user_id = uuid::Uuid::new_v4();
+        let (token, _) = issue_token(
+            user_id,
+            "student@example.edu",
+            "original-test-secret-with-more-than-32-chars",
+        )
+        .unwrap();
+
+        assert_eq!(
+            verify_token(&token, "different-test-secret-with-more-than-32-chars"),
+            Err(StatusCode::UNAUTHORIZED)
+        );
+    }
+}
+
