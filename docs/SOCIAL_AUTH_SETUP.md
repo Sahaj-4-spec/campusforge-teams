@@ -14,11 +14,11 @@ Copy the root .env.example to server/.env (or create a root .env used by the ser
 - GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET
 - DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET
 
-The client starts OAuth at /api/auth/oauth/{provider}/start. For local Vite development, leave VITE_API_BASE_URL blank in client/.env; Vite proxies API traffic to localhost:5000. If the frontend and API are hosted on different origins, set VITE_API_BASE_URL to the public HTTPS API origin and set FRONTEND_ORIGIN to the frontend origin. The API callback URLs for local development are:
+The client starts OAuth at /api/auth/{provider}/start. For local Vite development, leave VITE_API_BASE_URL blank in client/.env; Vite proxies API traffic to localhost:5000. If the frontend and API are hosted on different origins, set VITE_API_BASE_URL to the public HTTPS API origin and set FRONTEND_ORIGIN to the frontend origin. The API callback URLs for local development are:
 
-- Google: http://localhost:5000/api/auth/oauth/google/callback
-- GitHub: http://localhost:5000/api/auth/oauth/github/callback
-- Discord: http://localhost:5000/api/auth/oauth/discord/callback
+- Google: http://localhost:5000/api/auth/google/callback
+- GitHub: http://localhost:5000/api/auth/github/callback
+- Discord: http://localhost:5000/api/auth/discord/callback
 
 Register each exact callback URL in that provider's developer console. For production, use the public HTTPS API host in OAUTH_REDIRECT_BASE_URL and register its exact callback URL.
 
@@ -51,5 +51,12 @@ Create an application in the Discord Developer Portal and configure the OAuth2 r
 3. Sign in with a second provider whose verified email belongs to an existing CampusForge user; confirm it uses the same CampusForge account.
 4. Try a provider account with no verified email; confirm sign-in is rejected.
 5. Replay an OAuth callback state value; confirm it is rejected.
+6. Start OAuth in one browser and attempt to complete the callback in a different browser; confirm the browser-bound HttpOnly cookie check rejects it.
+7. Try signing in with a provider whose verified email already belongs to a local CampusForge account that is not linked to that provider; confirm the server asks the user to authenticate with their existing method instead of silently linking accounts.
 6. Confirm a successful first sign-in creates a default workspace when the workspace endpoint is opened.
 7. Confirm missing provider secrets show a friendly message instead of a raw API error.
+
+
+## Account-linking safety
+
+OAuth state is bound to a short-lived, HttpOnly, SameSite=Lax cookie scoped to the API authentication routes. A callback without the matching browser cookie is rejected. Existing local accounts are not automatically linked to a new provider merely because the provider reports a verified email; sign in through the existing account method first. Provider linking through authenticated account settings is not implemented yet.
