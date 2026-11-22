@@ -58,10 +58,16 @@ CampusForge Teams is a Trello-inspired Kanban application. Team members can crea
 - Persist the new order in PostgreSQL.
 - Broadcast authorized board changes to connected members through native WebSockets.
 
-### 6. Approved Roadmap (planned, not yet implemented)
-The next development roadmap includes five selected capabilities: advanced tasks and subtasks; a team calendar and deadline planner; a smart notification centre; shared files and documents; and an AI project assistant. They will be delivered in dependency order, beginning with the task model. See [the full roadmap](docs/ROADMAP.md) and [architecture/project decisions](docs/ARCHITECTURE.md) for scope, target data structures, API plans, acceptance criteria, and security boundaries.
+### 6. Collaboration Suite (draft implementation branch — not deployed)
+The collaboration-suite branch adds:
+- Team calendar with month, week, and day views, task deadlines, meetings, milestones, exams, and submissions.
+- Advanced task tools: subtasks, checklists, workspace labels, same-project dependencies, estimated effort, and recurring task rules.
+- In-app notifications with read state, category preferences, and scheduled deadline reminders.
+- Shared workspace/project/task files with authenticated upload, download, and delete.
+- Server-backed productivity analytics for completion, overdue, unassigned, project progress, and member workload.
+- Workspace/project chat and structured meeting notes with agenda and action items.
 
-These are planning decisions only; no feature code or deployment is included in this documentation update.
+These capabilities are under review in [draft PR #12](https://github.com/Sahaj-4-spec/campusforge-teams/pull/12). They are not in the main branch or live hosted preview yet. Local file storage in this branch is for development only; production object storage, backups, malware scanning, and hardening remain required. The AI project assistant remains a future roadmap item. See [the full roadmap](docs/ROADMAP.md) and [architecture/project decisions](docs/ARCHITECTURE.md) for current status and limitations.
 
 ## 🛠️ Technology Stack
 
@@ -188,6 +194,7 @@ Edit `.env` and replace placeholder values with your local configuration. Never 
 | `JWT_SECRET` | Secret reserved for token signing |
 | `FRONTEND_ORIGIN` | Exact frontend origin allowed by API CORS (local: `http://localhost:5173`) |
 | `VITE_API_BASE_URL` | API origin for a separately hosted frontend; leave blank locally to use the Vite proxy |
+| `CAMPUSFORGE_UPLOAD_DIR` | Optional private local-development upload directory (default: `server/uploads`); not production object storage |
 
 > For Neon, use the pooled or direct PostgreSQL connection string supplied by your Neon project and retain `sslmode=require`. Keep secrets in environment files or the hosting provider's secret store; never commit them.
 
@@ -227,7 +234,7 @@ The frontend milestone is connected to the authenticated Rust API.
 
 The active React application reads workspace, project, task, assignment, comment, and activity records from the authenticated Rust API backed by PostgreSQL. `client/src/data/demoData.js` remains as an unused legacy sample-data reference and is not the active application data source.
 
-**Connected:** account registration/sign-in, authenticated workspace loading, project creation, task CRUD, assignee persistence, comments, database-backed task reordering, column creation/rename/deletion, invitation creation/acceptance/revocation, workspace owner/admin checks, and workspace-scoped WebSocket event delivery. **Still pending:** automated browser end-to-end tests, live two-browser WebSocket acceptance tests, full workspace switching, and granular per-board permissions.
+**Connected in the collaboration-suite draft branch:** calendar month/week/day views and event creation, task deadlines, subtasks/checklists/labels/dependencies/estimates/recurrence controls, notification inbox and preferences, private local file upload/download/delete, server-backed analytics, project/workspace chat, and meeting notes. These changes are in draft PR #12 and are not live on the hosted preview. **Still pending before production:** automated browser and multi-user acceptance tests, production object storage and backup/retention, email provider setup, complete calendar/time-zone testing, chat real-time delivery, and granular per-board permissions.
 
 ## 🎨 UI Design System
 
@@ -270,7 +277,7 @@ AI-assisted tools may be used to understand concepts, explore implementation app
 
 ## 🚧 Current Project Status
 
-**Status:** A hosted preview is deployed. The frontend production build, Rust compilation, Rust unit tests, CodeQL analysis, and configured dependency audits passed on the last fully completed CI/security run. The latest feature commits are being rebuilt and rechecked.
+**Status:** The existing main branch has a hosted preview. The collaboration suite is being developed in draft PR #12 and is not deployed. Its CI/security checks must pass on the latest PR commit before the branch is considered ready for review.
 
 The React client authenticates against the Rust API and loads workspace records from PostgreSQL. Task creation, editing, deletion, assignments, comments, project creation, column management, invitation workflows, and drag-and-drop ordering call protected Axum endpoints; they no longer rely on browser-local demo records. New accounts receive a starter workspace and project board when the workspace endpoint is first loaded. Authenticated WebSocket sessions receive workspace-scoped events after committed mutations, and the frontend reloads the snapshot when remote changes arrive.
 
@@ -307,9 +314,9 @@ A CodeRabbit configuration is included in the repository root to guide pull-requ
 
 ## Product roadmap and architecture decisions
 
-The approved five-feature roadmap and the decisions for the target data model, API boundaries, security, and release order are documented here:
+The product roadmap and the decisions for the target data model, API boundaries, security, and release order are documented here:
 
 - [Product roadmap](docs/ROADMAP.md)
 - [Architecture and project decisions](docs/ARCHITECTURE.md)
 
-These roadmap features are planned and are not represented as implemented functionality. The documentation update does not authorize a merge or deployment.
+The collaboration-suite work is in draft PR #12 and is not merged or deployed. AI project assistance remains planned, not implemented. The roadmap also records the remaining production blockers.
