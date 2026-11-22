@@ -438,7 +438,7 @@ async fn add_activity(
     .bind(task_id)
     .bind(actor_id)
     .bind(event_type)
-    .bind(description)
+    .bind(&description)
     .execute(&mut **tx)
     .await?;
 
