@@ -114,12 +114,12 @@ export function CalendarPage({ data, onOpenTask, realtimeVersion = 0 }) {
       }
     }
     for (const task of calendar.tasks) {
-      const key = dateKey(task.due_at);
+      const key = task.due_date;
       if (!map.has(key)) map.set(key, []);
       map.get(key).push({ ...task, kind: "task" });
     }
     for (const items of map.values()) {
-      items.sort((a, b) => new Date(a.start_at || a.due_at) - new Date(b.start_at || b.due_at));
+      items.sort((a, b) => new Date(a.start_at || a.due_date + "T00:00:00") - new Date(b.start_at || b.due_date + "T00:00:00"));
     }
     return map;
   }, [calendar]);
