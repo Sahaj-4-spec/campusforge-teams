@@ -664,6 +664,7 @@ async fn process_deadline_notifications(state:&AppState){
                 'deadline:'||t.id::text||':'||ta.user_id::text||':'||to_char(t.due_at AT TIME ZONE 'UTC','YYYY-MM-DD')
             FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id
             JOIN lists l ON l.id=t.list_id JOIN boards b ON b.id=l.board_id
+            JOIN workspace_members wm ON wm.workspace_id=b.workspace_id AND wm.user_id=ta.user_id
             LEFT JOIN notification_preferences p ON p.user_id=ta.user_id AND p.notification_type='deadline_approaching'
             WHERE t.due_at>NOW() AND t.due_at<=NOW()+INTERVAL '24 hours'
               AND lower(l.name) NOT IN ('done','complete','completed')
