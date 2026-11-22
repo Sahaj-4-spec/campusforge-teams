@@ -581,7 +581,7 @@ export default function App() {
   }, [token]);
 
   useEffect(() => {
-    if (!token) return undefined;
+    if (!token || !data?.current_workspace_id) return undefined;
 
     let stopped = false;
     let retryTimer = null;
