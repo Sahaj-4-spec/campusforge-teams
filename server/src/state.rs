@@ -18,15 +18,17 @@ pub struct WorkspaceEvent {
 pub struct AppState {
     pub db: PgPool,
     pub jwt_secret: String,
+    pub storage: crate::storage::StorageService,
     pub workspace_events: broadcast::Sender<WorkspaceEvent>,
 }
 
 impl AppState {
-    pub fn new(db: PgPool, jwt_secret: String) -> Self {
+    pub fn new(db: PgPool, jwt_secret: String, storage: crate::storage::StorageService) -> Self {
         let (workspace_events, _) = broadcast::channel(256);
         Self {
             db,
             jwt_secret,
+            storage,
             workspace_events,
         }
     }
