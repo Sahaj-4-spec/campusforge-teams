@@ -23,6 +23,17 @@ struct TemporaryUpload {
     path: PathBuf,
 }
 
+#[cfg(unix)]
+fn create_private_upload_file(path: &PathBuf) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)
+}
+
+#[cfg(not(unix))]
+fn create_private_upload_file(path: &PathBuf) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new().write(true).create_new(true).open(path)
+}
+
 impl Drop for TemporaryUpload {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
@@ -541,9 +552,9 @@ async fn files_upload(
                 let temporary = TemporaryUpload {
                     path: std::env::temp_dir().join(format!("campusforge-upload-{}", Uuid::new_v4())),
                 };
-                let mut output = tokio::fs::File::create(&temporary.path)
-                    .await
-                    .map_err(|error| internal(error, "Could not create temporary upload"))?;
+                let output_file = create_private_upload_file(&temporary.path)
+                    .map_err(|error| internal(error, "Could not create private temporary upload"))?;
+                let mut output = tokio::fs::File::from_std(output_file);
                 let mut hasher = Sha256::new();
                 let mut total_bytes: usize = 0;
 
