@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, Plus, Repeat2, Tag, Trash2, X } from "lucide-react";
 import { advancedTaskApi } from "../lib/api.js";
 
@@ -16,25 +16,35 @@ export default function TaskAdvancedPanel({ task, lists, tasks, onChanged }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const loadRequestRef = useRef(0);
 
   async function load() {
-    if (!task?.id) return;
+    if (!task?.id) return false;
+    const requestId = ++loadRequestRef.current;
     setLoading(true);
     setError("");
     try {
       const [advanced, labels] = await Promise.all([advancedTaskApi.details(task.id), advancedTaskApi.labels()]);
+      if (requestId !== loadRequestRef.current) return false;
       setDetails(advanced);
       setAvailableLabels(labels);
       setIntervalDays(advanced.recurrence?.interval_days ? String(advanced.recurrence.interval_days) : "");
       setTargetListId(advanced.recurrence?.target_list_id || lists[0]?.id || "");
+      return true;
     } catch (requestError) {
-      setError(requestError.message || "Could not load advanced task details.");
+      if (requestId === loadRequestRef.current) {
+        setError(requestError.message || "Could not load advanced task details.");
+      }
+      return false;
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestRef.current) setLoading(false);
     }
   }
 
-  useEffect(() => { load(); }, [task?.id]);
+  useEffect(() => {
+    load();
+    return () => { loadRequestRef.current += 1; };
+  }, [task?.id]);
 
   async function run(action, successMessage) {
     setBusy(true);
@@ -45,8 +55,10 @@ export default function TaskAdvancedPanel({ task, lists, tasks, onChanged }) {
       setMessage(successMessage);
       await load();
       onChanged?.();
+      return true;
     } catch (requestError) {
       setError(requestError.message || "The task update could not be saved.");
+      return false;
     } finally {
       setBusy(false);
     }
@@ -55,22 +67,22 @@ export default function TaskAdvancedPanel({ task, lists, tasks, onChanged }) {
   async function createSubtask(event) {
     event.preventDefault();
     if (!subtaskTitle.trim()) return;
-    await run(() => advancedTaskApi.createSubtask(task.id, { title: subtaskTitle.trim() }), "Subtask added");
-    setSubtaskTitle("");
+    const succeeded = await run(() => advancedTaskApi.createSubtask(task.id, { title: subtaskTitle.trim() }), "Subtask added");
+    if (succeeded) setSubtaskTitle("");
   }
 
   async function createChecklistItem(event) {
     event.preventDefault();
     if (!checklistTitle.trim()) return;
-    await run(() => advancedTaskApi.addChecklistItem(task.id, checklistTitle.trim()), "Checklist item added");
-    setChecklistTitle("");
+    const succeeded = await run(() => advancedTaskApi.addChecklistItem(task.id, checklistTitle.trim()), "Checklist item added");
+    if (succeeded) setChecklistTitle("");
   }
 
   async function createLabel(event) {
     event.preventDefault();
     if (!labelName.trim()) return;
-    await run(() => advancedTaskApi.createLabel({ name: labelName.trim(), color: labelColor }), "Label created");
-    setLabelName("");
+    const succeeded = await run(() => advancedTaskApi.createLabel({ name: labelName.trim(), color: labelColor }), "Label created");
+    if (succeeded) setLabelName("");
   }
 
   async function saveRecurrence(event) {
@@ -126,7 +138,7 @@ export default function TaskAdvancedPanel({ task, lists, tasks, onChanged }) {
             {details.labels.map((label) => <button key={label.id} type="button" className="feature-label-pill" style={{ "--label-color": label.color }} onClick={() => run(() => advancedTaskApi.removeLabel(task.id, label.id), "Label removed")}>{label.name}<X size={12} /></button>)}
             {!details.labels.length && <p className="feature-empty-line">No labels attached.</p>}
           </div>
-          {unusedLabels.length > 0 && <div className="feature-inline-add"><select value="" onChange={(event) => { const id = event.target.value; if (id) run(() => advancedTaskApi.addLabel(task.id, id), "Label added"); }}><option value="">Add existing label…</option>{unusedLabels.map((label) => <option key={label.id} value={label.id}>{label.name}</option>)}</select></div>}
+          {unusedLabels.length > 0 && <div className="feature-inline-add"><select aria-label="Add existing label" value="" onChange={(event) => { const id = event.target.value; if (id) run(() => advancedTaskApi.addLabel(task.id, id), "Label added"); }}><option value="">Add existing label…</option>{unusedLabels.map((label) => <option key={label.id} value={label.id}>{label.name}</option>)}</select></div>}
           <form className="feature-label-create" onSubmit={createLabel}><input value={labelName} onChange={(event) => setLabelName(event.target.value)} placeholder="New label" maxLength={50} /><input type="color" value={labelColor} onChange={(event) => setLabelColor(event.target.value)} aria-label="Label color" /><button type="submit" disabled={busy || !labelName.trim()}><Plus size={14} /> Create</button></form>
         </section>
 
@@ -136,7 +148,7 @@ export default function TaskAdvancedPanel({ task, lists, tasks, onChanged }) {
             {details.dependencies.map((dependency) => <div className="feature-dependency-row" key={dependency.depends_on_task_id}><span><strong>{dependency.depends_on_title}</strong><small>{dependency.depends_on_status}</small></span><button type="button" onClick={() => run(() => advancedTaskApi.removeDependency(task.id, dependency.depends_on_task_id), "Dependency removed")} aria-label="Remove dependency"><X size={13} /></button></div>)}
             {!details.dependencies.length && <p className="feature-empty-line">No task dependencies.</p>}
           </div>
-          {dependencyCandidates.length > 0 && <div className="feature-inline-add"><select value={dependencyId} onChange={(event) => setDependencyId(event.target.value)}><option value="">Select a blocking task…</option>{dependencyCandidates.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select><button type="button" disabled={busy || !dependencyId} onClick={() => run(() => advancedTaskApi.addDependency(task.id, dependencyId), "Dependency added")} aria-label="Add dependency"><Plus size={16} /></button></div>}
+          {dependencyCandidates.length > 0 && <div className="feature-inline-add"><select aria-label="Select blocking task" value={dependencyId} onChange={(event) => setDependencyId(event.target.value)}><option value="">Select a blocking task…</option>{dependencyCandidates.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select><button type="button" disabled={busy || !dependencyId} onClick={() => run(() => advancedTaskApi.addDependency(task.id, dependencyId), "Dependency added")} aria-label="Add dependency"><Plus size={16} /></button></div>}
         </section>
 
         <section className="feature-advanced-card feature-recurring-card">
