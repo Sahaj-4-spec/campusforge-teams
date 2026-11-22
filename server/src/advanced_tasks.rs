@@ -63,6 +63,7 @@ struct SubtaskRow {
     due_date: Option<String>,
     estimated_minutes: Option<i32>,
     list_name: String,
+    is_done: bool,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -113,7 +114,8 @@ async fn advanced_details(
     let subtasks = sqlx::query_as::<_, SubtaskRow>(
         "SELECT t.id, t.parent_task_id, t.title, COALESCE(t.description,'') AS description,
            t.priority, CASE WHEN t.due_at IS NULL THEN NULL ELSE to_char(t.due_at AT TIME ZONE 'UTC','YYYY-MM-DD') END AS due_date,
-           t.estimated_minutes, l.name AS list_name
+           t.estimated_minutes, l.name AS list_name,
+           (lower(l.name) IN ('done','complete','completed')) AS is_done
          FROM tasks t JOIN lists l ON l.id=t.list_id
          WHERE t.parent_task_id=$1 ORDER BY t.position",
     )
@@ -235,14 +237,34 @@ async fn subtask_update(
     if title.is_some_and(|value| value.is_empty() || value.chars().count() > 180) {
         return Err(fail(StatusCode::BAD_REQUEST, "Subtask title must be between 1 and 180 characters"));
     }
-    let result = sqlx::query(
-        "UPDATE tasks SET title=COALESCE($1,title), updated_at=NOW(),
-           due_at=CASE WHEN $2::boolean IS NULL THEN due_at WHEN $2 THEN COALESCE(due_at,NOW()) ELSE NULL END
-         WHERE id=$3",
-    )
-    .bind(title).bind(input.is_done).bind(subtask_id)
-    .execute(&state.db).await.map_err(|error| internal(error, "Could not update subtask"))?;
-    if result.rows_affected()==0 { return Err(fail(StatusCode::NOT_FOUND,"Subtask not found")); }
+    let mut target_list: Option<Uuid> = None;
+    if let Some(is_done) = input.is_done {
+        let desired: Vec<&str> = if is_done { vec!["done", "complete", "completed"] } else { vec!["to do", "todo", "backlog"] };
+        target_list = sqlx::query_scalar(
+            "SELECT id FROM lists WHERE board_id=$1 AND lower(name)=ANY($2) ORDER BY position LIMIT 1",
+        )
+        .bind(board_id)
+        .bind(&desired)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|error| internal(error, "Could not find target subtask status"))?;
+        if target_list.is_none() {
+            return Err(fail(StatusCode::BAD_REQUEST, "Add a matching To do or Done column before changing subtask status"));
+        }
+    }
+    let mut tx = state.db.begin().await.map_err(|error| internal(error, "Could not begin subtask update"))?;
+    if let Some(destination) = target_list {
+        let position: i32 = sqlx::query_scalar("SELECT COALESCE(MAX(position),0)+1 FROM tasks WHERE list_id=$1")
+            .bind(destination).fetch_one(&mut *tx).await
+            .map_err(|error| internal(error, "Could not determine subtask position"))?;
+        sqlx::query("UPDATE tasks SET list_id=$1,position=$2 WHERE id=$3")
+            .bind(destination).bind(position).bind(subtask_id).execute(&mut *tx).await
+            .map_err(|error| internal(error, "Could not update subtask status"))?;
+    }
+    sqlx::query("UPDATE tasks SET title=COALESCE($1,title), updated_at=NOW() WHERE id=$2")
+        .bind(title).bind(subtask_id).execute(&mut *tx).await
+        .map_err(|error| internal(error, "Could not update subtask"))?;
+    tx.commit().await.map_err(|error| internal(error, "Could not save subtask"))?;
     state.publish_workspace_event(workspace_id, Some(board_id), "subtask_updated", "updated a subtask");
     Ok(StatusCode::NO_CONTENT)
 }
@@ -548,11 +570,14 @@ async fn process_recurrences(state:&AppState){
             Ok(rows)=>rows,Err(error)=>{tracing::error!(%error,"Could not load due recurrence rules");return;}
         };
     for job in jobs{
-        let template=sqlx::query_as::<_,(String,Option<String>,String,Option<chrono::DateTime<Utc>>,Uuid,Option<Uuid>,Option<i32>)>(
+        let template=match sqlx::query_as::<_,(String,Option<String>,String,Option<chrono::DateTime<Utc>>,Uuid,Option<Uuid>,Option<i32>)>(
             "SELECT t.title,t.description,t.priority,t.due_at,t.created_by,t.parent_task_id,t.estimated_minutes
              FROM tasks t WHERE t.id=$1")
-            .bind(job.template_task_id).fetch_optional(&mut *tx).await;
-        let Some(Ok(template))=Some(template) else{continue;};
+            .bind(job.template_task_id).fetch_optional(&mut *tx).await {
+                Ok(Some(row)) => row,
+                Ok(None) => continue,
+                Err(error) => { tracing::error!(%error,"Could not load recurring task template"); continue; }
+            };
         let position: i32=match sqlx::query_scalar("SELECT COALESCE(MAX(position),0)+1 FROM tasks WHERE list_id=$1")
             .bind(job.target_list_id).fetch_one(&mut *tx).await{
                 Ok(value)=>value,Err(error)=>{tracing::error!(%error,"Could not get recurrence task position");continue;}
