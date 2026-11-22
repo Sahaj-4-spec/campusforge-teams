@@ -105,12 +105,7 @@ impl FromRequestParts<AppState> for AuthUser {
                 }),
             ))?;
 
-        let decoded = decode::<Claims>(
-            token,
-            &DecodingKey::from_secret(state.jwt_secret.as_bytes()),
-            &Validation::default(),
-        )
-        .map_err(|_| {
+        let user_id = verify_token(token, &state.jwt_secret).map_err(|_| {
             (
                 StatusCode::UNAUTHORIZED,
                 Json(ApiError {
@@ -119,17 +114,20 @@ impl FromRequestParts<AppState> for AuthUser {
             )
         })?;
 
-        let user_id = uuid::Uuid::parse_str(&decoded.claims.sub).map_err(|_| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(ApiError {
-                    error: "Your session is invalid",
-                }),
-            )
-        })?;
-
         Ok(Self(user_id))
     }
+}
+
+/// Verify a bearer JWT and return the authenticated user ID.
+pub fn verify_token(token: &str, secret: &str) -> Result<uuid::Uuid, StatusCode> {
+    let decoded = decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &Validation::default(),
+    )
+    .map_err(|_| StatusCode::UNAUTHORIZED)?;
+
+    uuid::Uuid::parse_str(&decoded.claims.sub).map_err(|_| StatusCode::UNAUTHORIZED)
 }
 
 fn issue_token(user_id: uuid::Uuid, email: &str, secret: &str) -> Result<(String, i64), StatusCode> {
