@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
+  BarChart3,
   ArrowRight,
   ArrowUpRight,
   Bell,
@@ -33,13 +34,15 @@ import BoardView from "./components/BoardView.jsx";
 import TaskDialog from "./components/TaskDialog.jsx";
 import AuthScreen from "./components/AuthScreen.jsx";
 import ProjectDialog from "./components/ProjectDialog.jsx";
+import { DashboardOverview, WorkspaceTimeline, WorkspaceReports } from "./components/WorkspaceViews.jsx";
 import { boardApi, clearStoredToken, createWorkspaceSocket, getStoredToken, workspaceApi, taskApi, listApi, invitationApi } from "./lib/api.js";
 
 const navigation = [
   { id: "Overview", label: "Overview", icon: LayoutDashboard },
   { id: "My Tasks", label: "My tasks", icon: ListTodo },
   { id: "Team", label: "Team", icon: Users },
-  { id: "Activity", label: "Activity", icon: Activity }
+  { id: "Activity", label: "Activity", icon: Activity },
+  { id: "Reports", label: "Reports", icon: BarChart3 }
 ];
 
 function initials(name) {
@@ -890,7 +893,9 @@ export default function App() {
         return <TeamPage data={data} invitations={invitations} canManageInvites={canManageInvites} onInvite={createInvitation} onRevoke={revokeInvitation} />;
       }
       case "Activity":
-        return <ActivityPage data={data} />;
+        return <WorkspaceTimeline data={data} />;
+      case "Reports":
+        return <WorkspaceReports data={data} />;
       case "Projects":
         return <ProjectsPage data={data} onOpenBoard={openBoard} onCreateBoard={openNewBoard} canManageProjects={canManageWorkspace} />;
       case "Settings":
@@ -911,10 +916,12 @@ export default function App() {
             <section className="surface-panel help-panel"><h2>Working with your workspace</h2><p>Create tasks, move them between board columns, assign workspace members, add comments, and search your task list. Changes are saved to the CampusForge API and PostgreSQL.</p><p>Your session is protected by a signed access token. Workspace records are returned only to authenticated workspace members.</p></section>
           </div>
         );
+      case "Overview":
       default:
         return (
-          <OverviewPage
+          <DashboardOverview
             data={data}
+            currentUser={currentUser}
             onOpenBoard={openBoard}
             onOpenTask={openTask}
             onCreateTask={() => openNewTask()}
