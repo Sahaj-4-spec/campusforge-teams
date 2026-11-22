@@ -32,9 +32,13 @@ impl StorageService {
                 Ok(Self { backend: Backend::Local { directory } })
             }
             "s3" => {
-                let bucket = env::var("CAMPUSFORGE_S3_BUCKET").map_err(|_| {
-                    std::io::Error::new(std::io::ErrorKind::InvalidInput, "CAMPUSFORGE_S3_BUCKET is required when storage mode is s3")
-                })?;
+                let bucket = env::var("CAMPUSFORGE_S3_BUCKET")
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "CAMPUSFORGE_S3_BUCKET is required when storage mode is s3",
+                    ))?;
                 let region = env::var("CAMPUSFORGE_S3_REGION").unwrap_or_else(|_| "us-east-1".to_string());
                 let shared = aws_config::defaults(aws_config::BehaviorVersion::latest())
                     .region(Region::new(region))
@@ -120,7 +124,4 @@ impl StorageService {
         }
     }
 
-    pub fn is_s3(&self) -> bool {
-        matches!(self.backend, Backend::S3 { .. })
-    }
 }
