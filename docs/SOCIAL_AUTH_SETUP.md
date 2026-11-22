@@ -40,7 +40,11 @@ Create an application in the Discord Developer Portal and configure the OAuth2 r
 - New provider-only accounts are created with a NULL password hash; email/password login remains unchanged for password accounts.
 - OAuth state is a high-entropy random value. Only its SHA-256 hash is stored, and it is deleted when used or allowed to expire after ten minutes.
 - Provider access tokens are used only to fetch the user's verified identity and are not saved.
-- The API issues the same 24-hour CampusForge bearer session token used by email/password login.
+- The API issues the same 24-hour CampusForge session JWT for email/password and OAuth sign-in, but sends it only in an HttpOnly `campusforge_session` cookie. The token is not returned in the JSON body or placed in the redirect URL.
+- The browser includes cookies on API requests. The API permits credentialed CORS only for the configured `FRONTEND_ORIGIN` and checks the Origin on state-changing cookie-authenticated requests.
+- HTTPS deployments set the session cookie as `Secure; SameSite=None` for separately hosted frontend/API origins; local HTTP development uses `SameSite=Lax`.
+- WebSocket upgrades authenticate from the HttpOnly session cookie; the frontend never sends the JWT in a WebSocket message.
+- The client removes any old `campusforge-auth-token` localStorage entry on startup. Existing users on the new build must sign in once again to establish a cookie session.
 - Do not commit provider secrets. Store them in your local server environment and the eventual hosting provider's encrypted environment variables.
 - Before making the website public, configure HTTPS, exact callback URLs, the Google consent screen, a privacy policy, and terms of service.
 
