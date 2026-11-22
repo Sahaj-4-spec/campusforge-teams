@@ -462,8 +462,11 @@ function ProjectsPage({ data, onOpenBoard, onCreateBoard, canManageProjects }) {
 
 function AppSidebar({
   activeView, activeBoardId, onNavigate, onOpenBoard, onCreateBoard, boards, currentUser,
-  workspaces, currentWorkspaceId, onWorkspaceChange, workspaceName, activityCount, canManageProjects
+  workspaces, currentWorkspaceId, onWorkspaceChange, workspaceName, activityCount, canManageProjects,
+  onSignOut
 }) {
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+
   return (
     <aside className="sidebar">
       <a className="brand" href="#" onClick={(event) => { event.preventDefault(); onNavigate("Overview"); }} aria-label="CampusForge Teams home">
@@ -503,10 +506,59 @@ function AppSidebar({
       <div className="sidebar-bottom">
         <button className={"nav-item" + (activeView === "Help" ? " active" : "")} type="button" onClick={() => onNavigate("Help")}><CircleHelp size={18} /><span>Help & support</span></button>
         <button className={"nav-item" + (activeView === "Settings" ? " active" : "")} type="button" onClick={() => onNavigate("Settings")}><Settings size={18} /><span>Settings</span></button>
-        <div className="profile-card">
-          <Avatar name={currentUser?.full_name || "You"} />
-          <div className="profile-copy"><strong>{currentUser?.full_name || "Workspace member"}</strong><small>Signed-in account</small></div>
-          <MoreHorizontal size={18} />
+        <div
+          className="profile-menu-wrap"
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget)) setProfileMenuOpen(false);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setProfileMenuOpen(false);
+          }}
+        >
+          <button
+            className={"profile-card" + (profileMenuOpen ? " is-open" : "")}
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded={profileMenuOpen}
+            aria-label="Open account menu"
+            onClick={() => setProfileMenuOpen((open) => !open)}
+          >
+            <Avatar name={currentUser?.full_name || "You"} />
+            <span className="profile-copy">
+              <strong>{currentUser?.full_name || "Workspace member"}</strong>
+              <small>Signed-in account</small>
+            </span>
+            <MoreHorizontal size={18} aria-hidden="true" />
+          </button>
+          {profileMenuOpen && (
+            <div className="profile-menu" role="menu" aria-label="Account menu">
+              <div className="profile-menu-user">
+                <strong>{currentUser?.full_name || "Workspace member"}</strong>
+                <small>{currentUser?.email || "Signed-in account"}</small>
+              </div>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setProfileMenuOpen(false);
+                  onNavigate("Settings");
+                }}
+              >
+                <Settings size={15} /> Account settings
+              </button>
+              <button
+                className="profile-menu-signout"
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setProfileMenuOpen(false);
+                  onSignOut();
+                }}
+              >
+                <LogOut size={15} /> Sign out
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </aside>
@@ -1101,6 +1153,7 @@ export default function App() {
         boards={data.boards}
         currentUser={currentUser}
         canManageProjects={canManageWorkspace}
+        onSignOut={logout}
       />
       <div className="main-content">
         <header className="topbar">
@@ -1120,7 +1173,14 @@ export default function App() {
             )}
             <span className="preview-status"><i /> Database-backed</span>
             <button className="icon-button notification-button" type="button" aria-label={"Notifications" + (unreadNotifications ? ", " + unreadNotifications + " unread" : "")} onClick={() => navigate("Notifications")}><Bell size={18} />{unreadNotifications > 0 && <span className="notification-count-badge">{Math.min(unreadNotifications, 99)}</span>}</button>
-            <Avatar name={currentUser?.full_name || "You"} />
+            <button
+              className="topbar-profile-button"
+              type="button"
+              aria-label="Open account settings"
+              onClick={() => navigate("Settings")}
+            >
+              <Avatar name={currentUser?.full_name || "You"} />
+            </button>
           </div>
         </header>
 
