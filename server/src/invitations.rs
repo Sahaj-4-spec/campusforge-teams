@@ -61,7 +61,7 @@ async fn admin_workspace(
 ) -> Result<Option<Uuid>, sqlx::Error> {
     let membership: Option<(Uuid, String)> = sqlx::query_as(
         "SELECT workspace_id, role FROM workspace_members
-         WHERE user_id = $1 ORDER BY joined_at ASC LIMIT 1",
+         WHERE user_id = $1 ORDER BY joined_at DESC LIMIT 1",
     )
     .bind(user_id)
     .fetch_optional(&mut **tx)
