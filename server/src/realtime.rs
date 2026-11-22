@@ -55,7 +55,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         }
     };
 
-    let authentication: AuthenticateMessage = match serde_json::from_str(&message) {
+    let authentication: AuthenticateMessage = match serde_json::from_str::<AuthenticateMessage>(&message) {
         Ok(value) if value.message_type == "authenticate" => value,
         _ => {
             send_error(&mut socket, "Invalid WebSocket authentication message").await;
