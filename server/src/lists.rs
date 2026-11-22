@@ -237,6 +237,19 @@ async fn delete_list(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn column_name_is_trimmed_and_limited() {
+        assert_eq!(validate_name("  In progress  ").unwrap(), "In progress");
+        assert!(validate_name("   ").is_err());
+        assert!(validate_name(&"x".repeat(61)).is_err());
+        assert!(validate_name(&"x".repeat(60)).is_ok());
+    }
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/boards/{board_id}/lists", post(create_list))
