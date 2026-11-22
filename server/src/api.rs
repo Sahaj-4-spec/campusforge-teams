@@ -400,6 +400,7 @@ struct TaskInput {
     due_date: Option<NaiveDate>,
     list_id: Uuid,
     assignee_id: Option<Uuid>,
+    estimated_minutes: Option<i32>,
 }
 
 fn validate_task(input: &TaskInput) -> ApiResult<&str> {
@@ -409,6 +410,9 @@ fn validate_task(input: &TaskInput) -> ApiResult<&str> {
     }
     if input.description.as_ref().is_some_and(|value| value.chars().count() > 4000) {
         return Err(error(StatusCode::BAD_REQUEST, "Task description is too long"));
+    }
+    if input.estimated_minutes.is_some_and(|value| value < 1 || value > 100000) {
+        return Err(error(StatusCode::BAD_REQUEST, "Estimated time must be between 1 and 100000 minutes"));
     }
     let priority = input.priority.as_deref().unwrap_or("medium");
     if !["low", "medium", "high", "urgent"].contains(&priority) {
@@ -525,7 +529,7 @@ async fn create_task(
         .map_err(|cause| internal_error(cause, "Could not find task position"))?;
 
     let task_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO tasks (list_id, title, description, priority, due_at, position, created_by)          VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+        "INSERT INTO tasks (list_id, title, description, priority, due_at, position, created_by, estimated_minutes)          VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id",
     )
     .bind(input.list_id)
     .bind(title)
@@ -534,6 +538,7 @@ async fn create_task(
     .bind(due_at)
     .bind(position)
     .bind(user_id)
+    .bind(input.estimated_minutes)
     .fetch_one(&mut *tx)
     .await
     .map_err(|cause| internal_error(cause, "Could not create task"))?;
@@ -635,12 +640,13 @@ async fn update_task(
     }
 
     sqlx::query(
-        "UPDATE tasks SET title = $1, description = $2, priority = $3, due_at = $4, updated_at = NOW() WHERE id = $5",
+        "UPDATE tasks SET title = $1, description = $2, priority = $3, due_at = $4, estimated_minutes = $5, updated_at = NOW() WHERE id = $6",
     )
     .bind(title)
     .bind(description)
     .bind(priority)
     .bind(due_at)
+    .bind(input.estimated_minutes)
     .bind(task_id)
     .execute(&mut *tx)
     .await
