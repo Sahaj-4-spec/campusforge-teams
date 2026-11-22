@@ -1153,6 +1153,7 @@ export default function App() {
         onAddComment={addComment}
         allTasks={data.tasks}
         onAdvancedChanged={refreshWorkspace}
+        refreshKey={realtimeVersion}
       />
       {notice && <div className="toast-message" role="status"><CheckCircle2 size={16} />{notice}</div>}
     </div>
