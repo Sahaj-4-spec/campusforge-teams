@@ -929,7 +929,7 @@ export default function App() {
       case "Activity":
         return <WorkspaceTimeline data={data} />;
       case "Reports":
-        return <WorkspaceReports data={data} />;
+        return <WorkspaceReports data={data} realtimeVersion={realtimeVersion} />;
       case "Projects":
         return <ProjectsPage data={data} onOpenBoard={openBoard} onCreateBoard={openNewBoard} canManageProjects={canManageWorkspace} />;
       case "Settings":
