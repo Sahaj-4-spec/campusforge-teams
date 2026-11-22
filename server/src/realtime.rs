@@ -3,10 +3,9 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         State,
     },
-    http::StatusCode,
     response::IntoResponse,
     routing::get,
-    Json, Router,
+    Router,
 };
 use serde::Deserialize;
 use serde_json::json;
