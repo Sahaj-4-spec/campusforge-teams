@@ -229,7 +229,7 @@ export default function TaskDialog({
             </form>
           </section>
         )}
-        <div className="dialog-footnote"><CalendarDays size={13} /> Demo changes are saved in this browser only.</div>
+        <div className="dialog-footnote"><CalendarDays size={13} /> Changes are saved to your shared workspace.</div>
       </section>
     </div>
   );
