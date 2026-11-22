@@ -134,25 +134,34 @@ struct WorkspaceSnapshot {
 
 /// Ensure newly registered and older accounts both have a usable first workspace.
 async fn ensure_default_workspace(pool: &PgPool, user_id: Uuid) -> Result<(), sqlx::Error> {
+    // Serialize first-workspace creation so simultaneous first requests cannot create duplicates.
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+        .bind(user_id.to_string())
+        .execute(&mut *tx)
+        .await?;
+
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM workspace_members WHERE user_id = $1)",
     )
     .bind(user_id)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
 
     if exists {
+        tx.commit().await?;
         return Ok(());
     }
 
     let full_name: String = sqlx::query_scalar("SELECT full_name FROM users WHERE id = $1")
         .bind(user_id)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
 
-    let mut tx = pool.begin().await?;
     let workspace = sqlx::query_as::<_, WorkspaceRow>(
-        "INSERT INTO workspaces (name, description, owner_id)          VALUES ($1, $2, $3) RETURNING id, name, description, created_at",
+        "INSERT INTO workspaces (name, description, owner_id)
+         VALUES ($1, $2, $3)
+         RETURNING id, name, description, created_at",
     )
     .bind(format!("{full_name}'s Workspace"))
     .bind("A shared space for your team's projects and tasks.")
@@ -169,7 +178,9 @@ async fn ensure_default_workspace(pool: &PgPool, user_id: Uuid) -> Result<(), sq
     .await?;
 
     let board_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO boards (workspace_id, name, description, created_by)          VALUES ($1, 'My First Project', 'Organize your first team project here.', $2)          RETURNING id",
+        "INSERT INTO boards (workspace_id, name, description, created_by)
+         VALUES ($1, 'My First Project', 'Organize your first team project here.', $2)
+         RETURNING id",
     )
     .bind(workspace.id)
     .bind(user_id)
@@ -199,7 +210,6 @@ async fn ensure_default_workspace(pool: &PgPool, user_id: Uuid) -> Result<(), sq
     tx.commit().await?;
     Ok(())
 }
-
 async fn get_workspace(
     State(state): State<AppState>,
     AuthUser(user_id): AuthUser,
