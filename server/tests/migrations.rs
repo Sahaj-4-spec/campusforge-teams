@@ -154,6 +154,72 @@ async fn applies_all_postgres_migrations_and_creates_collaboration_tables() {
     .expect("object deletion outbox should be queryable");
     assert!(cascade_object_is_queued, "a board cascade must retain the deleted file's object key");
 
+    // Email-only preferences must not leak into the in-app inbox or unread
+    // count, while the independent email outbox remains eligible for delivery.
+    let notification_id = uuid::Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO notification_preferences(user_id,notification_type,in_app_enabled,email_enabled)
+         VALUES($1,'task_assigned',FALSE,TRUE)",
+    )
+    .bind(user_id)
+    .execute(&mut *transaction)
+    .await
+    .expect("email-only preference should be inserted");
+    sqlx::query(
+        "INSERT INTO notifications(id,workspace_id,recipient_user_id,notification_type,title,body)
+         VALUES($1,$2,$3,'task_assigned','Email-only update','This update should not appear in the in-app inbox')",
+    )
+    .bind(notification_id)
+    .bind(workspace_id)
+    .bind(user_id)
+    .execute(&mut *transaction)
+    .await
+    .expect("email-only notification should be inserted");
+    sqlx::query(
+        "INSERT INTO notification_email_outbox(notification_id,recipient_user_id)
+         VALUES($1,$2)",
+    )
+    .bind(notification_id)
+    .bind(user_id)
+    .execute(&mut *transaction)
+    .await
+    .expect("email-only outbox job should be inserted");
+
+    let inbox_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM notifications n
+         JOIN workspace_members wm ON wm.workspace_id=n.workspace_id AND wm.user_id=n.recipient_user_id
+         WHERE n.recipient_user_id=$1
+           AND COALESCE((SELECT np.in_app_enabled FROM notification_preferences np
+                         WHERE np.user_id=n.recipient_user_id AND np.notification_type=n.notification_type),TRUE)",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *transaction)
+    .await
+    .expect("in-app inbox query should succeed");
+    let unread_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM notifications n
+         JOIN workspace_members wm ON wm.workspace_id=n.workspace_id AND wm.user_id=n.recipient_user_id
+         WHERE n.recipient_user_id=$1 AND n.read_at IS NULL
+           AND COALESCE((SELECT np.in_app_enabled FROM notification_preferences np
+                         WHERE np.user_id=n.recipient_user_id AND np.notification_type=n.notification_type),TRUE)",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *transaction)
+    .await
+    .expect("in-app unread query should succeed");
+    let email_job_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM notification_email_outbox
+         WHERE notification_id=$1 AND recipient_user_id=$2 AND status='queued'",
+    )
+    .bind(notification_id)
+    .bind(user_id)
+    .fetch_one(&mut *transaction)
+    .await
+    .expect("email outbox should remain queryable");
+    assert_eq!(inbox_count, 0, "email-only notifications must not appear in the in-app inbox");
+    assert_eq!(unread_count, 0, "email-only notifications must not affect the unread count");
+    assert_eq!(email_job_count, 1, "email-only notification delivery must remain queued");
+
     transaction.rollback().await.expect("cascade fixture should roll back");
 
     pool.close().await;
