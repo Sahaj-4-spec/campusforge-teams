@@ -223,12 +223,11 @@ function CalendarPage({ data, onOpenTask }) {
             const outside = viewMode === "month" && day.getMonth() !== selectedDate.getMonth();
             const items = itemsByDate.get(key) || [];
             return (
-              <button className={"feature-calendar-day" + (selected ? " selected" : "") + (outside ? " outside" : "")} type="button" key={key}
-                onClick={() => { setSelectedDate(day); if (viewMode === "month" && items.length) setViewMode("day"); }}>
-                <span className="feature-calendar-day-number">{day.getDate()}</span>
+              <div className={"feature-calendar-day" + (selected ? " selected" : "") + (outside ? " outside" : "")} key={key}>
+                <button className="feature-calendar-day-number" type="button" onClick={() => { setSelectedDate(day); if (viewMode === "month" && items.length) setViewMode("day"); }} aria-label={displayDate(day, { weekday: "long", month: "long", day: "numeric" })}>{day.getDate()}</button>
                 <span className="feature-calendar-items">{renderItems(day)}</span>
                 {viewMode === "month" && items.length > 3 && <small>+{items.length - 3} more</small>}
-              </button>
+              </div>
             );
           })}
         </div>
