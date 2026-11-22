@@ -26,8 +26,6 @@ struct EmailContent {
     title: String,
     body: String,
     email_enabled: bool,
-    job_status: String,
-    job_attempts: i32,
 }
 
 #[derive(Debug, Serialize)]
@@ -47,12 +45,6 @@ async fn claim_email_jobs(state: &AppState) -> Vec<EmailJob> {
         }
     };
 
-    let exhausted = sqlx::query(
-        "UPDATE notification_email_outbox SET status='failed', locked_at=NULL, last_error='Delivery attempt limit exhausted', updated_at=NOW()
-          WHERE status='processing' AND locked_at < NOW() - INTERVAL '5 minutes' AND attempts >= 5"
-    ).execute(&mut *transaction).await;
-    if let Err(error) = exhausted { tracing::error!(%error, "Could not finalize exhausted notification jobs"); return Vec::new(); }
-
     let stale_ambiguous = sqlx::query(
         "UPDATE notification_email_outbox SET status='reconciliation', locked_at=NULL,
                 last_error='Provider idempotency window expired; reconcile delivery before retrying', updated_at=NOW()
@@ -60,6 +52,12 @@ async fn claim_email_jobs(state: &AppState) -> Vec<EmailJob> {
             AND first_provider_attempt_at < NOW() - INTERVAL '24 hours'"
     ).execute(&mut *transaction).await;
     if let Err(error) = stale_ambiguous { tracing::error!(%error, "Could not quarantine ambiguous notification jobs"); return Vec::new(); }
+
+    let exhausted = sqlx::query(
+        "UPDATE notification_email_outbox SET status='failed', locked_at=NULL, last_error='Delivery attempt limit exhausted', updated_at=NOW()
+          WHERE status='processing' AND locked_at < NOW() - INTERVAL '5 minutes' AND attempts >= 5"
+    ).execute(&mut *transaction).await;
+    if let Err(error) = exhausted { tracing::error!(%error, "Could not finalize exhausted notification jobs"); return Vec::new(); }
 
     let rows = match sqlx::query_as::<_, EmailJob>(
         "WITH next_jobs AS (
@@ -166,8 +164,7 @@ async fn send_one(
 ) {
     let content = sqlx::query_as::<_, EmailContent>(
         "SELECT u.email AS recipient_email, n.title, n.body,
-                COALESCE(np.email_enabled,FALSE) AS email_enabled,
-                outbox.status AS job_status, outbox.attempts AS job_attempts
+                COALESCE(np.email_enabled,FALSE) AS email_enabled
            FROM notifications n
            JOIN users u ON u.id=n.recipient_user_id
            JOIN workspace_members wm
