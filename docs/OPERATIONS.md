@@ -34,8 +34,8 @@ Bucket configuration requirements:
 2. Enable server-side encryption and versioning where supported.
 3. Grant the API only the minimum object permissions needed for the configured bucket/prefix: PutObject, GetObject, and DeleteObject.
 4. Do not configure browser CORS access to the bucket. Browser uploads/downloads go through the authenticated CampusForge API, which checks workspace membership.
-5. Configure lifecycle, retention, backup, and restore policies appropriate to team documents.
-6. Verify the service identity, bucket policy, and region before switching the application to S3 mode.
+5. If bucket versioning is enabled, configure an S3 lifecycle rule that expires noncurrent object versions (for example, after 30 days) and expires delete markers when no noncurrent versions remain. The adapter uses key-only DELETE, which creates a delete marker in a versioned bucket; without noncurrent-version expiry, deleted file bytes remain stored. If the provider cannot enforce this lifecycle policy, use an unversioned bucket for this adapter.\n6. Configure retention, backup, and restore policies appropriate to team documents.
+7. Verify the service identity, bucket policy, lifecycle rule, and region before switching the application to S3 mode.
 
 The application creates opaque object keys and stores file metadata/checksums in PostgreSQL. The download route checks workspace membership and streams the object through the API. It returns attachment disposition and X-Content-Type-Options: nosniff. Uploads are capped at 10 MB and currently limited by filename extension to common documents, images, compressed archives, and source/text files.
 
@@ -63,7 +63,7 @@ Before enabling email:
 5. Restart the backend and confirm the notification preferences endpoint reports email delivery as available.
 6. In Notification Centre, enable Email for the desired categories. Email is not enabled for a member by default.
 
-The API integration uses Resend's POST /emails endpoint with bearer authentication. The outbox uses a notification-specific idempotency key. Failures are retried with exponential backoff and are marked failed after five attempts. The sender uses plain text; no untrusted message body is inserted into HTML.
+The API integration uses Resend's POST /emails endpoint with bearer authentication. The outbox uses a notification-specific idempotency key. Failures are retried with exponential backoff and are marked failed after five attempts. Expired ambiguous sends outside the provider’s 24-hour idempotency retention window move to `reconciliation` and must be checked against provider delivery records before any manual retry. The sender uses plain text; no untrusted message body is inserted into HTML.
 
 See the Resend email API documentation: https://resend.com/docs/send-with-nodejs
 
@@ -87,6 +87,6 @@ The GitHub Actions backend job includes a PostgreSQL service and a migration smo
 ## 5. Retention, notification opt-out, and object deletion
 
 - Turning off an in-app notification category immediately removes that category from the inbox and unread count; saved notification rows remain so they can be shown again if the member re-enables the category.
-- Turning off an email category suppresses queued and processing outbox rows for that category. The worker rechecks the current preference immediately before sending. A provider request already in flight when the member changes the setting cannot be recalled.
+- Turning off an email category suppresses queued and processing outbox rows for that category. The worker rechecks the current preference and claimed outbox attempt before sending. A provider request already in flight when the member changes the setting cannot be recalled.
 - Every workspace file metadata deletion that has not already confirmed object removal writes its opaque storage key to object_deletion_outbox in the same database transaction. The trigger also runs for task, board, and workspace cascades, so the cleanup worker retains a durable reference to orphaned object bytes.
-- The cleanup worker retries failed object deletion with backoff. The outbox row is removed only after the storage adapter confirms deletion (including an already-missing object).
+- The cleanup worker retries failed object deletion with backoff. The outbox row is removed only after the storage adapter confirms deletion (including an already-missing object). Uploads also create a delayed cleanup intent before writing object bytes; metadata creation and intent removal commit together, so interrupted or partially failed uploads remain eligible for cleanup.
