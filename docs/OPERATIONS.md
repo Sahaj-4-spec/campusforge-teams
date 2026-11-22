@@ -15,7 +15,7 @@ The directory is ignored by Git. Local mode is for localhost development only; l
 
 ### Production S3-compatible storage
 
-The backend uses the AWS SDK for Rust to connect to Amazon S3 or an S3-compatible service. AWS credentials are resolved by the SDK's standard credential provider chain. Prefer an IAM role or platform workload identity; otherwise provide AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY as encrypted server environment variables.
+The backend signs S3-compatible REST requests using AWS Signature Version 4 over the existing Reqwest HTTP client. Configure a dedicated, least-privilege S3 access key and secret as encrypted backend environment variables; an optional AWS_SESSION_TOKEN supports temporary credentials. The current adapter does not discover IAM roles or platform workload identities automatically.
 
 Set the following only on the backend service:
 
@@ -25,7 +25,8 @@ Set the following only on the backend service:
 | CAMPUSFORGE_S3_BUCKET | Yes | Private bucket name |
 | CAMPUSFORGE_S3_REGION | Yes | Bucket region (defaults to us-east-1) |
 | CAMPUSFORGE_S3_ENDPOINT_URL | No | Endpoint URL for compatible services such as R2 or MinIO; path-style addressing is enabled when set |
-| AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY | Conditional | Use only when the platform does not provide an IAM-compatible role |
+| AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY | Yes | Dedicated least-privilege S3 credentials, supplied as backend secrets |
+| AWS_SESSION_TOKEN | No | Session token when using temporary S3 credentials |
 
 Bucket configuration requirements:
 
