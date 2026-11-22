@@ -478,7 +478,7 @@ async fn files_upload(
     let mut size_bytes: i64 = 0;
     let mut checksum = String::new();
 
-    while let Some(field) = multipart.next_field().await
+    while let Some(mut field) = multipart.next_field().await
         .map_err(|error| fail(StatusCode::BAD_REQUEST, format!("Invalid upload form: {error}")))? {
         let field_name = field.name().unwrap_or("").to_owned();
         match field_name.as_str() {
@@ -1042,7 +1042,7 @@ async fn cleanup_pending_files(state: &AppState) {
     for row in rows {
         match state.storage.delete(&row.storage_key).await {
             Ok(()) => {
-                match sqlx::query(
+                match sqlx::query_scalar::<_, Uuid>(
                     "DELETE FROM workspace_files WHERE id=$1 AND is_deleting=TRUE RETURNING workspace_id",
                 )
                 .bind(row.id)
