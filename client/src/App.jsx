@@ -523,14 +523,7 @@ function AppSidebar({
             aria-label="Open account menu"
             onClick={() => setProfileMenuOpen((open) => !open)}
           >
-            <button
-              className="topbar-profile-button"
-              type="button"
-              aria-label="Open account settings"
-              onClick={() => navigate("Settings")}
-            >
-              <Avatar name={currentUser?.full_name || "You"} />
-            </button>
+            <Avatar name={currentUser?.full_name || "You"} />
             <span className="profile-copy">
               <strong>{currentUser?.full_name || "Workspace member"}</strong>
               <small>Signed-in account</small>
@@ -1180,7 +1173,14 @@ export default function App() {
             )}
             <span className="preview-status"><i /> Database-backed</span>
             <button className="icon-button notification-button" type="button" aria-label={"Notifications" + (unreadNotifications ? ", " + unreadNotifications + " unread" : "")} onClick={() => navigate("Notifications")}><Bell size={18} />{unreadNotifications > 0 && <span className="notification-count-badge">{Math.min(unreadNotifications, 99)}</span>}</button>
-            <Avatar name={currentUser?.full_name || "You"} />
+            <button
+              className="topbar-profile-button"
+              type="button"
+              aria-label="Open account settings"
+              onClick={() => navigate("Settings")}
+            >
+              <Avatar name={currentUser?.full_name || "You"} />
+            </button>
           </div>
         </header>
 
