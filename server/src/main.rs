@@ -1,3 +1,4 @@
+mod api;
 mod auth;
 mod db;
 mod state;
@@ -89,6 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/health", get(health))
         .route("/api/health", get(health))
         .nest("/api/auth", auth::router())
+        .nest("/api", api::router())
         .with_state(state)
         .layer(cors)
         .layer(TraceLayer::new_for_http());
