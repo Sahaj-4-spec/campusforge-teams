@@ -30,7 +30,7 @@ import BoardView from "./components/BoardView.jsx";
 import TaskDialog from "./components/TaskDialog.jsx";
 import AuthScreen from "./components/AuthScreen.jsx";
 import ProjectDialog from "./components/ProjectDialog.jsx";
-import { boardApi, clearStoredToken, getStoredToken, workspaceApi, taskApi } from "./lib/api.js";
+import { boardApi, clearStoredToken, createWorkspaceSocket, getStoredToken, workspaceApi, taskApi } from "./lib/api.js";
 
 const navigation = [
   { id: "Overview", label: "Overview", icon: LayoutDashboard },
@@ -440,6 +440,69 @@ export default function App() {
       });
 
     return () => { cancelled = true; };
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return undefined;
+
+    let stopped = false;
+    let retryTimer = null;
+    let socket = null;
+    let attempts = 0;
+
+    function connect() {
+      if (stopped) return;
+      try {
+        socket = createWorkspaceSocket(token);
+      } catch (error) {
+        setNotice("Live updates are temporarily unavailable");
+        retryTimer = window.setTimeout(connect, 5000);
+        return;
+      }
+
+      socket.addEventListener("open", () => {
+        attempts = 0;
+      });
+
+      socket.addEventListener("message", (message) => {
+        try {
+          const payload = JSON.parse(message.data);
+          if (payload.type === "workspace_event" || payload.type === "refresh_required") {
+            workspaceApi.get()
+              .then((snapshot) => {
+                if (!stopped) setData(snapshot);
+              })
+              .catch((error) => {
+                if (error.status === 401 && !stopped) {
+                  clearStoredToken();
+                  setToken("");
+                  setData(null);
+                }
+              });
+          }
+        } catch {
+          // Ignore malformed messages and keep the session alive.
+        }
+      });
+
+      socket.addEventListener("close", () => {
+        if (stopped) return;
+        attempts += 1;
+        const delay = Math.min(30000, 1000 * (2 ** Math.min(attempts, 5)));
+        retryTimer = window.setTimeout(connect, delay);
+      });
+
+      socket.addEventListener("error", () => {
+        socket?.close();
+      });
+    }
+
+    connect();
+    return () => {
+      stopped = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
+      socket?.close();
+    };
   }, [token]);
 
   useEffect(() => {
