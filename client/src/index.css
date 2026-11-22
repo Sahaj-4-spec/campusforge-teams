@@ -942,3 +942,34 @@ dialog.feature-modal::backdrop {
     transition: none !important;
   }
 }
+
+
+/* Single-column sign-in after removing the promotional side panel. */
+.auth-screen-split {
+  display: grid;
+  min-height: 100svh;
+  grid-template-columns: minmax(0, 1fr);
+  place-items: center;
+  padding: clamp(18px, 4vw, 44px);
+  background: radial-gradient(circle at 50% 0%, #f0efff 0, transparent 36%), #f7f8fb;
+}
+.auth-screen-split .auth-card {
+  width: min(100%, 480px);
+  align-self: center;
+  justify-self: center;
+  padding: clamp(28px, 5vw, 44px);
+  border: 1px solid #e8eaf0;
+  border-radius: 22px;
+  background: #fff;
+  box-shadow: 0 24px 70px rgba(32, 36, 74, .08);
+}
+@media (max-width: 760px) {
+  .auth-screen-split { padding: 20px 14px; }
+  .auth-screen-split .auth-card {
+    width: min(100%, 460px);
+    padding: 28px clamp(20px, 6vw, 32px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .auth-screen-split .auth-card { animation: none !important; }
+}
