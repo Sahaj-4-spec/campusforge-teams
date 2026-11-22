@@ -58,10 +58,10 @@ CampusForge Teams is a Trello-inspired Kanban application. Team members can crea
 - Persist the new order in PostgreSQL.
 - Broadcast authorized board changes to connected members through native WebSockets.
 
-### 6. Roadmap: Deadline Risk Radar (not yet implemented)
-- Identify overdue tasks and upcoming deadlines.
-- Display project completion statistics.
-- Highlight tasks without an assigned member.
+### 6. Approved Roadmap (planned, not yet implemented)
+The next development roadmap includes five selected capabilities: advanced tasks and subtasks; a team calendar and deadline planner; a smart notification centre; shared files and documents; and an AI project assistant. They will be delivered in dependency order, beginning with the task model. See [the full roadmap](docs/ROADMAP.md) and [architecture/project decisions](docs/ARCHITECTURE.md) for scope, target data structures, API plans, acceptance criteria, and security boundaries.
+
+These are planning decisions only; no feature code or deployment is included in this documentation update.
 
 ## 🛠️ Technology Stack
 
@@ -304,3 +304,12 @@ CampusForge supports email/password authentication and server-side OAuth sign-in
 OAuth provider secrets must remain on the Rust API server and must never be added to frontend variables or committed to Git. Social-only accounts are stored with a nullable password hash, while existing password accounts continue to use Argon2 password verification. New OAuth identities are accepted only when the provider returns a verified email address.
 
 A CodeRabbit configuration is included in the repository root to guide pull-request reviews of OAuth handlers, auth code, migrations, and the sign-in UI. The CodeRabbit GitHub App must be installed and enabled for this repository before automated PR reviews can run.
+
+## Product roadmap and architecture decisions
+
+The approved five-feature roadmap and the decisions for the target data model, API boundaries, security, and release order are documented here:
+
+- [Product roadmap](docs/ROADMAP.md)
+- [Architecture and project decisions](docs/ARCHITECTURE.md)
+
+These roadmap features are planned and are not represented as implemented functionality. The documentation update does not authorize a merge or deployment.
