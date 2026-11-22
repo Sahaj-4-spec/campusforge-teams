@@ -397,10 +397,13 @@ async fn login(
     Ok(response)
 }
 
-async fn logout() -> Response {
+async fn logout(headers: HeaderMap) -> Result<Response, StatusCode> {
+    if !frontend_origin_matches(&headers) {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let mut response = StatusCode::NO_CONTENT.into_response();
     response.headers_mut().append(header::SET_COOKIE, clear_session_cookie_header());
-    response
+    Ok(response)
 }
 
 /// Public authentication endpoints; OAuth routes are merged by the application router.
@@ -440,6 +443,34 @@ mod tests {
         token.replace_range(signature_start..signature_start + 1, &replacement.to_string());
 
         assert_eq!(verify_token(&token, secret), Err(StatusCode::UNAUTHORIZED));
+    }
+
+    #[test]
+    fn session_cookie_is_http_only_and_scoped_to_the_application() {
+        let cookie = session_cookie_header("header.payload.signature", 3600)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+
+        assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("Path=/"));
+        assert!(cookie.contains("Max-Age=3600"));
+        assert!(!cookie.contains("campusforge-auth-token"));
+    }
+
+    #[test]
+    fn session_cookie_parser_reads_only_the_session_cookie() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_static("theme=dark; campusforge_session=header.payload.signature; other=value"),
+        );
+
+        assert_eq!(
+            session_token_from_headers(&headers).as_deref(),
+            Some("header.payload.signature")
+        );
     }
 
     #[test]
