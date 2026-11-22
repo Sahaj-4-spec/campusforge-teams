@@ -1,7 +1,7 @@
 use hmac::{Hmac, Mac};
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, HOST},
-    Client, Method,
+    redirect::Policy, Client, Method,
 };
 use sha2::{Digest, Sha256};
 use std::{env, path::{Component, Path, PathBuf}};
@@ -218,6 +218,8 @@ impl StorageService {
                 let endpoint_url = env::var("CAMPUSFORGE_S3_ENDPOINT_URL").ok().filter(|value| !value.trim().is_empty());
                 let client = Client::builder()
                     .timeout(std::time::Duration::from_secs(60))
+                    // SigV4 credentials include x-amz-security-token; never forward them across redirects.
+                    .redirect(Policy::none())
                     .user_agent("CampusForgeTeams/1.0")
                     .build()
                     .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))?;
@@ -245,34 +247,6 @@ impl StorageService {
             return Err("Invalid server-generated object key".to_string());
         }
         Ok(())
-    }
-
-    pub async fn put(&self, key: &str, bytes: &[u8], content_type: &str) -> Result<(), String> {
-        Self::validate_key(key)?;
-        match &self.backend {
-            Backend::Local { directory } => {
-                let path = directory.join(key);
-                if let Some(parent) = path.parent() {
-                    tokio::fs::create_dir_all(parent).await.map_err(|error| error.to_string())?;
-                }
-                tokio::fs::write(path, bytes).await.map_err(|error| error.to_string())
-            }
-            Backend::S3(backend) => {
-                let method = Method::PUT;
-                let url = object_url(backend, key)?;
-                let payload_hash = sha256_hex(bytes);
-                let headers = signed_headers(backend, &method, &url, &payload_hash, Some(content_type))?;
-                let response = backend.client.put(url)
-                    .headers(headers)
-                    .body(bytes.to_vec())
-                    .send().await
-                    .map_err(|error| format!("S3 upload request failed: {error}"))?;
-                if !response.status().is_success() {
-                    return Err(s3_error(response, "upload").await);
-                }
-                Ok(())
-            }
-        }
     }
 
     pub async fn put_file(
