@@ -243,10 +243,16 @@ function OverviewPage({ data, onOpenBoard, onOpenTask, onCreateTask, onNavigate 
 
 function MyTasksPage({ data, onOpenTask, search }) {
   const [filter, setFilter] = useState("all");
+  const assignedTaskIds = new Set(
+    data.task_assignees
+      .filter((assignment) => assignment.user_id === data.current_user_id)
+      .map((assignment) => assignment.task_id)
+  );
   const tasks = data.tasks.filter((task) => {
+    const assignedToCurrentUser = assignedTaskIds.has(task.id);
     const queryMatch = !search || (task.title + " " + task.description).toLowerCase().includes(search.toLowerCase());
     const filterMatch = filter === "all" || task.priority === filter || getListName(task, data.lists).toLowerCase() === filter;
-    return queryMatch && filterMatch;
+    return assignedToCurrentUser && queryMatch && filterMatch;
   }).sort((a, b) => (a.due_date || "9999").localeCompare(b.due_date || "9999"));
 
   return (
