@@ -1,6 +1,6 @@
 use hmac::{Hmac, Mac};
 use reqwest::{
-    header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE, HOST},
+    header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, HOST},
     Client, Method,
 };
 use sha2::{Digest, Sha256};
@@ -281,6 +281,7 @@ impl StorageService {
         source: &Path,
         content_type: &str,
         checksum_sha256: &str,
+        size_bytes: u64,
     ) -> Result<(), String> {
         Self::validate_key(key)?;
         match &self.backend {
@@ -301,8 +302,11 @@ impl StorageService {
                 let method = Method::PUT;
                 let url = object_url(backend, key)?;
                 let headers = signed_headers(backend, &method, &url, checksum_sha256, Some(content_type))?;
+                let content_length = HeaderValue::from_str(&size_bytes.to_string())
+                    .map_err(|_| "S3 upload size is invalid".to_string())?;
                 let response = backend.client.put(url)
                     .headers(headers)
+                    .header(CONTENT_LENGTH, content_length)
                     .body(body)
                     .send().await
                     .map_err(|error| format!("S3 upload request failed: {error}"))?;
