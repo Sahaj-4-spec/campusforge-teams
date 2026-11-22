@@ -615,35 +615,57 @@ async fn process_recurrences(state:&AppState){
 
 async fn process_deadline_notifications(state:&AppState){
     let approaching=sqlx::query_as::<_,(Uuid,Uuid)>(
-        "INSERT INTO notifications(workspace_id,recipient_user_id,notification_type,title,body,resource_type,resource_id,dedupe_key)
-         SELECT b.workspace_id,ta.user_id,'deadline_approaching','Deadline approaching',
-            'A task assigned to you is due within the next 24 hours.','task',t.id,
-            'deadline:'||t.id::text||':'||ta.user_id::text||':'||to_char(t.due_at AT TIME ZONE 'UTC','YYYY-MM-DD')
-         FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id
-         JOIN lists l ON l.id=t.list_id JOIN boards b ON b.id=l.board_id
-         LEFT JOIN notification_preferences p ON p.user_id=ta.user_id AND p.notification_type='deadline_approaching'
-         WHERE t.due_at>NOW() AND t.due_at<=NOW()+INTERVAL '24 hours'
-           AND lower(l.name) NOT IN ('done','complete','completed')
-           AND COALESCE(p.in_app_enabled,TRUE)
-         ON CONFLICT(dedupe_key) DO NOTHING
-         RETURNING workspace_id,recipient_user_id")
+        "WITH inserted AS (
+            INSERT INTO notifications(workspace_id,recipient_user_id,notification_type,title,body,resource_type,resource_id,dedupe_key)
+            SELECT b.workspace_id,ta.user_id,'deadline_approaching','Deadline approaching',
+                'A task assigned to you is due within the next 24 hours.','task',t.id,
+                'deadline:'||t.id::text||':'||ta.user_id::text||':'||to_char(t.due_at AT TIME ZONE 'UTC','YYYY-MM-DD')
+            FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id
+            JOIN lists l ON l.id=t.list_id JOIN boards b ON b.id=l.board_id
+            LEFT JOIN notification_preferences p ON p.user_id=ta.user_id AND p.notification_type='deadline_approaching'
+            WHERE t.due_at>NOW() AND t.due_at<=NOW()+INTERVAL '24 hours'
+              AND lower(l.name) NOT IN ('done','complete','completed')
+              AND (COALESCE(p.in_app_enabled,TRUE) OR COALESCE(p.email_enabled,FALSE))
+            ON CONFLICT(dedupe_key) DO NOTHING
+            RETURNING id,workspace_id,recipient_user_id
+         ),
+         queued_emails AS (
+            INSERT INTO notification_email_outbox(notification_id,recipient_user_id)
+            SELECT i.id,i.recipient_user_id FROM inserted i
+            JOIN notification_preferences p ON p.user_id=i.recipient_user_id AND p.notification_type='deadline_approaching'
+            WHERE p.email_enabled
+            ON CONFLICT(notification_id) DO NOTHING
+            RETURNING notification_id
+         )
+         SELECT workspace_id,recipient_user_id FROM inserted")
         .fetch_all(&state.db).await;
     if let Ok(rows)=approaching{
         for (workspace_id,_) in rows{state.publish_workspace_event(workspace_id,None,"notification_created","a deadline reminder is available");}
     }
     let overdue=sqlx::query_as::<_,(Uuid,Uuid)>(
-        "INSERT INTO notifications(workspace_id,recipient_user_id,notification_type,title,body,resource_type,resource_id,dedupe_key)
-         SELECT b.workspace_id,ta.user_id,'overdue_task','Task overdue',
-            'A task assigned to you is overdue.','task',t.id,
-            'overdue:'||t.id::text||':'||ta.user_id::text||':'||to_char(t.due_at AT TIME ZONE 'UTC','YYYY-MM-DD')
-         FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id
-         JOIN lists l ON l.id=t.list_id JOIN boards b ON b.id=l.board_id
-         LEFT JOIN notification_preferences p ON p.user_id=ta.user_id AND p.notification_type='overdue_task'
-         WHERE t.due_at<NOW() AND t.due_at>=NOW()-INTERVAL '24 hours'
-           AND lower(l.name) NOT IN ('done','complete','completed')
-           AND COALESCE(p.in_app_enabled,TRUE)
-         ON CONFLICT(dedupe_key) DO NOTHING
-         RETURNING workspace_id,recipient_user_id")
+        "WITH inserted AS (
+            INSERT INTO notifications(workspace_id,recipient_user_id,notification_type,title,body,resource_type,resource_id,dedupe_key)
+            SELECT b.workspace_id,ta.user_id,'overdue_task','Task overdue',
+                'A task assigned to you is overdue.','task',t.id,
+                'overdue:'||t.id::text||':'||ta.user_id::text||':'||to_char(t.due_at AT TIME ZONE 'UTC','YYYY-MM-DD')
+            FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id
+            JOIN lists l ON l.id=t.list_id JOIN boards b ON b.id=l.board_id
+            LEFT JOIN notification_preferences p ON p.user_id=ta.user_id AND p.notification_type='overdue_task'
+            WHERE t.due_at<NOW() AND t.due_at>=NOW()-INTERVAL '24 hours'
+              AND lower(l.name) NOT IN ('done','complete','completed')
+              AND (COALESCE(p.in_app_enabled,TRUE) OR COALESCE(p.email_enabled,FALSE))
+            ON CONFLICT(dedupe_key) DO NOTHING
+            RETURNING id,workspace_id,recipient_user_id
+         ),
+         queued_emails AS (
+            INSERT INTO notification_email_outbox(notification_id,recipient_user_id)
+            SELECT i.id,i.recipient_user_id FROM inserted i
+            JOIN notification_preferences p ON p.user_id=i.recipient_user_id AND p.notification_type='overdue_task'
+            WHERE p.email_enabled
+            ON CONFLICT(notification_id) DO NOTHING
+            RETURNING notification_id
+         )
+         SELECT workspace_id,recipient_user_id FROM inserted")
         .fetch_all(&state.db).await;
     if let Ok(rows)=overdue{
         for (workspace_id,_) in rows{state.publish_workspace_event(workspace_id,None,"notification_created","an overdue task reminder is available");}
