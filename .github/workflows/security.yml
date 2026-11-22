@@ -34,8 +34,18 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-audit
+      # Cargo.lock can contain optional feature dependencies that are not compiled.
+      # Verify the advisory crates are absent from the active normal/build dependency graph
+      # before excluding their lockfile-only advisories from cargo-audit.
+      - name: Verify optional vulnerable crates are not enabled
+        run: |
+          cargo tree --manifest-path server/Cargo.toml --edges normal,build --prefix none > /tmp/campusforge-dependencies.txt
+          if grep -E '^(libsqlite3-sys|rsa) v' /tmp/campusforge-dependencies.txt; then
+            echo "::error::SQLite or RSA is present in the active backend dependency graph"
+            exit 1
+          fi
       - name: Audit Rust dependencies
-        run: cargo audit --file server/Cargo.lock
+        run: cargo audit --file server/Cargo.lock --ignore RUSTSEC-2026-0459 --ignore RUSTSEC-2023-0071
 
   codeql:
     name: CodeQL JavaScript analysis
