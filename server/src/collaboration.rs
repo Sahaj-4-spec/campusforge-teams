@@ -727,52 +727,8 @@ async fn file_delete(
     .await
     .map_err(|error| internal(error, "Could not schedule file deletion"))?;
 
-    match state.storage.delete(&storage_key).await {
-        Ok(()) => {
-            let confirmed = sqlx::query(
-                "UPDATE workspace_files SET object_delete_confirmed=TRUE
-                  WHERE id=$1 AND workspace_id=$2 AND is_deleting=TRUE",
-            )
-            .bind(file_id)
-            .bind(workspace_id)
-            .execute(&state.db)
-            .await
-            .map_err(|error| internal(error, "Could not confirm object deletion"))?;
-            if confirmed.rows_affected() == 0 {
-                return Err(fail(StatusCode::CONFLICT, "File deletion is queued for cleanup"));
-            }
-            let result = sqlx::query(
-                "DELETE FROM workspace_files WHERE id=$1 AND workspace_id=$2 AND is_deleting=TRUE",
-            )
-            .bind(file_id)
-            .bind(workspace_id)
-            .execute(&state.db)
-            .await
-            .map_err(|error| internal(error, "Could not remove file metadata"))?;
-            if result.rows_affected() == 0 {
-                return Err(fail(StatusCode::CONFLICT, "File deletion is queued for cleanup"));
-            }
-            state.publish_workspace_event(workspace_id, None, "file_deleted", "deleted a workspace file");
-            Ok(StatusCode::NO_CONTENT)
-        }
-        Err(error) => {
-            tracing::warn!(%error, file_id=%file_id, "File deletion queued for background cleanup");
-            sqlx::query(
-                "UPDATE workspace_files
-                    SET delete_attempts=delete_attempts+1,
-                        delete_error=$2,
-                        delete_after=NOW()+INTERVAL '60 seconds'
-                  WHERE id=$1 AND is_deleting=TRUE",
-            )
-            .bind(file_id)
-            .bind(error)
-            .execute(&state.db)
-            .await
-            .map_err(|update_error| internal(update_error, "Could not persist file cleanup retry"))?;
-            state.publish_workspace_event(workspace_id, None, "file_deletion_queued", "queued workspace file deletion");
-            Ok(StatusCode::ACCEPTED)
-        }
-    }
+    state.publish_workspace_event(workspace_id, "file_deletion_queued", "queued workspace file deletion");
+    Ok(StatusCode::ACCEPTED)
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -1122,7 +1078,7 @@ async fn cleanup_pending_files(state: &AppState) {
                     "UPDATE workspace_files
                         SET delete_attempts=delete_attempts+1,
                             delete_error=$2,
-                            delete_after=NOW()+make_interval(secs=>$3)
+                            delete_after=statement_timestamp()+make_interval(secs=>$3)
                       WHERE id=$1 AND is_deleting=TRUE",
                 )
                 .bind(row.id)
