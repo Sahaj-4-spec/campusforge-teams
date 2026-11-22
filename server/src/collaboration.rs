@@ -15,7 +15,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::time::{interval, Duration as TokioDuration};
 use uuid::Uuid;
 
-use crate::{auth::AuthUser, state::AppState};
+use crate::{auth::{AuthUser, WorkspaceUser}, state::AppState};
 
 const MAX_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
 
@@ -43,17 +43,6 @@ fn fail(status: StatusCode, message: impl Into<String>) -> (StatusCode, Json<Err
 fn internal<E: std::fmt::Display>(error: E, context: &'static str) -> (StatusCode, Json<ErrorBody>) {
     tracing::error!(%error, "{context}");
     fail(StatusCode::INTERNAL_SERVER_ERROR, "The request could not be completed")
-}
-
-async fn workspace_for_user(state: &AppState, user_id: Uuid) -> ApiResult<Uuid> {
-    sqlx::query_scalar(
-        "SELECT workspace_id FROM workspace_members WHERE user_id = $1 ORDER BY joined_at DESC LIMIT 1",
-    )
-    .bind(user_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|error| internal(error, "Could not resolve user's workspace"))?
-    .ok_or_else(|| fail(StatusCode::NOT_FOUND, "Workspace not found"))
 }
 
 async fn board_in_workspace(state: &AppState, board_id: Uuid, workspace_id: Uuid) -> ApiResult<()> {
@@ -121,10 +110,9 @@ struct CalendarRange {
 
 async fn calendar_list(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Query(range): Query<CalendarRange>,
 ) -> ApiResult<Json<Value>> {
-    let workspace_id = workspace_for_user(&state, user_id).await?;
     let today = Utc::now().date_naive();
     let from = range.from.unwrap_or(today - Duration::days(30));
     let to = range.to.unwrap_or(today + Duration::days(60));
@@ -207,11 +195,10 @@ fn validate_calendar_input(input: &CalendarEventInput) -> ApiResult<()> {
 
 async fn calendar_create(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Json(input): Json<CalendarEventInput>,
 ) -> ApiResult<(StatusCode, Json<CalendarEvent>)> {
     validate_calendar_input(&input)?;
-    let workspace_id = workspace_for_user(&state, user_id).await?;
     if let Some(board_id) = input.board_id {
         board_in_workspace(&state, board_id, workspace_id).await?;
     }
@@ -242,12 +229,11 @@ async fn calendar_create(
 
 async fn calendar_update(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Path(event_id): Path<Uuid>,
     Json(input): Json<CalendarEventInput>,
 ) -> ApiResult<StatusCode> {
     validate_calendar_input(&input)?;
-    let workspace_id = workspace_for_user(&state, user_id).await?;
     if let Some(board_id) = input.board_id {
         board_in_workspace(&state, board_id, workspace_id).await?;
     }
@@ -278,10 +264,9 @@ async fn calendar_update(
 
 async fn calendar_delete(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Path(event_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let workspace_id = workspace_for_user(&state, user_id).await?;
     let result = sqlx::query("DELETE FROM calendar_events WHERE id=$1 AND workspace_id=$2")
         .bind(event_id)
         .bind(workspace_id)
@@ -466,9 +451,8 @@ struct WorkspaceFile {
 
 async fn files_list(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
 ) -> ApiResult<Json<Vec<WorkspaceFile>>> {
-    let workspace_id = workspace_for_user(&state, user_id).await?;
     let rows = sqlx::query_as::<_, WorkspaceFile>(
         "SELECT id, workspace_id, board_id, task_id, uploaded_by, original_name, media_type,
                 size_bytes, checksum_sha256, created_at
@@ -483,10 +467,9 @@ async fn files_list(
 
 async fn files_upload(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     mut multipart: Multipart,
 ) -> ApiResult<(StatusCode, Json<WorkspaceFile>)> {
-    let workspace_id = workspace_for_user(&state, user_id).await?;
     let mut board_id: Option<Uuid> = None;
     let mut task_id: Option<Uuid> = None;
     let mut original_name = String::new();
@@ -632,10 +615,9 @@ async fn files_upload(
 
 async fn file_download(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Path(file_id): Path<Uuid>,
 ) -> ApiResult<Response<axum::body::Body>> {
-    let workspace_id = workspace_for_user(&state, user_id).await?;
     let row: Option<(String, String, String)> = sqlx::query_as(
         "SELECT storage_key, original_name, media_type FROM workspace_files WHERE id=$1 AND workspace_id=$2 AND is_deleting=FALSE",
     )
@@ -672,10 +654,9 @@ async fn file_download(
 
 async fn file_delete(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Path(file_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let workspace_id = workspace_for_user(&state, user_id).await?;
     let existing: Option<(String, bool)> = sqlx::query_as(
         "SELECT storage_key, is_deleting FROM workspace_files
          WHERE id=$1 AND workspace_id=$2 AND uploaded_by=$3",
@@ -759,10 +740,9 @@ struct ChatQuery {
 
 async fn chat_list(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Query(query): Query<ChatQuery>,
 ) -> ApiResult<Json<Vec<ChatMessage>>> {
-    let workspace_id = workspace_for_user(&state, user_id).await?;
     if let Some(board_id) = query.board_id {
         board_in_workspace(&state, board_id, workspace_id).await?;
     }
@@ -791,14 +771,13 @@ struct ChatInput {
 
 async fn chat_send(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Json(input): Json<ChatInput>,
 ) -> ApiResult<(StatusCode, Json<ChatMessage>)> {
     let body = input.body.trim();
     if body.is_empty() || body.chars().count() > 4000 {
         return Err(fail(StatusCode::BAD_REQUEST, "Message must be between 1 and 4000 characters"));
     }
-    let workspace_id = workspace_for_user(&state, user_id).await?;
     if let Some(board_id) = input.board_id {
         board_in_workspace(&state, board_id, workspace_id).await?;
     }
@@ -860,9 +839,8 @@ fn validate_meeting_note(input: &MeetingNoteInput) -> ApiResult<()> {
 
 async fn meeting_notes_list(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
 ) -> ApiResult<Json<Vec<MeetingNote>>> {
-    let workspace_id = workspace_for_user(&state, user_id).await?;
     let rows = sqlx::query_as::<_, MeetingNote>(
         "SELECT id, workspace_id, board_id, created_by, title, meeting_at, attendees,
                 agenda, notes, action_items, created_at, updated_at
@@ -877,11 +855,10 @@ async fn meeting_notes_list(
 
 async fn meeting_note_create(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Json(input): Json<MeetingNoteInput>,
 ) -> ApiResult<(StatusCode, Json<MeetingNote>)> {
     validate_meeting_note(&input)?;
-    let workspace_id = workspace_for_user(&state, user_id).await?;
     if let Some(board_id) = input.board_id {
         board_in_workspace(&state, board_id, workspace_id).await?;
     }
@@ -910,12 +887,11 @@ async fn meeting_note_create(
 
 async fn meeting_note_update(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Path(note_id): Path<Uuid>,
     Json(input): Json<MeetingNoteInput>,
 ) -> ApiResult<StatusCode> {
     validate_meeting_note(&input)?;
-    let workspace_id = workspace_for_user(&state, user_id).await?;
     if let Some(board_id) = input.board_id {
         board_in_workspace(&state, board_id, workspace_id).await?;
     }
@@ -945,10 +921,9 @@ async fn meeting_note_update(
 
 async fn meeting_note_delete(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Path(note_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let workspace_id = workspace_for_user(&state, user_id).await?;
     let result = sqlx::query("DELETE FROM meeting_notes WHERE id=$1 AND workspace_id=$2 AND created_by=$3")
         .bind(note_id)
         .bind(workspace_id)
@@ -965,9 +940,8 @@ async fn meeting_note_delete(
 
 async fn analytics(
     State(state): State<AppState>,
-    AuthUser(user_id): AuthUser,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
 ) -> ApiResult<Json<Value>> {
-    let workspace_id = workspace_for_user(&state, user_id).await?;
     let (total, completed, overdue, unassigned): (i64, i64, i64, i64) = sqlx::query_as(
         "SELECT
            COUNT(*)::bigint,
