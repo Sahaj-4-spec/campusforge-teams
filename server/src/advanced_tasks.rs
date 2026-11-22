@@ -195,7 +195,7 @@ async fn subtask_create(
     let position: i32 = sqlx::query_scalar("SELECT COALESCE(MAX(position),0)+1 FROM tasks WHERE list_id=$1")
         .bind(list_id).fetch_one(&mut *tx).await
         .map_err(|error| internal(error, "Could not get subtask position"))?;
-    let task = sqlx::query(
+    let subtask_id: Uuid = sqlx::query_scalar(
         "INSERT INTO tasks (list_id,title,description,priority,due_at,position,created_by,parent_task_id,estimated_minutes)
          VALUES ($1,$2,$3,'medium',$4,$5,$6,$7,$8) RETURNING id",
     )
@@ -204,7 +204,6 @@ async fn subtask_create(
     .bind(due_at).bind(position).bind(user_id).bind(parent_task_id).bind(input.estimated_minutes)
     .fetch_one(&mut *tx).await
     .map_err(|error| internal(error, "Could not create subtask"))?;
-    let subtask_id: Uuid = task.try_get("id").map_err(|error| internal(error, "Could not read new subtask"))?;
     sqlx::query(
         "INSERT INTO activity_events (workspace_id,board_id,task_id,actor_id,event_type,payload)
          VALUES ($1,$2,$3,$4,'subtask_created',jsonb_build_object('description',$5))",
