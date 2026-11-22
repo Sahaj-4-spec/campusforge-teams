@@ -38,7 +38,7 @@ async fn send_error(socket: &mut WebSocket, message: &'static str) {
 
 async fn user_workspace(pool: &PgPool, user_id: Uuid) -> Result<Option<Uuid>, sqlx::Error> {
     sqlx::query_scalar(
-        "SELECT workspace_id FROM workspace_members          WHERE user_id = $1 ORDER BY joined_at ASC LIMIT 1",
+        "SELECT workspace_id FROM workspace_members          WHERE user_id = $1 ORDER BY joined_at DESC LIMIT 1",
     )
     .bind(user_id)
     .fetch_optional(pool)
