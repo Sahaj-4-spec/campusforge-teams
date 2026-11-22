@@ -5,11 +5,11 @@ import {
   PointerSensor,
   closestCorners,
   useSensor,
-  useSensors
+  useSensors,
+  useDroppable
 } from "@dnd-kit/core";
 import {
   SortableContext,
-  useDroppable,
   useSortable,
   verticalListSortingStrategy
 } from "@dnd-kit/sortable";
