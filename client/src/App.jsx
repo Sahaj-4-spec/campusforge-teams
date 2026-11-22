@@ -28,7 +28,8 @@ import {
 } from "lucide-react";
 import BoardView from "./components/BoardView.jsx";
 import TaskDialog from "./components/TaskDialog.jsx";
-import { createId, createDemoData, loadDemoData, STORAGE_KEY } from "./data/demoData.js";
+import AuthScreen from "./components/AuthScreen.jsx";
+import { clearStoredToken, getStoredToken, workspaceApi, taskApi } from "./lib/api.js";
 
 const navigation = [
   { id: "Overview", label: "Overview", icon: LayoutDashboard },
@@ -307,7 +308,7 @@ function TeamPage({ data }) {
             );
           })}
         </div>
-        <p className="demo-note">Invitations and role changes will be connected to the backend after authentication and workspace APIs are complete.</p>
+        <p className="demo-note">Workspace members and roles are loaded from the shared database.</p>
       </section>
     </div>
   );
@@ -356,7 +357,7 @@ function AppSidebar({ activeView, onNavigate, onOpenBoard, boards, currentUser }
       </a>
       <div className="workspace-switcher">
         <span className="workspace-avatar">C</span>
-        <span><strong>CampusForge</strong><small>Free workspace</small></span>
+        <span><strong>CampusForge</strong><small>Shared workspace</small></span>
         <ChevronDown size={15} />
       </div>
       <div className="sidebar-section-label">WORKSPACE</div>
@@ -380,7 +381,7 @@ function AppSidebar({ activeView, onNavigate, onOpenBoard, boards, currentUser }
         <button className={"nav-item" + (activeView === "Settings" ? " active" : "")} type="button" onClick={() => onNavigate("Settings")}><Settings size={18} /><span>Settings</span></button>
         <div className="profile-card">
           <Avatar name={currentUser?.full_name || "You"} />
-          <div className="profile-copy"><strong>{currentUser?.full_name || "Workspace member"}</strong><small>Demo account</small></div>
+          <div className="profile-copy"><strong>{currentUser?.full_name || "Workspace member"}</strong><small>Signed-in account</small></div>
           <MoreHorizontal size={18} />
         </div>
       </div>
@@ -389,9 +390,12 @@ function AppSidebar({ activeView, onNavigate, onOpenBoard, boards, currentUser }
 }
 
 export default function App() {
-  const [data, setData] = useState(() => loadDemoData());
+  const [token, setToken] = useState(() => getStoredToken() || "");
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(() => Boolean(getStoredToken()));
+  const [loadError, setLoadError] = useState("");
   const [activeView, setActiveView] = useState("Overview");
-  const [activeBoardId, setActiveBoardId] = useState(() => loadDemoData().boards[0]?.id || "");
+  const [activeBoardId, setActiveBoardId] = useState("");
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState(null);
@@ -399,11 +403,56 @@ export default function App() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notice, setNotice] = useState("");
 
-  const currentUser = data.users.find((user) => user.id === data.current_user_id);
-  const activeBoard = data.boards.find((board) => board.id === activeBoardId) || data.boards[0];
-  const activeLists = data.lists.filter((list) => list.board_id === activeBoard?.id).sort((a, b) => a.position - b.position);
-  const boardTasks = data.tasks.filter((task) => task.board_id === activeBoard?.id);
-  const editingTask = data.tasks.find((task) => task.id === editingTaskId) || null;
+  useEffect(() => {
+    if (!token) {
+      setData(null);
+      setLoading(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+    setLoadError("");
+    workspaceApi.get()
+      .then((workspace) => {
+        if (cancelled) return;
+        setData(workspace);
+        setActiveBoardId((current) =>
+          workspace.boards.some((board) => board.id === current)
+            ? current
+            : (workspace.boards[0]?.id || "")
+        );
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        if (error.status === 401) {
+          clearStoredToken();
+          setToken("");
+          setData(null);
+        } else {
+          setLoadError(error.message || "Unable to load your workspace.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [token]);
+
+  useEffect(() => {
+    if (!notice) return undefined;
+    const timeout = window.setTimeout(() => setNotice(""), 3200);
+    return () => window.clearTimeout(timeout);
+  }, [notice]);
+
+  const currentUser = data?.users.find((user) => user.id === data.current_user_id);
+  const activeBoard = data?.boards.find((board) => board.id === activeBoardId) || data?.boards[0];
+  const activeLists = (data?.lists || [])
+    .filter((list) => list.board_id === activeBoard?.id)
+    .sort((a, b) => a.position - b.position);
+  const boardTasks = (data?.tasks || []).filter((task) => task.board_id === activeBoard?.id);
+  const editingTask = data?.tasks.find((task) => task.id === editingTaskId) || null;
   const editingAssignees = editingTask
     ? data.task_assignees.filter((item) => item.task_id === editingTask.id).map((item) => item.user_id)
     : [];
@@ -414,33 +463,27 @@ export default function App() {
     return boardTasks.filter((task) => (task.title + " " + task.description).toLowerCase().includes(query));
   }, [boardTasks, search]);
 
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    } catch (error) {
-      console.warn("CampusForge demo changes could not be saved.", error);
+  async function refreshWorkspace() {
+    const workspace = await workspaceApi.get();
+    setData(workspace);
+    if (!workspace.boards.some((board) => board.id === activeBoardId)) {
+      setActiveBoardId(workspace.boards[0]?.id || "");
     }
-  }, [data]);
-
-  useEffect(() => {
-    if (!notice) return undefined;
-    const timeout = window.setTimeout(() => setNotice(""), 2600);
-    return () => window.clearTimeout(timeout);
-  }, [notice]);
-
-  function updateData(updater) {
-    setData((current) => updater(current));
   }
 
-  function addActivity(description, eventType, boardId = activeBoard?.id) {
-    return {
-      id: createId(),
-      board_id: boardId,
-      actor_id: data.current_user_id,
-      event_type: eventType,
-      description,
-      created_at: new Date().toISOString()
-    };
+  function handleAuthenticated(nextToken) {
+    setToken(nextToken);
+    setActiveView("Overview");
+    setLoadError("");
+  }
+
+  function logout() {
+    clearStoredToken();
+    setToken("");
+    setData(null);
+    setActiveView("Overview");
+    setActiveBoardId("");
+    setNotice("");
   }
 
   function openBoard(board) {
@@ -474,129 +517,73 @@ export default function App() {
     setEditingTaskId(null);
   }
 
-  function saveTask(values) {
-    const now = new Date().toISOString();
-    if (editingTask) {
-      updateData((current) => {
-        const previousList = current.lists.find((item) => item.id === editingTask.list_id);
-        const nextList = current.lists.find((item) => item.id === values.list_id);
-        const updatedTasks = current.tasks.map((task) => task.id === editingTask.id
-          ? { ...task, ...values, updated_at: now }
-          : task);
-        const assignments = current.task_assignees.filter((item) => item.task_id !== editingTask.id);
-        if (values.assignee_id) assignments.push({ task_id: editingTask.id, user_id: values.assignee_id });
-        const changedList = previousList?.id !== nextList?.id;
-        const event = {
-          id: createId(),
-          board_id: editingTask.board_id,
-          actor_id: current.current_user_id,
-          event_type: changedList ? "task_moved" : "task_updated",
-          description: changedList ? "moved a task to " + (nextList?.name || "another list") : "updated a task",
-          created_at: now
-        };
-        return { ...current, tasks: updatedTasks, task_assignees: assignments, activity_events: [event, ...current.activity_events] };
-      });
-      setNotice("Task updated");
-    } else {
-      const newTask = {
-        id: createId(),
-        board_id: activeBoard?.id,
-        list_id: values.list_id,
-        title: values.title,
-        description: values.description,
-        priority: values.priority,
-        due_date: values.due_date,
-        position: boardTasks.filter((task) => task.list_id === values.list_id).length + 1,
-        created_by: data.current_user_id,
-        created_at: now,
-        updated_at: now
-      };
-      updateData((current) => ({
-        ...current,
-        tasks: [...current.tasks, newTask],
-        task_assignees: values.assignee_id
-          ? [...current.task_assignees, { task_id: newTask.id, user_id: values.assignee_id }]
-          : current.task_assignees,
-        activity_events: [{
-          id: createId(), board_id: newTask.board_id, actor_id: current.current_user_id,
-          event_type: "task_created", description: "created " + newTask.title, created_at: now
-        }, ...current.activity_events]
-      }));
-      setNotice("Task created");
+  async function saveTask(values) {
+    try {
+      if (editingTask) {
+        await taskApi.update(editingTask.id, values);
+        setNotice("Task updated");
+      } else {
+        await taskApi.create(values);
+        setNotice("Task created");
+      }
+      await refreshWorkspace();
+      closeDialog();
+    } catch (error) {
+      setNotice(error.message || "Could not save task");
     }
-    closeDialog();
   }
 
-  function deleteTask(taskId) {
-    const task = data.tasks.find((item) => item.id === taskId);
-    updateData((current) => ({
-      ...current,
-      tasks: current.tasks.filter((item) => item.id !== taskId),
-      task_assignees: current.task_assignees.filter((item) => item.task_id !== taskId),
-      comments: current.comments.filter((item) => item.task_id !== taskId),
-      activity_events: [{
-        id: createId(), board_id: task?.board_id, actor_id: current.current_user_id,
-        event_type: "task_deleted", description: "deleted " + (task?.title || "a task"), created_at: new Date().toISOString()
-      }, ...current.activity_events]
-    }));
-    closeDialog();
-    setNotice("Task deleted");
+  async function deleteTask(taskId) {
+    try {
+      await taskApi.remove(taskId);
+      await refreshWorkspace();
+      closeDialog();
+      setNotice("Task deleted");
+    } catch (error) {
+      setNotice(error.message || "Could not delete task");
+    }
   }
 
-  function addComment(taskId, body) {
-    const now = new Date().toISOString();
-    updateData((current) => ({
-      ...current,
-      comments: [...current.comments, {
-        id: createId(), task_id: taskId, author_id: current.current_user_id, body, created_at: now
-      }],
-      activity_events: [{
-        id: createId(), board_id: current.tasks.find((task) => task.id === taskId)?.board_id,
-        actor_id: current.current_user_id, event_type: "comment_added",
-        description: "added a comment to a task", created_at: now
-      }, ...current.activity_events]
-    }));
-    setNotice("Comment added");
+  async function addComment(taskId, body) {
+    try {
+      await taskApi.addComment(taskId, body);
+      await refreshWorkspace();
+      setNotice("Comment added");
+    } catch (error) {
+      setNotice(error.message || "Could not add comment");
+    }
   }
 
-  function moveTask(taskId, destinationListId, overId) {
-    const task = data.tasks.find((item) => item.id === taskId);
-    if (!task || !destinationListId) return;
-    const now = new Date().toISOString();
-    updateData((current) => {
-      const moving = current.tasks.find((item) => item.id === taskId);
-      const destinationTasks = current.tasks
-        .filter((item) => item.list_id === destinationListId && item.id !== taskId)
-        .sort((a, b) => a.position - b.position);
-      const overTaskIndex = destinationTasks.findIndex((item) => item.id === overId);
-      const insertAt = overTaskIndex >= 0 ? overTaskIndex : destinationTasks.length;
-      destinationTasks.splice(insertAt, 0, { ...moving, list_id: destinationListId });
-      const positionById = new Map(destinationTasks.map((item, index) => [item.id, index + 1]));
-      const nextTasks = current.tasks.map((item) => {
-        if (item.id === taskId) return { ...item, list_id: destinationListId, position: positionById.get(item.id), updated_at: now };
-        if (item.list_id === destinationListId) return { ...item, position: positionById.get(item.id) };
-        return item;
-      });
-      const listName = current.lists.find((item) => item.id === destinationListId)?.name || "another list";
-      return {
-        ...current,
-        tasks: nextTasks,
-        activity_events: [{
-          id: createId(), board_id: moving.board_id, actor_id: current.current_user_id,
-          event_type: "task_moved", description: "moved " + moving.title + " to " + listName, created_at: now
-        }, ...current.activity_events]
-      };
-    });
-    setNotice("Task moved");
+  async function moveTask(taskId, destinationListId, overId) {
+    const movingTask = data?.tasks.find((task) => task.id === taskId);
+    if (!movingTask || !destinationListId) return;
+
+    const destinationTasks = data.tasks
+      .filter((task) => task.list_id === destinationListId && task.id !== taskId)
+      .sort((a, b) => a.position - b.position);
+    const overIndex = destinationTasks.findIndex((task) => task.id === overId);
+    const insertAt = overIndex >= 0 ? overIndex : destinationTasks.length;
+    destinationTasks.splice(insertAt, 0, movingTask);
+
+    try {
+      await taskApi.move(taskId, destinationListId, destinationTasks.map((task) => task.id));
+      await refreshWorkspace();
+      setNotice("Task moved");
+    } catch (error) {
+      setNotice(error.message || "Could not move task");
+    }
   }
 
-  function resetDemo() {
-    const fresh = createDemoData();
-    setData(fresh);
-    setActiveBoardId(fresh.boards[0]?.id || "");
-    setActiveView("Overview");
-    setSearch("");
-    setNotice("Demo workspace reset");
+  async function retryWorkspaceLoad() {
+    setLoading(true);
+    setLoadError("");
+    try {
+      await refreshWorkspace();
+    } catch (error) {
+      setLoadError(error.message || "Unable to load your workspace.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   function renderPage() {
@@ -625,18 +612,19 @@ export default function App() {
       case "Settings":
         return (
           <div className="page-stack">
-            <div className="page-title-row"><div><p className="eyebrow">PREFERENCES</p><h1>Settings</h1><p className="page-subtitle">Manage your local demo workspace.</p></div></div>
+            <div className="page-title-row"><div><p className="eyebrow">ACCOUNT & PREFERENCES</p><h1>Settings</h1><p className="page-subtitle">Manage your signed-in account and workspace session.</p></div></div>
             <section className="surface-panel settings-panel">
-              <div className="settings-row"><div><strong>Demo workspace data</strong><p>Reset local demo data to its original sample state. This only affects this browser.</p></div><button className="secondary-button danger-outline" type="button" onClick={resetDemo}>Reset demo data</button></div>
-              <div className="settings-row"><div><strong>Backend connection</strong><p>The Rust/Axum API is not connected to the frontend yet. No account or remote data is being used.</p></div><span className="connection-badge"><i /> Demo mode</span></div>
+              <div className="settings-row"><div><strong>Signed-in account</strong><p>{currentUser?.full_name || "Workspace member"} · {currentUser?.email || ""}</p></div><span className="connection-badge"><i /> Authenticated</span></div>
+              <div className="settings-row"><div><strong>Workspace data</strong><p>Boards, tasks, assignments, comments, and activity are loaded from the CampusForge API and saved in PostgreSQL.</p></div><span className="connection-badge"><i /> Connected</span></div>
+              <div className="settings-row"><div><strong>Session</strong><p>Sign out on this device. Your saved workspace data remains on the server.</p></div><button className="secondary-button danger-outline" type="button" onClick={logout}><LogOut size={15} /> Sign out</button></div>
             </section>
           </div>
         );
       case "Help":
         return (
           <div className="page-stack">
-            <div className="page-title-row"><div><p className="eyebrow">WE'RE HERE TO HELP</p><h1>Help & support</h1><p className="page-subtitle">A quick guide to the current frontend preview.</p></div></div>
-            <section className="surface-panel help-panel"><h2>Working with the preview</h2><p>Create tasks, move them between board columns, assign team members, add comments, and search your task list. Changes persist in this browser using local storage.</p><p>This is a frontend-only demo. Sign-in, invitations, server persistence, and real-time multi-user updates will be connected after the backend is implemented.</p></section>
+            <div className="page-title-row"><div><p className="eyebrow">WE'RE HERE TO HELP</p><h1>Help & support</h1><p className="page-subtitle">A quick guide to your shared workspace.</p></div></div>
+            <section className="surface-panel help-panel"><h2>Working with your workspace</h2><p>Create tasks, move them between board columns, assign workspace members, add comments, and search your task list. Changes are saved to the CampusForge API and PostgreSQL.</p><p>Your session is protected by a signed access token. Workspace records are returned only to authenticated workspace members.</p></section>
           </div>
         );
       default:
@@ -650,6 +638,28 @@ export default function App() {
           />
         );
     }
+  }
+
+  if (loading) {
+    return <main className="auth-screen"><section className="auth-card"><p className="eyebrow">CAMPUSFORGE TEAMS</p><h1>Loading your workspace…</h1><p>Connecting to your account and retrieving your projects.</p></section></main>;
+  }
+
+  if (!token) return <AuthScreen onAuthenticated={handleAuthenticated} />;
+
+  if (loadError || !data) {
+    return (
+      <main className="auth-screen">
+        <section className="auth-card">
+          <p className="eyebrow">WORKSPACE CONNECTION</p>
+          <h1>We couldn't load your workspace.</h1>
+          <p>{loadError || "The API did not return workspace data."}</p>
+          <div className="auth-form">
+            <button className="primary-button auth-submit" type="button" onClick={retryWorkspaceLoad}>Try again</button>
+            <button className="secondary-button" type="button" onClick={logout}>Sign out</button>
+          </div>
+        </section>
+      </main>
+    );
   }
 
   const pageTitle = activeView === "Board" ? activeBoard?.name || "Project board" : activeView;
@@ -681,7 +691,7 @@ export default function App() {
                 <kbd>⌘ K</kbd>
               </label>
             )}
-            <span className="preview-status"><i /> Local preview</span>
+            <span className="preview-status"><i /> Synced workspace</span>
             <button className="icon-button notification-button" type="button" aria-label="Notifications" onClick={() => navigate("Activity")}><Bell size={18} /><span className="notification-dot" /></button>
             <Avatar name={currentUser?.full_name || "You"} />
           </div>
