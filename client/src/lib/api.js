@@ -1,17 +1,4 @@
-const TOKEN_KEY = "campusforge-auth-token";
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
-
-export function getStoredToken() {
-  return window.localStorage.getItem(TOKEN_KEY);
-}
-
-export function storeToken(token) {
-  window.localStorage.setItem(TOKEN_KEY, token);
-}
-
-export function clearStoredToken() {
-  window.localStorage.removeItem(TOKEN_KEY);
-}
 
 async function request(path, options = {}) {
   const headers = new Headers(options.headers || {});
@@ -21,13 +8,12 @@ async function request(path, options = {}) {
     headers.set("Content-Type", "application/json");
   }
 
-  const token = getStoredToken();
-  if (token) headers.set("Authorization", "Bearer " + token);
 
   let response;
   try {
     response = await fetch(API_BASE + path, {
       ...options,
+      credentials: "include",
       headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body)
     });
@@ -57,6 +43,7 @@ async function request(path, options = {}) {
 export const authApi = {
   register: (values) => request("/api/auth/register", { method: "POST", body: values }),
   login: (values) => request("/api/auth/login", { method: "POST", body: values }),
+  logout: () => request("/api/auth/logout", { method: "POST" }),
   oauthStartUrl: (provider) => (API_BASE || window.location.origin) + "/api/auth/oauth/" + encodeURIComponent(provider) + "/start"
 };
 
@@ -101,16 +88,10 @@ export const taskApi = {
   )
 };
 
-export function createWorkspaceSocket(token) {
+export function createWorkspaceSocket() {
   const origin = API_BASE || window.location.origin;
   const websocketOrigin = origin
     .replace(/^https:/i, "wss:")
     .replace(/^http:/i, "ws:");
-  const socket = new WebSocket(websocketOrigin + "/ws");
-
-  socket.addEventListener("open", () => {
-    socket.send(JSON.stringify({ type: "authenticate", token }));
-  });
-
-  return socket;
+  return new WebSocket(websocketOrigin + "/ws");
 }
