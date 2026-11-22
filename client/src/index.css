@@ -835,3 +835,110 @@ dialog.feature-modal::backdrop {
 /* Workspace switching remains available in the mobile navigation. */
 .mobile-workspace-select { display: grid; gap: 6px; padding: 8px 5px 12px; color: #697187; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 .mobile-workspace-select select { width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid #e5e7ef; border-radius: 8px; color: #3e455b; background: #fff; font: inherit; font-size: 13px; letter-spacing: 0; text-transform: none; }
+
+
+/* Polished account controls and restrained authentication motion. */
+.profile-menu-wrap { position: relative; min-width: 0; }
+.profile-card {
+  width: 100%; min-width: 0; border: 0; border-radius: 10px; color: inherit;
+  background: transparent; text-align: left; cursor: pointer;
+  transition: background .18s ease, transform .18s ease;
+}
+.profile-card:hover, .profile-card.is-open { background: #f4f6f2; }
+.profile-card:active { transform: translateY(1px); }
+.profile-card:focus-visible { outline: 3px solid rgba(103,89,232,.28); outline-offset: 2px; }
+.profile-menu {
+  position: absolute; z-index: 60; right: 0; bottom: calc(100% + 8px); left: 0;
+  display: grid; gap: 4px; padding: 7px; border: 1px solid #e7ebe5;
+  border-radius: 12px; background: #fff; box-shadow: 0 18px 45px rgba(25,35,28,.16);
+  transform-origin: bottom left; animation: cf-profile-menu-in .16s ease-out both;
+}
+.profile-menu-user { display: grid; min-width: 0; gap: 4px; padding: 8px 9px 10px; border-bottom: 1px solid #eef1ed; }
+.profile-menu-user strong { overflow: hidden; color: #26332a; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.profile-menu-user small { overflow: hidden; color: #89958b; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.profile-menu > button {
+  display: flex; min-height: 36px; align-items: center; gap: 9px; padding: 0 9px;
+  border: 0; border-radius: 8px; color: #59675d; background: transparent;
+  font-size: 9px; font-weight: 650; text-align: left; cursor: pointer;
+  transition: color .16s ease, background .16s ease;
+}
+.profile-menu > button:hover { color: #4e43bb; background: #f5f4ff; }
+.profile-menu > button.profile-menu-signout { color: #b86f6b; }
+.profile-menu > button.profile-menu-signout:hover { color: #a94e4b; background: #fff4f3; }
+.topbar-profile-button {
+  display: grid; width: 38px; height: 38px; flex: 0 0 auto; place-items: center;
+  padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer;
+  transition: transform .18s ease, box-shadow .18s ease;
+}
+.topbar-profile-button:hover { transform: translateY(-1px); box-shadow: 0 0 0 4px rgba(81,130,98,.1); }
+.topbar-profile-button:focus-visible { outline: 3px solid rgba(103,89,232,.28); outline-offset: 2px; }
+
+.auth-screen-split .auth-card {
+  animation: cf-auth-card-in .72s cubic-bezier(.2,.75,.25,1) both;
+}
+.auth-screen-split .auth-side-panel {
+  animation: cf-auth-panel-in .84s cubic-bezier(.2,.75,.25,1) .06s both;
+}
+.auth-panel-copy { animation: cf-auth-copy-in .72s ease-out .2s both; }
+.auth-side-panel::before { animation: cf-auth-grid-drift 42s linear infinite; }
+.auth-orbit-one { animation: cf-auth-orbit-one 19s ease-in-out infinite alternate; }
+.auth-orbit-two { animation: cf-auth-orbit-two 23s ease-in-out infinite alternate; }
+.auth-panel-pill { animation: cf-auth-pill-glow 5s ease-in-out 1s infinite; }
+.settings-panel {
+  animation: cf-settings-in .42s cubic-bezier(.2,.75,.25,1) both;
+}
+.settings-row { transition: background .18s ease, padding .18s ease; }
+.settings-row:not(:last-child):hover { background: #fbfcfa; }
+
+@keyframes cf-auth-card-in {
+  from { opacity: 0; transform: translate3d(0,14px,0); }
+  to { opacity: 1; transform: translate3d(0,0,0); }
+}
+@keyframes cf-auth-panel-in {
+  from { opacity: 0; transform: translate3d(14px,0,0) scale(.99); }
+  to { opacity: 1; transform: translate3d(0,0,0) scale(1); }
+}
+@keyframes cf-auth-copy-in {
+  from { opacity: 0; transform: translate3d(0,10px,0); }
+  to { opacity: 1; transform: translate3d(0,0,0); }
+}
+@keyframes cf-auth-grid-drift {
+  from { background-position: 0 0; }
+  to { background-position: 42px 42px; }
+}
+@keyframes cf-auth-orbit-one {
+  from { translate: 0 0; }
+  to { translate: -9px 12px; }
+}
+@keyframes cf-auth-orbit-two {
+  from { translate: 0 0; }
+  to { translate: 7px -10px; }
+}
+@keyframes cf-auth-pill-glow {
+  0%, 100% { box-shadow: 0 0 0 rgba(95,205,235,0); }
+  50% { box-shadow: 0 0 22px rgba(95,205,235,.12); }
+}
+@keyframes cf-settings-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes cf-profile-menu-in {
+  from { opacity: 0; transform: translateY(5px) scale(.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .auth-screen-split .auth-card,
+  .auth-screen-split .auth-side-panel,
+  .auth-panel-copy,
+  .auth-side-panel::before,
+  .auth-orbit-one,
+  .auth-orbit-two,
+  .auth-panel-pill,
+  .settings-panel,
+  .profile-menu {
+    animation: none !important;
+  }
+  .profile-card, .topbar-profile-button, .profile-menu > button {
+    transition: none !important;
+  }
+}
