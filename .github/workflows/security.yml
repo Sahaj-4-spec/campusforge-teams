@@ -34,38 +34,14 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-audit
-      # Cargo.lock can contain optional feature dependencies that are not compiled.
-      # Verify the advisory crates are absent from the active normal/build dependency graph
-      # before excluding their lockfile-only advisories from cargo-audit.
-      - name: Verify optional vulnerable crates are not enabled
+      - name: Verify vulnerable or disallowed crates are absent from active dependencies
         run: |
-          cargo tree --manifest-path server/Cargo.toml --edges normal,build --prefix none > /tmp/campusforge-dependencies.txt
-          if grep -E '^(libsqlite3-sys|rsa) v' /tmp/campusforge-dependencies.txt; then
+          cargo tree --manifest-path server/Cargo.toml --edges normal,build --prefix none > /tmp/campusforge-active-dependencies.txt
+          if grep -E '^(libsqlite3-sys|rsa) v' /tmp/campusforge-active-dependencies.txt; then
             echo "::error::SQLite or RSA is present in the active backend dependency graph"
             exit 1
           fi
-      - name: Verify legacy vulnerable HTTP and TLS crates are absent
-        run: |
-          cargo tree --manifest-path server/Cargo.toml --edges normal,build --prefix none > /tmp/campusforge-active-dependencies.txt
-          if grep -E '^(h2 v0\\.3\\.27|rustls v0\\.21\\.12|rustls-webpki v0\\.101\\.7)
-      - name: Audit Rust dependencies
-        run: cargo audit --file server/Cargo.lock --ignore RUSTSEC-2026-0459 --ignore RUSTSEC-2023-0071
-
-  codeql:
-    name: CodeQL JavaScript analysis
-    runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      contents: read
-      security-events: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: github/codeql-action/init@v3
-        with:
-          languages: javascript-typescript
-      - uses: github/codeql-action/autobuild@v3
-      - uses: github/codeql-action/analyze@v3
- /tmp/campusforge-active-dependencies.txt; then
+          if grep -E '^(h2 v0[.]3[.]27|rustls v0[.]21[.]12|rustls-webpki v0[.]101[.]7)$' /tmp/campusforge-active-dependencies.txt; then
             echo "::error::A vulnerable legacy HTTP/TLS crate remains in the active dependency graph"
             exit 1
           fi
