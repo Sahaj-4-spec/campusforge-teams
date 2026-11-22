@@ -300,6 +300,12 @@ async fn notifications_list(
     State(state): State<AppState>,
     AuthUser(user_id): AuthUser,
 ) -> ApiResult<Json<Value>> {
+    let mut transaction = state.db.begin().await
+        .map_err(|error| internal(error, "Could not begin notification read"))?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| internal(error, "Could not set notification snapshot"))?;
     let rows = sqlx::query_as::<_, NotificationRow>(
         "SELECT n.id, n.workspace_id, n.actor_user_id, n.notification_type, n.title, n.body,
                 n.resource_type, n.resource_id, n.read_at, n.created_at
@@ -310,10 +316,21 @@ async fn notifications_list(
          ORDER BY n.created_at DESC LIMIT 100",
     )
     .bind(user_id)
-    .fetch_all(&state.db)
+    .fetch_all(&mut *transaction)
     .await
     .map_err(|error| internal(error, "Could not load notifications"))?;
-    let unread = rows.iter().filter(|row| row.read_at.is_none()).count();
+    let unread: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM notifications n
+         JOIN workspace_members wm
+           ON wm.workspace_id=n.workspace_id AND wm.user_id=n.recipient_user_id
+         WHERE n.recipient_user_id=$1 AND n.read_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(|error| internal(error, "Could not count unread notifications"))?;
+    transaction.commit().await
+        .map_err(|error| internal(error, "Could not finish notification read"))?;
     Ok(Json(json!({ "items": rows, "unread_count": unread })))
 }
 
@@ -602,6 +619,7 @@ async fn file_download(
         .header(header::CONTENT_TYPE, content_type)
         .header(header::CONTENT_DISPOSITION, disposition)
         .header("x-content-type-options", "nosniff")
+        .header(header::CACHE_CONTROL, "no-store")
         .body(axum::body::Body::from(bytes))
         .map_err(|error| internal(error, "Could not prepare file download"))
 }
@@ -889,15 +907,15 @@ async fn analytics(
 
     let members = sqlx::query_as::<_, (Uuid, String, i64, i64)>(
         "SELECT u.id, u.full_name,
-           COUNT(DISTINCT t.id) FILTER (WHERE lower(l.name) NOT IN ('done','complete','completed'))::bigint AS open_tasks,
-           COUNT(DISTINCT t.id) FILTER (WHERE lower(l.name) IN ('done','complete','completed'))::bigint AS completed_tasks
+           COUNT(DISTINCT t.id) FILTER (WHERE b.id IS NOT NULL AND lower(l.name) NOT IN ('done','complete','completed'))::bigint AS open_tasks,
+           COUNT(DISTINCT t.id) FILTER (WHERE b.id IS NOT NULL AND lower(l.name) IN ('done','complete','completed'))::bigint AS completed_tasks
          FROM workspace_members wm
          JOIN users u ON u.id=wm.user_id
          LEFT JOIN task_assignees ta ON ta.user_id=u.id
          LEFT JOIN tasks t ON t.id=ta.task_id
          LEFT JOIN lists l ON l.id=t.list_id
          LEFT JOIN boards b ON b.id=l.board_id AND b.workspace_id=wm.workspace_id
-         WHERE wm.workspace_id=$1 AND (t.id IS NULL OR b.id IS NOT NULL)
+         WHERE wm.workspace_id=$1
          GROUP BY u.id, u.full_name ORDER BY u.full_name",
     )
     .bind(workspace_id)
