@@ -91,6 +91,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(async move {
         notifications::run_email_worker(email_state).await;
     });
+    let file_cleanup_state = state.clone();
+    tokio::spawn(async move {
+        collaboration::run_file_cleanup(file_cleanup_state).await;
+    });
     let cors = CorsLayer::new()
         .allow_origin(frontend_origin.parse::<HeaderValue>()?)
         .allow_methods([
