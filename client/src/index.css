@@ -973,3 +973,5 @@ dialog.feature-modal::backdrop {
 @media (prefers-reduced-motion: reduce) {
   .auth-screen-split .auth-card { animation: none !important; }
 }
+
+/* The sign-in form is the only content on the authentication page. */
