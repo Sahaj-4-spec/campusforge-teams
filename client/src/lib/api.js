@@ -101,7 +101,7 @@ export const workspaceApi = {
 };
 
 export const boardApi = {
-  create: (values) => request("/api/boards", { method: "POST", body: values })
+  create: (values, workspaceId) => request("/api/boards", { method: "POST", body: values, headers: workspaceId ? { "X-Workspace-ID": workspaceId } : {} })
 };
 
 export const listApi = {
