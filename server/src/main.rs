@@ -88,12 +88,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Method::DELETE,
             Method::OPTIONS,
         ])
-        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
+        .allow_credentials(true)
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            header::HeaderName::from_static("x-workspace-id"),
+        ]);
 
     let api_router = Router::new()
         .merge(api::router())
         .merge(lists::router());
-    let auth_router = auth::router().merge(oauth::router());
+    let auth_router = auth::router().nest("/oauth", oauth::router());
 
     let app = Router::new()
         .route("/health", get(health))
