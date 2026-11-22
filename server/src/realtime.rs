@@ -63,7 +63,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         }
     };
 
-    let user_id = match verify_token(&authentication.token, &state.jwt_secret) {
+    let (user_id, expires_at) = match verify_token(&authentication.token, &state.jwt_secret) {
         Ok(id) => id,
         Err(_) => {
             send_error(&mut socket, "Your session is invalid or has expired").await;
@@ -85,6 +85,10 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
     };
 
     let mut events = state.workspace_events.subscribe();
+    let now = chrono::Utc::now().timestamp().max(0) as usize;
+    let remaining_seconds = expires_at.saturating_sub(now) as u64;
+    let session_expiry = tokio::time::sleep(Duration::from_secs(remaining_seconds));
+    tokio::pin!(session_expiry);
     let ready = json!({ "type": "ready" }).to_string();
     if socket.send(Message::Text(ready.into())).await.is_err() {
         return;
@@ -92,6 +96,10 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
 
     loop {
         tokio::select! {
+            _ = &mut session_expiry => {
+                send_error(&mut socket, "Your session has expired; sign in again").await;
+                break;
+            }
             incoming = socket.recv() => {
                 match incoming {
                     Some(Ok(Message::Ping(payload))) => {
