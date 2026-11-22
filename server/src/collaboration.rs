@@ -723,8 +723,8 @@ async fn file_delete(
     WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Path(file_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let existing: Option<(String, bool)> = sqlx::query_as(
-        "SELECT storage_key, is_deleting FROM workspace_files
+    let existing: Option<bool> = sqlx::query_scalar(
+        "SELECT is_deleting FROM workspace_files
          WHERE id=$1 AND workspace_id=$2 AND uploaded_by=$3",
     )
     .bind(file_id)
@@ -733,7 +733,7 @@ async fn file_delete(
     .fetch_optional(&state.db)
     .await
     .map_err(|error| internal(error, "Could not load file metadata"))?;
-    let Some((storage_key, is_deleting)) = existing else {
+    let Some(is_deleting) = existing else {
         return Err(fail(StatusCode::NOT_FOUND, "File not found or you did not upload it"));
     };
     if is_deleting {
