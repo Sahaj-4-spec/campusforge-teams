@@ -676,8 +676,9 @@ async fn file_delete(
     Path(file_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
     let workspace_id = workspace_for_user(&state, user_id).await?;
-    let storage_key: Option<String> = sqlx::query_scalar(
-        "SELECT storage_key FROM workspace_files WHERE id=$1 AND workspace_id=$2 AND uploaded_by=$3",
+    let existing: Option<(String, bool)> = sqlx::query_as(
+        "SELECT storage_key, is_deleting FROM workspace_files
+         WHERE id=$1 AND workspace_id=$2 AND uploaded_by=$3",
     )
     .bind(file_id)
     .bind(workspace_id)
@@ -685,27 +686,59 @@ async fn file_delete(
     .fetch_optional(&state.db)
     .await
     .map_err(|error| internal(error, "Could not load file metadata"))?;
-    let Some(storage_key) = storage_key else {
+    let Some((storage_key, is_deleting)) = existing else {
         return Err(fail(StatusCode::NOT_FOUND, "File not found or you did not upload it"));
     };
-    state.storage.delete(&storage_key).await.map_err(|error| {
-        tracing::error!(%error, "Could not remove workspace file from storage");
-        fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not delete stored file")
-    })?;
-    let result = sqlx::query(
-        "DELETE FROM workspace_files WHERE id=$1 AND workspace_id=$2 AND uploaded_by=$3",
+    if is_deleting {
+        return Ok(StatusCode::ACCEPTED);
+    }
+
+    sqlx::query(
+        "UPDATE workspace_files
+            SET is_deleting=TRUE, delete_after=NOW(), delete_error=NULL
+          WHERE id=$1 AND workspace_id=$2 AND uploaded_by=$3 AND is_deleting=FALSE",
     )
     .bind(file_id)
     .bind(workspace_id)
     .bind(user_id)
     .execute(&state.db)
     .await
-    .map_err(|error| internal(error, "Could not delete file metadata"))?;
-    if result.rows_affected() == 0 {
-        return Err(fail(StatusCode::CONFLICT, "File metadata changed before deletion completed"));
+    .map_err(|error| internal(error, "Could not schedule file deletion"))?;
+
+    match state.storage.delete(&storage_key).await {
+        Ok(()) => {
+            let result = sqlx::query(
+                "DELETE FROM workspace_files WHERE id=$1 AND workspace_id=$2 AND is_deleting=TRUE",
+            )
+            .bind(file_id)
+            .bind(workspace_id)
+            .execute(&state.db)
+            .await
+            .map_err(|error| internal(error, "Could not remove file metadata"))?;
+            if result.rows_affected() == 0 {
+                return Err(fail(StatusCode::CONFLICT, "File deletion is queued for cleanup"));
+            }
+            state.publish_workspace_event(workspace_id, None, "file_deleted", "deleted a workspace file");
+            Ok(StatusCode::NO_CONTENT)
+        }
+        Err(error) => {
+            tracing::warn!(%error, file_id=%file_id, "File deletion queued for background cleanup");
+            sqlx::query(
+                "UPDATE workspace_files
+                    SET delete_attempts=delete_attempts+1,
+                        delete_error=$2,
+                        delete_after=NOW()+INTERVAL '60 seconds'
+                  WHERE id=$1 AND is_deleting=TRUE",
+            )
+            .bind(file_id)
+            .bind(error)
+            .execute(&state.db)
+            .await
+            .map_err(|update_error| internal(update_error, "Could not persist file cleanup retry"))?;
+            state.publish_workspace_event(workspace_id, None, "file_deletion_queued", "queued workspace file deletion");
+            Ok(StatusCode::ACCEPTED)
+        }
     }
-    state.publish_workspace_event(workspace_id, None, "file_deleted", "deleted a workspace file");
-    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -996,6 +1029,95 @@ async fn analytics(
         })).collect::<Vec<_>>()
     })))
 }
+
+
+#[derive(Debug, FromRow)]
+struct PendingFileDeletion {
+    id: Uuid,
+    storage_key: String,
+    attempts: i32,
+}
+
+async fn cleanup_pending_files(state: &AppState) {
+    let mut transaction = match state.db.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => {
+            tracing::error!(%error, "Could not begin file cleanup batch");
+            return;
+        }
+    };
+
+    let rows = match sqlx::query_as::<_, PendingFileDeletion>(
+        "SELECT id, storage_key, delete_attempts AS attempts
+           FROM workspace_files
+          WHERE is_deleting=TRUE AND delete_after <= NOW()
+          ORDER BY delete_after, created_at
+          FOR UPDATE SKIP LOCKED
+          LIMIT 10",
+    )
+    .fetch_all(&mut *transaction)
+    .await {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::error!(%error, "Could not load pending file deletions");
+            return;
+        }
+    };
+
+    let mut changed_workspaces = Vec::new();
+    for row in rows {
+        match state.storage.delete(&row.storage_key).await {
+            Ok(()) => {
+                match sqlx::query(
+                    "DELETE FROM workspace_files WHERE id=$1 AND is_deleting=TRUE RETURNING workspace_id",
+                )
+                .bind(row.id)
+                .fetch_optional(&mut *transaction)
+                .await {
+                    Ok(Some(workspace_id)) => changed_workspaces.push(workspace_id),
+                    Ok(None) => {}
+                    Err(error) => tracing::error!(%error, file_id=%row.id, "Could not remove deleted file metadata"),
+                }
+            }
+            Err(error) => {
+                let backoff_seconds = (60_i64 * 2_i64.pow(row.attempts.clamp(0, 6) as u32)).min(3600);
+                if let Err(update_error) = sqlx::query(
+                    "UPDATE workspace_files
+                        SET delete_attempts=delete_attempts+1,
+                            delete_error=$2,
+                            delete_after=NOW()+make_interval(secs=>$3),
+                            updated_at=NOW()
+                      WHERE id=$1 AND is_deleting=TRUE",
+                )
+                .bind(row.id)
+                .bind(error)
+                .bind(backoff_seconds as f64)
+                .execute(&mut *transaction)
+                .await {
+                    tracing::error!(%update_error, file_id=%row.id, "Could not schedule file deletion retry");
+                }
+            }
+        }
+    }
+
+    match transaction.commit().await {
+        Ok(()) => {
+            for workspace_id in changed_workspaces {
+                state.publish_workspace_event(workspace_id, None, "file_deleted", "completed workspace file deletion");
+            }
+        }
+        Err(error) => tracing::error!(%error, "Could not commit workspace file cleanup batch"),
+    }
+}
+
+pub async fn run_file_cleanup(state: AppState) {
+    let mut ticker = interval(TokioDuration::from_secs(60));
+    loop {
+        ticker.tick().await;
+        cleanup_pending_files(&state).await;
+    }
+}
+
 
 pub fn router() -> Router<AppState> {
     Router::new()
