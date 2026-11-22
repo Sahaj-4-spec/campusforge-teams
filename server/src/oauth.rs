@@ -162,6 +162,14 @@ fn callback_uri(provider: Provider) -> Result<String, &'static str> {
     let base = std::env::var("OAUTH_REDIRECT_BASE_URL")
         .unwrap_or_else(|_| "http://localhost:5000".to_owned());
     let mut url = Url::parse(&base).map_err(|_| "OAuth callback base URL is invalid.")?;
+    let host = url.host_str().unwrap_or_default();
+    let is_local_host = host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]";
+    if url.scheme() != "https" && !is_local_host {
+        return Err("Public OAuth callback URLs must use HTTPS.");
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("OAuth callback base URL must not contain credentials.");
+    }
     let prefix = url.path().trim_end_matches('/');
     url.set_path(&format!("{prefix}/api/auth/oauth/{}/callback", provider.as_str()));
     url.set_query(None);
