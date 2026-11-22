@@ -292,10 +292,13 @@ async fn notifications_list(
     AuthUser(user_id): AuthUser,
 ) -> ApiResult<Json<Value>> {
     let rows = sqlx::query_as::<_, NotificationRow>(
-        "SELECT id, workspace_id, actor_user_id, notification_type, title, body,
-                resource_type, resource_id, read_at, created_at
-         FROM notifications WHERE recipient_user_id=$1
-         ORDER BY created_at DESC LIMIT 100",
+        "SELECT n.id, n.workspace_id, n.actor_user_id, n.notification_type, n.title, n.body,
+                n.resource_type, n.resource_id, n.read_at, n.created_at
+         FROM notifications n
+         JOIN workspace_members wm
+           ON wm.workspace_id=n.workspace_id AND wm.user_id=n.recipient_user_id
+         WHERE n.recipient_user_id=$1
+         ORDER BY n.created_at DESC LIMIT 100",
     )
     .bind(user_id)
     .fetch_all(&state.db)
@@ -310,7 +313,13 @@ async fn notification_read(
     AuthUser(user_id): AuthUser,
     Path(notification_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let result = sqlx::query("UPDATE notifications SET read_at=COALESCE(read_at,NOW()) WHERE id=$1 AND recipient_user_id=$2")
+    let result = sqlx::query(
+        "UPDATE notifications n
+            SET read_at=COALESCE(n.read_at,NOW())
+           FROM workspace_members wm
+          WHERE n.id=$1 AND n.recipient_user_id=$2
+            AND wm.workspace_id=n.workspace_id AND wm.user_id=$2"
+    )
         .bind(notification_id)
         .bind(user_id)
         .execute(&state.db)
@@ -326,7 +335,12 @@ async fn notifications_read_all(
     State(state): State<AppState>,
     AuthUser(user_id): AuthUser,
 ) -> ApiResult<StatusCode> {
-    sqlx::query("UPDATE notifications SET read_at=NOW() WHERE recipient_user_id=$1 AND read_at IS NULL")
+    sqlx::query(
+        "UPDATE notifications n SET read_at=NOW()
+           FROM workspace_members wm
+          WHERE n.recipient_user_id=$1 AND wm.user_id=$1
+            AND wm.workspace_id=n.workspace_id AND n.read_at IS NULL"
+    )
         .bind(user_id)
         .execute(&state.db)
         .await
