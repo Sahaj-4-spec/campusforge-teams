@@ -26,7 +26,8 @@ export default function TaskDialog({
   onDelete,
   onAddComment,
   allTasks = [],
-  onAdvancedChanged
+  onAdvancedChanged,
+  refreshKey = 0
 }) {
   const [form, setForm] = useState({
     title: "",
@@ -212,7 +213,7 @@ export default function TaskDialog({
           </div>
         </form>
 
-        {task && <TaskAdvancedPanel task={task} lists={lists} tasks={allTasks} onChanged={onAdvancedChanged} />}
+        {task && <TaskAdvancedPanel task={task} lists={lists} tasks={allTasks} onChanged={onAdvancedChanged} refreshKey={refreshKey} />}
 
         {task && (
           <section className="comments-section" aria-label="Task comments">
