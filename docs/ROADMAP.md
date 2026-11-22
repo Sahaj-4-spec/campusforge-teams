@@ -15,10 +15,10 @@ The collaboration-suite branch adds calendar planning, advanced task controls, n
 |---|---|---|
 | Team calendar and deadline planner | Month/week/day views, task deadlines, manual meeting/milestone/exam/submission events | Event attendees, edit/reschedule, stronger date-only/time-zone handling and browser tests |
 | Advanced task management | Estimates, subtasks, checklists, labels, same-project dependencies, recurring rules and scheduled occurrence processing | Parent/child cycle constraints, dependency and recurrence concurrency tests, full filtering and subtask ordering |
-| Smart notification centre | Persistent inbox, read state, category preferences, task/comment notifications, due-soon and overdue reminders | Mentions, invitation-specific recipients, pagination, email delivery, retention and multi-session tests |
-| Shared files and documents | Workspace library, project/task attachment, authenticated upload/list/download/delete, 10 MB limit | Durable private object storage, malware scanning, backups, retention, preview, lifecycle cleanup and production hardening |
+| Smart notification centre | Persistent inbox, read state, category preferences, task/comment notifications, due-soon/overdue reminders, opt-in Resend email outbox with retry/backoff | Configure verified sender domain and secrets, test delivery/bounces, mentions, invitation-specific recipients, pagination and retention |
+| Shared files and documents | Workspace library, project/task attachment, authenticated upload/list/download/delete, 10 MB limit, local and S3-compatible adapters, extension allowlist | Configure and verify a private production bucket/credentials, malware scanning, backups, retention, preview and lifecycle cleanup |
 | Team productivity analytics | Server-side completion, overdue and unassigned counts, project progress and member workload | Historical trends, date filters, export, metric verification and privacy review |
-| Team chat and meeting notes | Workspace/project message history and saved notes with attendees, agenda, discussion notes and action items | Direct messages, mentions, presence/typing, chat real-time delivery, edit/delete policy and browser acceptance |
+| Team chat and meeting notes | Workspace/project message history and saved notes with attendees, agenda, discussion notes and action items; WebSocket events trigger client refresh | Direct messages, mentions, presence/typing, durable chat pagination, edit/delete policy and two-browser acceptance |
 | AI project assistant | Approved future roadmap item; not implemented in this branch | Provider review, server adapter, permission-aware context, suggestions-only workflow, quotas and AI safety tests |
 
 ## Phase 0 — Release foundations
@@ -67,16 +67,17 @@ The collaboration-suite branch adds calendar planning, advanced task controls, n
 
 ### Draft-branch scope
 - Persistent in-app inbox, unread count, mark-one/read-all.
-- Per-user in-app category preferences.
+- Per-user in-app and email category preferences.
 - Task/comment activity notifications.
 - Scheduled reminders for assigned tasks due within 24 hours and tasks newly overdue.
+- Transactional notification email outbox with a Resend API adapter, idempotency keys, and retry/backoff. Email remains inactive until a verified sender and server secrets are configured.
 
 ### Remaining work
 - Mention parsing and targeted recipients.
 - Invitation-specific notifications.
 - Cursor pagination and retention controls.
-- Email delivery is disabled until a provider, opt-in, unsubscribe, retry, and bounce policy are approved.
-- Add idempotency and background-job concurrency tests.
+- Complete the Resend account and verified-domain setup, test delivery/bounce behavior, and define unsubscribe/suppression policies before public release.
+- Add multi-worker idempotency and background-job concurrency tests.
 
 ## Phase 4 — Shared files and documents
 
@@ -87,11 +88,11 @@ The collaboration-suite branch adds calendar planning, advanced task controls, n
 - 10 MB limit, opaque server-generated storage key, SHA-256 checksum, safe content-disposition, and nosniff response header.
 
 ### Local-only storage boundary
-The current branch stores file bytes in a private local server directory, configurable through CAMPUSFORGE_UPLOAD_DIR and defaulting to server/uploads. This is for local development only. It is not durable across host replacement or multiple API instances and is not suitable for production.
+The backend now has two storage modes. Local mode stores file bytes in a private server directory, configurable through CAMPUSFORGE_UPLOAD_DIR and defaulting to server/uploads; this is for localhost only. S3 mode uses the AWS SDK for Rust to upload, download, and delete objects in a configured private S3-compatible bucket. Production is still blocked until the bucket, credentials/IAM role, encryption, backup/versioning, lifecycle, retention, and restore procedure are configured and verified.
 
 ### Required production work
-- Choose private object storage after reviewing region, cost, durability, access controls, retention, backup, and deletion requirements.
-- Use short-lived signed transfer URLs or equivalent server-mediated transfers.
+- Select and configure a private S3-compatible bucket after reviewing region, cost, durability, access controls, retention, backup, and deletion requirements.
+- The current implementation uses server-mediated upload/download so credentials and object keys stay on the API server. Do not expose public bucket URLs.
 - Add malware scanning, file-type allowlists, quotas, abandoned-upload cleanup, audit history, and backup/restore tests.
 - Never expose raw storage keys or treat client-provided URLs as authorization.
 
@@ -99,7 +100,7 @@ The current branch stores file bytes in a private local server directory, config
 
 ### Draft-branch scope
 - Workspace-wide and project-specific message channels.
-- Persisted message history.
+- Persisted message history; WebSocket change events trigger connected clients to refresh the current channel.
 - Meeting notes with title, date/time, project, attendees, agenda, discussion notes, and action items.
 
 ### Remaining work
@@ -142,7 +143,7 @@ The current branch stores file bytes in a private local server directory, config
 ## Cross-feature release requirements
 
 - Enforce workspace/resource authorization on every request and file operation.
-- Add migration and rollback guidance for every schema change.
+- Add migration and rollback guidance for every schema change. A PostgreSQL-backed SQLx migration smoke test now runs in backend CI.
 - Add unit, API integration, migration, browser, accessibility, and multi-user acceptance tests.
 - Add observability for background jobs, notification retries, file transfer failures, and WebSocket disconnects.
 - Define export, deletion, privacy, retention, and backup behavior before public launch.
