@@ -305,6 +305,71 @@ async fn get_workspace(
 }
 
 #[derive(Debug, Deserialize)]
+struct BoardInput {
+    name: String,
+    description: Option<String>,
+}
+
+async fn create_board(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+    Json(input): Json<BoardInput>,
+) -> ApiResult<StatusCode> {
+    let name = input.name.trim();
+    if name.is_empty() || name.chars().count() > 80 {
+        return Err(error(StatusCode::BAD_REQUEST, "Project name must be between 1 and 80 characters"));
+    }
+    if input.description.as_ref().is_some_and(|value| value.chars().count() > 1000) {
+        return Err(error(StatusCode::BAD_REQUEST, "Project description is too long"));
+    }
+
+    let mut tx = state.db.begin().await.map_err(|cause| internal_error(cause, "Could not begin project creation"))?;
+    let workspace_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT workspace_id FROM workspace_members WHERE user_id = $1 ORDER BY joined_at ASC LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|cause| internal_error(cause, "Could not find the user's workspace"))?;
+    let Some(workspace_id) = workspace_id else {
+        return Err(error(StatusCode::NOT_FOUND, "Workspace not found"));
+    };
+
+    let board_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO boards (workspace_id, name, description, created_by)          VALUES ($1, $2, $3, $4) RETURNING id",
+    )
+    .bind(workspace_id)
+    .bind(name)
+    .bind(input.description.as_deref().filter(|value| !value.trim().is_empty()))
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|cause| internal_error(cause, "Could not create project"))?;
+
+    sqlx::query("INSERT INTO board_members (board_id, user_id, role) VALUES ($1, $2, 'admin')")
+        .bind(board_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|cause| internal_error(cause, "Could not add project owner"))?;
+
+    for (position, list_name) in ["To do", "In progress", "In review", "Done"].iter().enumerate() {
+        sqlx::query("INSERT INTO lists (board_id, name, position) VALUES ($1, $2, $3)")
+            .bind(board_id)
+            .bind(list_name)
+            .bind((position + 1) as i32)
+            .execute(&mut *tx)
+            .await
+            .map_err(|cause| internal_error(cause, "Could not create starter project columns"))?;
+    }
+
+    add_activity(&mut tx, workspace_id, board_id, None, user_id, "board_created", format!("created project {name}"))
+        .await.map_err(|cause| internal_error(cause, "Could not record project activity"))?;
+    tx.commit().await.map_err(|cause| internal_error(cause, "Could not save project"))?;
+    Ok(StatusCode::CREATED)
+}
+
+#[derive(Debug, Deserialize)]
 struct TaskInput {
     title: String,
     description: Option<String>,
@@ -729,6 +794,7 @@ async fn move_task(
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/workspace", get(get_workspace))
+        .route("/boards", post(create_board))
         .route("/tasks", post(create_task))
         .route("/tasks/{task_id}", patch(update_task).delete(delete_task))
         .route("/tasks/{task_id}/comments", post(add_comment))
