@@ -119,9 +119,6 @@ struct VerifiedProfile {
 struct OAuthUser {
     id: Uuid,
     email: String,
-    full_name: String,
-    avatar_url: Option<String>,
-    created_at: chrono::DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -506,7 +503,7 @@ async fn find_or_create_user(
     })?;
 
     let existing = sqlx::query_as::<_, OAuthUser>(
-        "SELECT u.id, u.email, u.full_name, u.avatar_url, u.created_at
+        "SELECT u.id, u.email
          FROM oauth_accounts oa
          JOIN users u ON u.id = oa.user_id
          WHERE oa.provider = $1 AND oa.provider_user_id = $2",
@@ -526,7 +523,7 @@ async fn find_or_create_user(
         // Only verified provider emails reach this point. A match reuses the
         // existing CampusForge account instead of creating a duplicate.
         let existing_user = sqlx::query_as::<_, OAuthUser>(
-            "SELECT id, email, full_name, avatar_url, created_at
+            "SELECT id, email
              FROM users WHERE lower(email) = $1
              FOR UPDATE",
         )
@@ -543,7 +540,7 @@ async fn find_or_create_user(
             None => sqlx::query_as::<_, OAuthUser>(
                 "INSERT INTO users (email, password_hash, full_name, avatar_url)
                  VALUES ($1, NULL, $2, $3)
-                 RETURNING id, email, full_name, avatar_url, created_at",
+                 RETURNING id, email",
             )
             .bind(&email)
             .bind(&full_name)
