@@ -2121,3 +2121,44 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .comment-mention-picker select { max-width: 100%; }
   .comment-compose-actions .comment-submit { width: 100%; }
 }
+
+
+/* Owner-only workspace teammate role editing */
+.member-role-control {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+.member-role-select {
+  min-width: 88px;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid #dfe5dd;
+  border-radius: 8px;
+  color: #334137;
+  background: #fff;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+}
+.member-role-edit, .member-role-cancel {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+}
+.member-role-save {
+  min-height: 30px;
+  gap: 5px;
+  padding: 0 8px;
+  font-size: 10px;
+}
+.member-role-edit:focus-visible, .member-role-cancel:focus-visible,
+.member-role-save:focus-visible, .member-role-select:focus-visible {
+  outline: 3px solid rgba(91, 73, 190, .25);
+  outline-offset: 2px;
+}
+@media (max-width: 520px) {
+  .member-role-control { flex-wrap: wrap; }
+  .member-role-select { min-width: 82px; }
+}
