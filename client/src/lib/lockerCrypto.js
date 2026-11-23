@@ -15,6 +15,10 @@ export function randomBytes(length) {
   return webCrypto().getRandomValues(new Uint8Array(length));
 }
 
+export function randomUuid() {
+  return webCrypto().randomUUID();
+}
+
 export function bytesToBase64(input) {
   const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
   let binary = "";
@@ -64,35 +68,39 @@ export async function deriveLockerKey(passphrase, salt) {
   );
 }
 
-export async function encryptLockerPayload(key, payload) {
+export async function encryptLockerPayload(key, payload, context = "") {
   const crypto = webCrypto();
   const iv = randomBytes(12);
   const plaintext = encoder.encode(JSON.stringify(payload));
-  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext);
+  const algorithm = { name: "AES-GCM", iv };
+  if (context) algorithm.additionalData = encoder.encode(context);
+  const ciphertext = await crypto.subtle.encrypt(algorithm, key, plaintext);
   return {
     iv: bytesToBase64(iv),
     ciphertext: bytesToBase64(ciphertext)
   };
 }
 
-export async function decryptLockerPayload(key, encrypted) {
+export async function decryptLockerPayload(key, encrypted, context = "") {
   const crypto = webCrypto();
   const iv = base64ToBytes(encrypted?.iv);
   const ciphertext = base64ToBytes(encrypted?.ciphertext);
   if (iv.length !== 12 || ciphertext.length < 17) {
     throw new Error("Encrypted locker item is incomplete or corrupted.");
   }
-  const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
+  const algorithm = { name: "AES-GCM", iv };
+  if (context) algorithm.additionalData = encoder.encode(context);
+  const plaintext = await crypto.subtle.decrypt(algorithm, key, ciphertext);
   return JSON.parse(decoder.decode(plaintext));
 }
 
 export async function createLockerKeyCheck(key, userId) {
-  return encryptLockerPayload(key, { check: LOCKER_CHECK_PREFIX + userId });
+  return encryptLockerPayload(key, { check: LOCKER_CHECK_PREFIX + userId }, "vault-check:" + userId);
 }
 
 export async function verifyLockerKey(key, verifier, userId) {
   try {
-    const payload = await decryptLockerPayload(key, verifier);
+    const payload = await decryptLockerPayload(key, verifier, "vault-check:" + userId);
     return payload?.check === LOCKER_CHECK_PREFIX + userId;
   } catch {
     return false;
