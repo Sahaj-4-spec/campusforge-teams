@@ -51,10 +51,11 @@ export default function AuthScreen({ onAuthenticated }) {
 
   useEffect(() => {
     const query = new URLSearchParams(location.search);
+    const hasOAuthError = query.has("oauth_error");
     const oauthError = query.get("oauth_error");
-    if (oauthError) {
+    if (hasOAuthError) {
       query.delete("oauth_error");
-      setError(oauthError);
+      setError(oauthError || "Authentication failed. Please try again.");
     }
 
     const nextPath = isRegister ? "/signup" : "/login";
