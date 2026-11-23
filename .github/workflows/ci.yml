@@ -28,6 +28,8 @@ jobs:
         run: npm --prefix client install
       - name: Build frontend
         run: npm --prefix client run build
+      - name: Test Save Locker encryption
+        run: npm --prefix client run test:locker
 
   backend:
     name: Rust backend check
