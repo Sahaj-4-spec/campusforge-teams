@@ -968,7 +968,6 @@ export default function App() {
   async function switchWorkspace(workspaceId) {
     if (!workspaceId || workspaceId === data?.current_workspace_id) return;
     if (demoMode) {
-      setStoredWorkspaceId(workspaceId);
       setData((current) => current ? { ...current, current_workspace_id: workspaceId } : current);
       setNotice("Workspace switched");
       return;
