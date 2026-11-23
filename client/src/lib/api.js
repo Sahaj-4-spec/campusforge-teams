@@ -120,6 +120,7 @@ export const invitationApi = {
   list: () => request("/api/invitations/"),
   create: (values) => request("/api/invitations/", { method: "POST", body: values }),
   revoke: (invitationId) => request("/api/invitations/" + encodeURIComponent(invitationId), { method: "DELETE" }),
+  updateMemberRole: (userId, role) => request("/api/invitations/members/" + encodeURIComponent(userId) + "/role", { method: "PATCH", body: { role } }),
   accept: (token) => request("/api/invitations/accept", { method: "POST", body: { token } })
 };
 
