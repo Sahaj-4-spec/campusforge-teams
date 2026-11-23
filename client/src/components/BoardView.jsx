@@ -33,9 +33,10 @@ function initials(name) {
     .toUpperCase();
 }
 
-function SortableTask({ task, users, assigneeIds, editors = [], onOpen }) {
+function SortableTask({ task, users, assigneeIds, editors = [], onOpen, movePending = false }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: task.id
+    id: task.id,
+    disabled: movePending
   });
   const assignedUsers = assigneeIds
     .map((id) => users.find((user) => user.id === id))
@@ -85,7 +86,7 @@ function SortableTask({ task, users, assigneeIds, editors = [], onOpen }) {
   );
 }
 
-function BoardColumn({ list, tasks, users, assigneesByTask, editingByTask, onOpenTask, onAddTask, onRenameList, onDeleteList, canManageLists }) {
+function BoardColumn({ list, tasks, users, assigneesByTask, editingByTask, onOpenTask, onAddTask, onRenameList, onDeleteList, canManageLists, movePending }) {
   const { setNodeRef, isOver } = useDroppable({
     id: "list:" + list.id,
     data: { type: "column", listId: list.id }
@@ -126,6 +127,7 @@ function BoardColumn({ list, tasks, users, assigneesByTask, editingByTask, onOpe
                 assigneeIds={assigneesByTask[task.id] || []}
                 editors={editingByTask[task.id] || []}
                 onOpen={onOpenTask}
+                movePending={movePending}
               />
             ))
           ) : (
@@ -158,6 +160,7 @@ export default function BoardView({
 }) {
   const [presenceUsers, setPresenceUsers] = useState([]);
   const [editingByTask, setEditingByTask] = useState({});
+  const [movePending, setMovePending] = useState(false);
   const editingTimeouts = useRef(new Map());
 
   useEffect(() => {
@@ -227,7 +230,7 @@ export default function BoardView({
   function handleDragEnd(event) {
     const activeId = String(event.active.id);
     const overId = event.over ? String(event.over.id) : "";
-    if (!overId || activeId === overId) return;
+    if (!overId || activeId === overId || movePending) return;
 
     let destinationListId = "";
     if (overId.startsWith("list:")) {
@@ -237,7 +240,12 @@ export default function BoardView({
       destinationListId = overTask ? overTask.list_id : "";
     }
 
-    if (destinationListId) onMoveTask(activeId, destinationListId, overId);
+    if (!destinationListId) return;
+
+    setMovePending(true);
+    Promise.resolve(onMoveTask(activeId, destinationListId, overId))
+      .catch(() => {})
+      .finally(() => setMovePending(false));
   }
 
   return (
@@ -261,7 +269,7 @@ export default function BoardView({
       <div className="board-toolbar">
         <div className="board-toolbar-note">
           <span className={"live-dot" + (realtimeConnected ? "" : " live-dot-offline")} />
-          {realtimeConnected ? "Live board sync" : "Reconnecting live sync"}
+          {movePending ? "Saving card position…" : realtimeConnected ? "Live board sync" : "Reconnecting live sync"}
           <span className="toolbar-divider">·</span> Drag cards to update their list
         </div>
         <div className="board-toolbar-actions">
@@ -293,6 +301,7 @@ export default function BoardView({
                 onRenameList={onRenameList}
                 onDeleteList={onDeleteList}
                 canManageLists={canManageLists}
+                movePending={movePending}
               />
             );
           })}
