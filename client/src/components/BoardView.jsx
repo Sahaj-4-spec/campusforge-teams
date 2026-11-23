@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -15,6 +15,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { CalendarDays, GripVertical, Pencil, Plus, Trash2, UserRound } from "lucide-react";
+import { presenceApi, subscribeWorkspaceSocket } from "../lib/api.js";
 
 function formatDueDate(value) {
   if (!value) return "No due date";
@@ -32,7 +33,7 @@ function initials(name) {
     .toUpperCase();
 }
 
-function SortableTask({ task, users, assigneeIds, onOpen }) {
+function SortableTask({ task, users, assigneeIds, editors = [], onOpen }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: task.id
   });
@@ -44,7 +45,7 @@ function SortableTask({ task, users, assigneeIds, onOpen }) {
     <article
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
-      className={"task-card" + (isDragging ? " task-card-dragging" : "")}
+      className={"task-card" + (isDragging ? " task-card-dragging" : "") + (editors.length ? " task-card-being-edited" : "")}
     >
       <div className="task-card-topline">
         <span className={"priority-tag priority-" + task.priority}>{task.priority}</span>
@@ -62,6 +63,12 @@ function SortableTask({ task, users, assigneeIds, onOpen }) {
         {task.title}
       </button>
       {task.description && <p className="task-description">{task.description}</p>}
+      {editors.length > 0 && (
+        <div className="task-editing-indicator" title={editors.map((user) => user.full_name).join(", ") + " editing this card"}>
+          <Pencil size={11} />
+          <span>{editors.length === 1 ? editors[0].full_name + " is editing" : editors.map((user) => user.full_name).join(", ") + " are editing"}</span>
+        </div>
+      )}
       <div className="task-card-footer">
         <span className={"task-date" + (task.due_date && task.due_date < new Date().toISOString().slice(0, 10) ? " overdue" : "")}>
           <CalendarDays size={13} /> {formatDueDate(task.due_date)}
@@ -78,7 +85,7 @@ function SortableTask({ task, users, assigneeIds, onOpen }) {
   );
 }
 
-function BoardColumn({ list, tasks, users, assigneesByTask, onOpenTask, onAddTask, onRenameList, onDeleteList, canManageLists }) {
+function BoardColumn({ list, tasks, users, assigneesByTask, editingByTask, onOpenTask, onAddTask, onRenameList, onDeleteList, canManageLists }) {
   const { setNodeRef, isOver } = useDroppable({
     id: "list:" + list.id,
     data: { type: "column", listId: list.id }
@@ -117,6 +124,7 @@ function BoardColumn({ list, tasks, users, assigneesByTask, onOpenTask, onAddTas
                 task={task}
                 users={users}
                 assigneeIds={assigneesByTask[task.id] || []}
+                editors={editingByTask[task.id] || []}
                 onOpen={onOpenTask}
               />
             ))
@@ -144,8 +152,65 @@ export default function BoardView({
   onCreateList,
   onRenameList,
   onDeleteList,
-  canManageLists
+  canManageLists,
+  currentUserId,
+  realtimeConnected = true
 }) {
+  const [presenceUsers, setPresenceUsers] = useState([]);
+  const [editingByTask, setEditingByTask] = useState({});
+  const editingTimeouts = useRef(new Map());
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadPresence = () => {
+      presenceApi.list(board.id)
+        .then((rows) => { if (!cancelled) setPresenceUsers(rows || []); })
+        .catch(() => {});
+    };
+    loadPresence();
+    const refreshInterval = window.setInterval(loadPresence, 30000);
+    const unsubscribe = subscribeWorkspaceSocket((payload) => {
+      if (payload.type !== "workspace_event" || !payload.event || payload.event.board_id !== board.id) return;
+      const event = payload.event;
+      if (event.event_type === "presence_joined" || event.event_type === "presence_left") {
+        loadPresence();
+      }
+      if (!event.task_id || !event.actor_user_id || event.actor_user_id === currentUserId) return;
+      if (event.event_type === "card_editing_started") {
+        const user = users.find((row) => row.id === event.actor_user_id);
+        if (!user) return;
+        const previous = editingTimeouts.current.get(event.task_id);
+        if (previous) window.clearTimeout(previous);
+        setEditingByTask((current) => ({
+          ...current,
+          [event.task_id]: [...(current[event.task_id] || []).filter((row) => row.id !== user.id), user]
+        }));
+        editingTimeouts.current.set(event.task_id, window.setTimeout(() => {
+          setEditingByTask((current) => ({
+            ...current,
+            [event.task_id]: (current[event.task_id] || []).filter((row) => row.id !== user.id)
+          }));
+          editingTimeouts.current.delete(event.task_id);
+        }, 16000));
+      } else if (event.event_type === "card_editing_stopped") {
+        const timeout = editingTimeouts.current.get(event.task_id);
+        if (timeout) window.clearTimeout(timeout);
+        editingTimeouts.current.delete(event.task_id);
+        setEditingByTask((current) => ({
+          ...current,
+          [event.task_id]: (current[event.task_id] || []).filter((row) => row.id !== event.actor_user_id)
+        }));
+      }
+    });
+    return () => {
+      cancelled = true;
+      window.clearInterval(refreshInterval);
+      unsubscribe();
+      editingTimeouts.current.forEach((timeout) => window.clearTimeout(timeout));
+      editingTimeouts.current.clear();
+    };
+  }, [board.id, currentUserId, users]);
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 7 } })
   );
@@ -181,16 +246,22 @@ export default function BoardView({
           <h1>{board.name}</h1>
           <p className="board-description">{board.description}</p>
         </div>
-        <div className="board-members">
-          {users.slice(0, 4).map((user) => (
-            <span className="mini-avatar" key={user.id} title={user.full_name}>{initials(user.full_name)}</span>
+        <div className="board-members" aria-label="Active board viewers">
+          {presenceUsers.slice(0, 5).map((user) => (
+            <span className="board-presence-avatar" key={user.user_id} title={user.full_name + " is viewing this board"}>
+              {initials(user.full_name)}<i />
+            </span>
           ))}
-          <span className="board-members-label">{users.length} members</span>
+          <span className="board-members-label">{presenceUsers.length} viewing</span>
         </div>
       </div>
 
       <div className="board-toolbar">
-        <div className="board-toolbar-note"><span className="live-dot" /> Workspace board <span className="toolbar-divider">·</span> Drag cards to update their list</div>
+        <div className="board-toolbar-note">
+          <span className={"live-dot" + (realtimeConnected ? "" : " live-dot-offline")} />
+          {realtimeConnected ? "Live board sync" : "Reconnecting live sync"}
+          <span className="toolbar-divider">·</span> Drag cards to update their list
+        </div>
         <div className="board-toolbar-actions">
           {canManageLists && <button className="secondary-button" type="button" onClick={onCreateList}>
             <Plus size={16} /> Add column
@@ -214,6 +285,7 @@ export default function BoardView({
                 tasks={columnTasks}
                 users={users}
                 assigneesByTask={assigneesByTask}
+                editingByTask={editingByTask}
                 onOpenTask={onOpenTask}
                 onAddTask={onAddTask}
                 onRenameList={onRenameList}
