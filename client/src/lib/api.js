@@ -95,7 +95,6 @@ async function authorizedFetch(path, options = {}) {
 }
 
 export const authApi = {
-  register: (values) => request("/api/auth/register", { method: "POST", body: values }),
   login: (values) => request("/api/auth/login", { method: "POST", body: values }),
   logout: () => request("/api/auth/logout", { method: "POST" }),
   oauthStartUrl: (provider) => (API_BASE || window.location.origin) + "/api/auth/" + encodeURIComponent(provider) + "/start"
