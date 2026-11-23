@@ -89,6 +89,13 @@ export function createDemoData() {
         title: "Map the onboarding experience",
         description: "Document the first-time experience from workspace creation through the first team invitation.",
         priority: "high",
+        labels: [{ id: "demo-label-design", name: "Design", color: "#8A78D6" }],
+        checklist: [
+          { id: "demo-check-onboarding-1", title: "Review signup flow", is_done: true },
+          { id: "demo-check-onboarding-2", title: "Map first workspace", is_done: true },
+          { id: "demo-check-onboarding-3", title: "Draft invite states", is_done: false },
+          { id: "demo-check-onboarding-4", title: "Validate mobile layout", is_done: false }
+        ],
         due_date: "2026-11-24",
         position: 1,
         created_by: ids.currentUser,
@@ -102,6 +109,12 @@ export function createDemoData() {
         title: "Create empty states for boards",
         description: "Add helpful first-run guidance when a board or list has no tasks.",
         priority: "medium",
+        labels: [{ id: "demo-label-research", name: "Research", color: "#6C9DB3" }],
+        checklist: [
+          { id: "demo-check-empty-1", title: "Collect examples", is_done: true },
+          { id: "demo-check-empty-2", title: "Draft guidance", is_done: false },
+          { id: "demo-check-empty-3", title: "Review copy", is_done: false }
+        ],
         due_date: "2026-11-27",
         position: 2,
         created_by: ids.currentUser,
@@ -182,6 +195,7 @@ export function createDemoData() {
         id: "70000000-0000-4000-8000-000000000001",
         board_id: ids.board,
         actor_id: "20000000-0000-4000-8000-000000000003",
+        task_id: "50000000-0000-4000-8000-000000000005",
         event_type: "task_moved",
         description: "moved a task into In review",
         created_at: "2026-11-21T14:20:00.000Z"
@@ -190,6 +204,7 @@ export function createDemoData() {
         id: "70000000-0000-4000-8000-000000000002",
         board_id: ids.board,
         actor_id: ids.currentUser,
+        task_id: "50000000-0000-4000-8000-000000000003",
         event_type: "task_created",
         description: "created the responsive workspace shell task",
         created_at: "2026-11-20T10:10:00.000Z"
@@ -198,6 +213,7 @@ export function createDemoData() {
         id: "70000000-0000-4000-8000-000000000003",
         board_id: ids.board,
         actor_id: "20000000-0000-4000-8000-000000000004",
+        task_id: "50000000-0000-4000-8000-000000000005",
         event_type: "comment_added",
         description: "commented on the data model review",
         created_at: "2026-11-19T16:40:00.000Z"

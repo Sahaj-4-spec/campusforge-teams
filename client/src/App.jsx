@@ -48,6 +48,7 @@ import {
   workspaceApi, taskApi, listApi, invitationApi, notificationApi
 } from "./lib/api.js";
 import { buildOptimisticTaskMove } from "./lib/taskMove.js";
+import { createDemoData, createId, loadDemoData, STORAGE_KEY } from "./data/demoData.js";
 
 const navigation = [
   { id: "Overview", label: "Dashboard", icon: LayoutDashboard },
@@ -700,6 +701,8 @@ export default function App() {
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [realtimeVersion, setRealtimeVersion] = useState(0);
   const [realtimeConnected, setRealtimeConnected] = useState(false);
+  const [demoMode, setDemoMode] = useState(false);
+  const [showColdStartNotice, setShowColdStartNotice] = useState(false);
   const workspaceGeneration = useRef(0);
 
   useEffect(() => {
@@ -719,6 +722,10 @@ export default function App() {
   }, [mobileMenuOpen]);
 
   useEffect(() => {
+    if (demoMode) {
+      setLoading(false);
+      return undefined;
+    }
     if (!isAuthenticated) {
       setData(null);
       setLoading(false);
@@ -728,7 +735,9 @@ export default function App() {
     let cancelled = false;
     const requestGeneration = workspaceGeneration.current;
     setLoading(true);
+    setShowColdStartNotice(false);
     setLoadError("");
+    const coldStartTimer = window.setTimeout(() => setShowColdStartNotice(true), 3000);
     const pendingInvite = new URLSearchParams(window.location.search).get("invite");
     const workspaceRequest = pendingInvite
       ? invitationApi.accept(pendingInvite).then(() => {
@@ -772,14 +781,19 @@ export default function App() {
         }
       })
       .finally(() => {
+        window.clearTimeout(coldStartTimer);
+        setShowColdStartNotice(false);
         if (!cancelled) setLoading(false);
       });
 
-    return () => { cancelled = true; };
-  }, [isAuthenticated]);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(coldStartTimer);
+    };
+  }, [isAuthenticated, demoMode]);
 
   useEffect(() => {
-    if (!isAuthenticated || !data?.current_workspace_id) return undefined;
+    if (demoMode || !isAuthenticated || !data?.current_workspace_id) return undefined;
 
     let stopped = false;
     let retryTimer = null;
@@ -867,7 +881,7 @@ export default function App() {
   }, [isAuthenticated, data?.current_workspace_id]);
 
   useEffect(() => {
-    if (!isAuthenticated || !data) {
+    if (demoMode || !isAuthenticated || !data) {
       setInvitations([]);
       return undefined;
     }
@@ -886,7 +900,7 @@ export default function App() {
   }, [isAuthenticated, data]);
 
   useEffect(() => {
-    if (!isAuthenticated) {
+    if (demoMode || !isAuthenticated) {
       setUnreadNotifications(0);
       return undefined;
     }
@@ -910,9 +924,18 @@ export default function App() {
   const activeBoard = data?.boards.find((board) => board.id === activeBoardId) || data?.boards[0];
 
   useEffect(() => {
-    if (!isAuthenticated || !data?.current_workspace_id) return;
+    if (demoMode || !isAuthenticated || !data?.current_workspace_id) return;
     setWorkspaceSocketBoard(activeView === "Board" ? activeBoard?.id || null : null);
-  }, [isAuthenticated, data?.current_workspace_id, activeView, activeBoard?.id]);
+  }, [isAuthenticated, demoMode, data?.current_workspace_id, activeView, activeBoard?.id]);
+
+  useEffect(() => {
+    if (!demoMode || !data) return;
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    } catch (error) {
+      console.warn("CampusForge demo changes could not be saved locally.", error);
+    }
+  }, [demoMode, data]);
 
   const activeLists = (data?.lists || [])
     .filter((list) => list.board_id === activeBoard?.id)
@@ -930,6 +953,7 @@ export default function App() {
   }, [boardTasks, search]);
 
   async function refreshWorkspace() {
+    if (demoMode) return data;
     const requestGeneration = workspaceGeneration.current;
     const requestedWorkspaceId = data?.current_workspace_id || getStoredWorkspaceId();
     const workspace = await workspaceApi.get(requestedWorkspaceId);
@@ -943,6 +967,11 @@ export default function App() {
 
   async function switchWorkspace(workspaceId) {
     if (!workspaceId || workspaceId === data?.current_workspace_id) return;
+    if (demoMode) {
+      setData((current) => current ? { ...current, current_workspace_id: workspaceId } : current);
+      setNotice("Workspace switched");
+      return;
+    }
     const requestGeneration = ++workspaceGeneration.current;
     setLoading(true);
     try {
@@ -963,6 +992,7 @@ export default function App() {
   }
 
   function handleAuthenticated() {
+    setDemoMode(false);
     setLoading(true);
     setIsAuthenticated(true);
     setActiveView("Overview");
@@ -971,6 +1001,15 @@ export default function App() {
 
   async function logout() {
     if (isLoggingOut) return;
+    if (demoMode) {
+      setDemoMode(false);
+      setIsAuthenticated(false);
+      setData(null);
+      setActiveView("Overview");
+      setActiveBoardId("");
+      setNotice("");
+      return;
+    }
 
     setIsLoggingOut(true);
     setLogoutError("");
@@ -995,6 +1034,19 @@ export default function App() {
     }
   }
 
+  function startDemo() {
+    const sample = loadDemoData() || createDemoData();
+    setDemoMode(true);
+    setIsAuthenticated(true);
+    setData(sample);
+    setActiveBoardId(sample.boards[0]?.id || "");
+    setActiveView("Board");
+    setSearch("");
+    setLoadError("");
+    setLoading(false);
+    setNotice("You're in the interactive demo. Changes stay in this browser.");
+  }
+
   function openBoard(board) {
     if (!board) return;
     setActiveBoardId(board.id);
@@ -1016,6 +1068,15 @@ export default function App() {
 
   async function saveBoard(values) {
     try {
+      if (demoMode) {
+        const board = { id: createId(), workspace_id: data.current_workspace_id, name: values.name, description: values.description || "", visibility: values.visibility || "workspace", created_by: data.current_user_id, created_at: new Date().toISOString() };
+        const firstList = { id: createId(), board_id: board.id, name: "To do", position: 1 };
+        setData((current) => ({ ...current, boards: [...current.boards, board], lists: [...current.lists, firstList] }));
+        setBoardDialogOpen(false);
+        openBoard(board);
+        setNotice("Demo project created");
+        return;
+      }
       await boardApi.create(values, data.current_workspace_id);
       const workspace = await refreshWorkspace();
       const newestBoard = [...workspace.boards].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
@@ -1033,8 +1094,12 @@ export default function App() {
     const name = window.prompt("Name this column");
     if (name === null || !name.trim()) return;
     try {
-      await listApi.create(activeBoard.id, name.trim());
-      await refreshWorkspace();
+      if (demoMode) {
+        setData((current) => ({ ...current, lists: [...current.lists, { id: createId(), board_id: activeBoard.id, name: name.trim(), position: current.lists.filter((row) => row.board_id === activeBoard.id).length + 1 }] }));
+      } else {
+        await listApi.create(activeBoard.id, name.trim());
+        await refreshWorkspace();
+      }
       setNotice("Column created");
     } catch (error) {
       setNotice(error.message || "Could not create column");
@@ -1045,8 +1110,12 @@ export default function App() {
     const name = window.prompt("Rename column", list.name);
     if (name === null || !name.trim() || name.trim() === list.name) return;
     try {
-      await listApi.update(list.id, name.trim());
-      await refreshWorkspace();
+      if (demoMode) {
+        setData((current) => ({ ...current, lists: current.lists.map((row) => row.id === list.id ? { ...row, name: name.trim() } : row) }));
+      } else {
+        await listApi.update(list.id, name.trim());
+        await refreshWorkspace();
+      }
       setNotice("Column renamed");
     } catch (error) {
       setNotice(error.message || "Could not rename column");
@@ -1054,10 +1123,18 @@ export default function App() {
   }
 
   async function deleteList(list) {
+    if ((data?.tasks || []).some((task) => task.list_id === list.id)) {
+      setNotice("Move or remove every card before deleting this list.");
+      return;
+    }
     if (!window.confirm("Delete the empty column \"" + list.name + "\"? Columns must be empty before they can be deleted.")) return;
     try {
-      await listApi.remove(list.id);
-      await refreshWorkspace();
+      if (demoMode) {
+        setData((current) => ({ ...current, lists: current.lists.filter((row) => row.id !== list.id) }));
+      } else {
+        await listApi.remove(list.id);
+        await refreshWorkspace();
+      }
       setNotice("Column deleted");
     } catch (error) {
       setNotice(error.message || "Could not delete column");
@@ -1101,6 +1178,24 @@ export default function App() {
 
   async function saveTask(values) {
     try {
+      if (demoMode) {
+        const timestamp = new Date().toISOString();
+        const nextTask = editingTask
+          ? { ...editingTask, ...values, updated_at: timestamp, assignee_id: undefined }
+          : { id: createId(), board_id: activeBoard?.id, list_id: values.list_id, title: values.title, description: values.description, priority: values.priority, due_date: values.due_date, estimated_minutes: values.estimated_minutes, checklist: [], labels: [], position: data.tasks.filter((item) => item.list_id === values.list_id).length + 1, created_by: data.current_user_id, created_at: timestamp, updated_at: timestamp };
+        setData((current) => {
+          const taskAssignees = (current.task_assignees || []).filter((row) => row.task_id !== nextTask.id);
+          if (values.assignee_id) taskAssignees.push({ task_id: nextTask.id, user_id: values.assignee_id });
+          return {
+            ...current,
+            tasks: editingTask ? current.tasks.map((item) => item.id === nextTask.id ? nextTask : item) : [...current.tasks, nextTask],
+            task_assignees: taskAssignees
+          };
+        });
+        setNotice(editingTask ? "Demo card updated" : "Demo card created");
+        closeDialog();
+        return;
+      }
       if (editingTask) {
         await taskApi.update(editingTask.id, values);
         setNotice("Task updated");
@@ -1117,6 +1212,17 @@ export default function App() {
 
   async function deleteTask(taskId) {
     try {
+      if (demoMode) {
+        setData((current) => ({
+          ...current,
+          tasks: current.tasks.filter((item) => item.id !== taskId),
+          task_assignees: (current.task_assignees || []).filter((item) => item.task_id !== taskId),
+          comments: (current.comments || []).filter((item) => item.task_id !== taskId)
+        }));
+        closeDialog();
+        setNotice("Demo card deleted");
+        return;
+      }
       await taskApi.remove(taskId);
       await refreshWorkspace();
       closeDialog();
@@ -1128,6 +1234,14 @@ export default function App() {
 
   async function addComment(taskId, body, parentCommentId = null) {
     try {
+      if (demoMode) {
+        setData((current) => ({
+          ...current,
+          comments: [...(current.comments || []), { id: createId(), task_id: taskId, author_id: current.current_user_id, parent_comment_id: parentCommentId, body, created_at: new Date().toISOString() }]
+        }));
+        setNotice("Demo comment added");
+        return;
+      }
       await taskApi.addComment(taskId, body, parentCommentId);
       await refreshWorkspace();
       setNotice("Comment added");
@@ -1136,8 +1250,39 @@ export default function App() {
     }
   }
 
+  function updateDemoTask(taskId, updates) {
+    if (!demoMode) return;
+    setData((current) => ({
+      ...current,
+      tasks: current.tasks.map((task) => task.id === taskId ? { ...task, ...updates, updated_at: new Date().toISOString() } : task)
+    }));
+  }
+
+  async function quickAddTask(listId, title) {
+    if (!listId || !title.trim()) return;
+    if (demoMode) {
+      const timestamp = new Date().toISOString();
+      const task = { id: createId(), board_id: activeBoard?.id, list_id: listId, title: title.trim(), description: "", priority: "medium", due_date: null, position: data.tasks.filter((item) => item.list_id === listId).length + 1, created_by: data.current_user_id, created_at: timestamp, updated_at: timestamp };
+      setData((current) => ({ ...current, tasks: [...current.tasks, task] }));
+      setNotice("Demo card added");
+      return;
+    }
+    try {
+      await taskApi.create({ list_id: listId, title: title.trim(), description: "", priority: "medium", due_date: null });
+      await refreshWorkspace();
+    } catch (error) {
+      setNotice(error.message || "Could not add card");
+      throw error;
+    }
+  }
+
   async function moveTask(taskId, destinationListId, overId) {
     if (!data?.tasks || !destinationListId) return;
+    if (demoMode) {
+      const nextMove = buildOptimisticTaskMove(data.tasks, taskId, destinationListId, overId);
+      if (nextMove) setData((current) => ({ ...current, tasks: nextMove.tasks }));
+      return;
+    }
 
     const previousTasks = data.tasks;
     const optimisticMove = buildOptimisticTaskMove(
@@ -1215,13 +1360,15 @@ export default function App() {
             taskAssignees={data.task_assignees}
             onOpenTask={openTask}
             onAddTask={openNewTask}
+            onQuickAddTask={quickAddTask}
             onMoveTask={moveTask}
             onCreateList={createList}
             onRenameList={renameList}
             onDeleteList={deleteList}
             canManageLists={canManageWorkspace}
             currentUserId={data.current_user_id}
-            realtimeConnected={realtimeConnected}
+            realtimeConnected={!demoMode && realtimeConnected}
+            demoMode={demoMode}
           />
         ) : <EmptyState title="No project selected" description="Choose a project from the sidebar." />;
       case "My Tasks":
@@ -1304,11 +1451,24 @@ export default function App() {
     }
   }
 
-  if (loading) {
-    return <main className="auth-screen"><section className="auth-card"><p className="eyebrow">CAMPUSFORGE TEAMS</p><h1>Loading your workspace…</h1><p>Connecting to your account and retrieving your projects.</p></section></main>;
+  if (hasOAuthError && !isAuthenticated) {
+    return <AuthScreen onAuthenticated={handleAuthenticated} onTryDemo={startDemo} />;
   }
 
-  if (!isAuthenticated) return <AuthScreen onAuthenticated={handleAuthenticated} />;
+  if (loading) {
+    return (
+      <main className="auth-screen">
+        <section className="auth-card">
+          <p className="eyebrow">CAMPUSFORGE TEAMS</p>
+          <h1>Loading your workspace…</h1>
+          <p>Connecting to your account and retrieving your projects.</p>
+          {showColdStartNotice && <p className="cold-start-notice" role="status">The workspace service is waking up. The first connection can take a little longer; your request is still in progress.</p>}
+        </section>
+      </main>
+    );
+  }
+
+  if (!isAuthenticated) return <AuthScreen onAuthenticated={handleAuthenticated} onTryDemo={startDemo} />;
 
   if (loadError || !data) {
     return (
@@ -1352,6 +1512,12 @@ export default function App() {
         onSignOut={logout}
       />
       <div className="main-content">
+        {demoMode && (
+          <div className="demo-mode-banner" role="status">
+            <span><Sparkles size={14} /> Interactive demo · Changes are saved only in this browser</span>
+            <button type="button" onClick={logout}>Exit demo</button>
+          </div>
+        )}
         <header className="topbar">
           <div className="topbar-left">
             <button className="mobile-menu-button" type="button" aria-label="Open navigation" aria-expanded={mobileMenuOpen} aria-controls="mobile-navigation-dialog" onClick={() => setMobileMenuOpen((value) => !value)}>
@@ -1437,6 +1603,9 @@ export default function App() {
         allTasks={data.tasks}
         onAdvancedChanged={refreshWorkspace}
         refreshKey={realtimeVersion}
+        activityEvents={data.activity_events.filter((event) => !editingTask || event.task_id === editingTask.id)}
+        demoMode={demoMode}
+        onDemoTaskUpdate={updateDemoTask}
       />
       {notice && (
         <div

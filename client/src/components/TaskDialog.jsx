@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { AtSign, CalendarDays, CornerDownRight, MessageCircle, Reply, Trash2, X } from "lucide-react";
+import { Activity, AtSign, CalendarDays, CornerDownRight, MessageCircle, Reply, Trash2, X } from "lucide-react";
 import TaskAdvancedPanel from "./TaskAdvancedPanel.jsx";
 import { sendWorkspaceSocketMessage } from "../lib/api.js";
+import { createId } from "../data/demoData.js";
 
 function formatCommentDate(value) {
   if (!value) return "";
@@ -11,6 +12,30 @@ function formatCommentDate(value) {
     hour: "numeric",
     minute: "2-digit"
   }).format(new Date(value));
+}
+
+function inlineMarkdown(value) {
+  return value.split("**").map((part, index) => {
+    const formatted = part.split("\`").map((segment, childIndex) =>
+      childIndex % 2 === 1 ? <code key={childIndex}>{segment}</code> : segment
+    );
+    return index % 2 === 1 ? <strong key={index}>{formatted}</strong> : <span key={index}>{formatted}</span>;
+  });
+}
+
+function MarkdownDescription({ value }) {
+  const lines = value.split("\n");
+  return (
+    <div className="task-markdown-content">
+      {lines.map((line, index) => {
+        if (!line.trim()) return <div className="task-markdown-spacer" key={index} />;
+        if (line.startsWith("## ")) return <h4 key={index}>{inlineMarkdown(line.slice(3))}</h4>;
+        if (line.startsWith("# ")) return <h3 key={index}>{inlineMarkdown(line.slice(2))}</h3>;
+        if (line.startsWith("- ") || line.startsWith("* ")) return <p className="task-markdown-list-item" key={index}>• {inlineMarkdown(line.slice(2))}</p>;
+        return <p key={index}>{inlineMarkdown(line)}</p>;
+      })}
+    </div>
+  );
 }
 
 export default function TaskDialog({
@@ -28,8 +53,12 @@ export default function TaskDialog({
   onAddComment,
   allTasks = [],
   onAdvancedChanged,
-  refreshKey = 0
+  refreshKey = 0,
+  activityEvents = [],
+  demoMode = false,
+  onDemoTaskUpdate
 }) {
+  const [mounted, setMounted] = useState(open);
   const [form, setForm] = useState({
     title: "",
     description: "",
@@ -42,8 +71,22 @@ export default function TaskDialog({
   const [commentDraft, setCommentDraft] = useState("");
   const [replyToCommentId, setReplyToCommentId] = useState("");
   const [mentionUserId, setMentionUserId] = useState("");
+  const [demoChecklistDraft, setDemoChecklistDraft] = useState("");
+  const [demoLabelDraft, setDemoLabelDraft] = useState("");
   const dialogWasOpen = useRef(false);
   const lastTaskIdentity = useRef(null);
+
+  useEffect(() => {
+    if (open) {
+      setMounted(true);
+      return undefined;
+    }
+    if (mounted) {
+      const timeout = window.setTimeout(() => setMounted(false), 200);
+      return () => window.clearTimeout(timeout);
+    }
+    return undefined;
+  }, [open, mounted]);
 
   useEffect(() => {
     if (!open) {
@@ -108,7 +151,29 @@ export default function TaskDialog({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [open, onClose]);
 
-  if (!open) return null;
+  if (!mounted) return null;
+
+  function updateDemoTask(updates) {
+    if (task?.id && demoMode) onDemoTaskUpdate?.(task.id, updates);
+  }
+
+  function addDemoChecklistItem(event) {
+    event.preventDefault();
+    if (!demoChecklistDraft.trim() || !task) return;
+    updateDemoTask({
+      checklist: [...(task.checklist || []), { id: createId(), title: demoChecklistDraft.trim(), is_done: false }]
+    });
+    setDemoChecklistDraft("");
+  }
+
+  function addDemoLabel(event) {
+    event.preventDefault();
+    if (!demoLabelDraft.trim() || !task) return;
+    updateDemoTask({
+      labels: [...(task.labels || []), { id: createId(), name: demoLabelDraft.trim(), color: "#8A78D6" }]
+    });
+    setDemoLabelDraft("");
+  }
 
   function updateField(event) {
     const { name, value } = event.target;
@@ -192,13 +257,14 @@ export default function TaskDialog({
 
   return (
     <div
-      className="dialog-backdrop"
+      className={"dialog-backdrop task-drawer-backdrop" + (open ? " is-open" : " is-closing")}
       role="presentation"
+      aria-hidden={!open}
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (open && event.target === event.currentTarget) onClose();
       }}
     >
-      <section className="task-dialog" role="dialog" aria-modal="true" aria-labelledby="task-dialog-title">
+      <section className={"task-dialog task-drawer" + (open ? " is-open" : " is-closing")} role="dialog" aria-modal="true" aria-labelledby="task-dialog-title" aria-hidden={!open}>
         <div className="dialog-header">
           <div>
             <p className="eyebrow">{task ? "TASK DETAILS" : "NEW TASK"}</p>
@@ -223,9 +289,10 @@ export default function TaskDialog({
             />
           </label>
 
-          <label className="field-group">
-            <span>Description</span>
+          <div className="field-group">
+            <label htmlFor="task-description">Description</label>
             <textarea
+              id="task-description"
               name="description"
               value={form.description}
               onChange={updateField}
@@ -233,7 +300,13 @@ export default function TaskDialog({
               rows={4}
               maxLength={4000}
             />
-          </label>
+            {form.description.trim() && (
+              <div className="task-markdown-preview">
+                <span className="task-markdown-preview-label">Markdown preview</span>
+                <MarkdownDescription value={form.description} />
+              </div>
+            )}
+          </div>
 
           <div className="field-grid">
             <label className="field-group">
@@ -284,7 +357,68 @@ export default function TaskDialog({
           </div>
         </form>
 
-        {task && <TaskAdvancedPanel task={task} lists={lists} tasks={allTasks} onChanged={onAdvancedChanged} refreshKey={refreshKey} />}
+        {task && !demoMode && <TaskAdvancedPanel task={task} lists={lists} tasks={allTasks} onChanged={onAdvancedChanged} refreshKey={refreshKey} />}
+
+        {task && demoMode && (
+          <section className="demo-task-metadata" aria-label="Demo labels and checklist">
+            <div className="comments-heading"><h3>Labels</h3><span>{(task.labels || []).length}</span></div>
+            <div className="demo-task-labels">
+              {(task.labels || []).map((label) => (
+                <button
+                  type="button"
+                  key={label.id}
+                  className="demo-task-label"
+                  style={{ "--label-color": label.color || "#8A78D6" }}
+                  onClick={() => updateDemoTask({ labels: (task.labels || []).filter((item) => item.id !== label.id) })}
+                  aria-label={"Remove label " + label.name}
+                >{label.name}<X size={11} /></button>
+              ))}
+              {!(task.labels || []).length && <span className="feature-muted">No labels yet.</span>}
+            </div>
+            <form className="demo-task-inline-add" onSubmit={addDemoLabel}>
+              <input value={demoLabelDraft} onChange={(event) => setDemoLabelDraft(event.target.value)} placeholder="Add a label…" maxLength={40} aria-label="New label name" />
+              <button className="secondary-button" type="submit" disabled={!demoLabelDraft.trim()}>Add label</button>
+            </form>
+
+            <div className="comments-heading demo-task-checklist-heading"><h3>Checklist</h3><span className="tabular-nums">{(task.checklist || []).filter((item) => item.is_done || item.completed).length}/{(task.checklist || []).length}</span></div>
+            <div className="demo-task-checklist">
+              {(task.checklist || []).map((item) => (
+                <label className="demo-task-checklist-item" key={item.id}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(item.is_done || item.completed)}
+                    onChange={(event) => updateDemoTask({
+                      checklist: (task.checklist || []).map((row) => row.id === item.id ? { ...row, is_done: event.target.checked } : row)
+                    })}
+                  />
+                  <span className={item.is_done || item.completed ? "completed" : ""}>{item.title}</span>
+                </label>
+              ))}
+              {!(task.checklist || []).length && <span className="feature-muted">No checklist items yet.</span>}
+            </div>
+            <form className="demo-task-inline-add" onSubmit={addDemoChecklistItem}>
+              <input value={demoChecklistDraft} onChange={(event) => setDemoChecklistDraft(event.target.value)} placeholder="Add a checklist item…" maxLength={180} aria-label="New checklist item" />
+              <button className="secondary-button" type="submit" disabled={!demoChecklistDraft.trim()}>Add item</button>
+            </form>
+          </section>
+        )}
+
+        {task && activityEvents.length > 0 && (
+          <section className="task-activity-section" aria-label="Card activity">
+            <div className="comments-heading"><h3><Activity size={16} /> Activity</h3><span>{activityEvents.length}</span></div>
+            <ol className="task-activity-list">
+              {[...activityEvents].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).map((event) => {
+                const actor = users.find((user) => user.id === (event.actor_id || event.actor_user_id));
+                return (
+                  <li key={event.id}>
+                    <span className="task-activity-dot" />
+                    <div><p><strong>{actor?.full_name || "A teammate"}</strong> {event.description || event.event_type?.replaceAll("_", " ")}</p><time>{formatCommentDate(event.created_at)}</time></div>
+                  </li>
+                );
+              })}
+            </ol>
+          </section>
+        )}
 
         {task && (
           <section className="comments-section" aria-label="Task comments">
