@@ -108,7 +108,8 @@ These capabilities are under review in [draft PR #12](https://github.com/Sahaj-4
 ```
 
 ### Communication
-- `POST /api/auth/register` and `POST /api/auth/login` create and authenticate accounts.
+- `POST /api/auth/register` remains for compatibility but returns `403 Forbidden`; new accounts must use `GET /api/auth/google/start`, `/api/auth/github/start`, or `/api/auth/discord/start`, each of which requires a provider-verified email.
+- `POST /api/auth/login` remains available for existing email/password accounts.
 - `GET /api/workspace` returns the signed-in user's workspace, members, boards, lists, tasks, assignments, comments, and activity.
 - `POST /api/tasks`, `PATCH /api/tasks/:id`, and `DELETE /api/tasks/:id` persist task changes.
 - `POST /api/tasks/:id/comments` saves discussion comments; `PATCH /api/tasks/:id/move` persists drag-and-drop order.
