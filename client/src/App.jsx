@@ -41,7 +41,8 @@ import { DashboardOverview, WorkspaceTimeline, WorkspaceReports } from "./compon
 import { CalendarPage, NotificationsPage, FilesPage, ChatAndMeetingsPage } from "./components/WorkspaceFeatures.jsx";
 import {
   authApi, boardApi, clearStoredWorkspaceId, createWorkspaceSocket,
-  getStoredWorkspaceId, setStoredWorkspaceId, workspaceApi, taskApi, listApi, invitationApi, notificationApi
+  getStoredWorkspaceId, setStoredWorkspaceId, setWorkspaceSocketBoard,
+  workspaceApi, taskApi, listApi, invitationApi, notificationApi
 } from "./lib/api.js";
 
 const navigation = [
@@ -616,6 +617,7 @@ export default function App() {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [realtimeVersion, setRealtimeVersion] = useState(0);
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
   const workspaceGeneration = useRef(0);
 
   useEffect(() => {
@@ -714,6 +716,7 @@ export default function App() {
 
       socket.addEventListener("open", () => {
         attempts = 0;
+        if (!stopped) setRealtimeConnected(true);
       });
 
       socket.addEventListener("message", (message) => {
@@ -725,7 +728,10 @@ export default function App() {
             setData(null);
             return;
           }
-          if (payload.type === "workspace_event" && ["typing_indicator","presence_joined","presence_left"].includes(payload.event?.event_type)) {
+          if (payload.type === "workspace_event" && [
+            "typing_indicator", "presence_joined", "presence_left",
+            "card_editing_started", "card_editing_stopped"
+          ].includes(payload.event?.event_type)) {
             return;
           }
           if (payload.type === "workspace_event" || payload.type === "refresh_required") {
@@ -757,6 +763,7 @@ export default function App() {
       });
 
       socket.addEventListener("close", () => {
+        if (!stopped) setRealtimeConnected(false);
         if (stopped) return;
         attempts += 1;
         const delay = Math.min(30000, 1000 * (2 ** Math.min(attempts, 5)));
@@ -771,6 +778,7 @@ export default function App() {
     connect();
     return () => {
       stopped = true;
+      setRealtimeConnected(false);
       if (retryTimer) window.clearTimeout(retryTimer);
       socket?.close();
     };
@@ -818,6 +826,12 @@ export default function App() {
   const canManageWorkspace = currentRole === "owner" || currentRole === "admin";
   const workspaceName = data?.workspaces?.find((workspace) => workspace.id === data.current_workspace_id)?.name || "CampusForge";
   const activeBoard = data?.boards.find((board) => board.id === activeBoardId) || data?.boards[0];
+
+  useEffect(() => {
+    if (!isAuthenticated || !data?.current_workspace_id) return;
+    setWorkspaceSocketBoard(activeView === "Board" ? activeBoard?.id || null : null);
+  }, [isAuthenticated, data?.current_workspace_id, activeView, activeBoard?.id]);
+
   const activeLists = (data?.lists || [])
     .filter((list) => list.board_id === activeBoard?.id)
     .sort((a, b) => a.position - b.position);
@@ -1089,6 +1103,8 @@ export default function App() {
             onRenameList={renameList}
             onDeleteList={deleteList}
             canManageLists={canManageWorkspace}
+            currentUserId={data.current_user_id}
+            realtimeConnected={realtimeConnected}
           />
         ) : <EmptyState title="No project selected" description="Choose a project from the sidebar." />;
       case "My Tasks":
