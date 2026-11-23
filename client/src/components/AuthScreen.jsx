@@ -41,6 +41,14 @@ const providers = [
   { id: "discord", label: "Discord", icon: DiscordIcon }
 ];
 
+// OAuth actions stay disabled until each provider application is configured
+// in the deployment environment. This prevents sending users into a dead-end.
+const providerAvailability = {
+  google: import.meta.env.VITE_OAUTH_GOOGLE_ENABLED === "true",
+  github: import.meta.env.VITE_OAUTH_GITHUB_ENABLED === "true",
+  discord: import.meta.env.VITE_OAUTH_DISCORD_ENABLED === "true"
+};
+
 function getEmailError(value) {
   const email = value.trim();
   if (!email) return "Enter your email address.";
@@ -48,7 +56,7 @@ function getEmailError(value) {
   return "";
 }
 
-export default function AuthScreen({ onAuthenticated }) {
+export default function AuthScreen({ onAuthenticated, onTryDemo }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -164,7 +172,7 @@ export default function AuthScreen({ onAuthenticated }) {
                 <Mail size={17} aria-hidden="true" />
                 <input
                   id="auth-email"
-                  
+                  className="outline-none focus:outline-none focus-visible:outline-none"
                   type="email"
                   value={email}
                   onChange={(event) => updateEmail(event.target.value)}
@@ -176,7 +184,7 @@ export default function AuthScreen({ onAuthenticated }) {
                   required
                 />
               </span>
-              {fieldErrors.email && <p className="auth-field-error" id="auth-email-error" role="alert">{fieldErrors.email}</p>}
+              <p className="auth-field-error" id="auth-email-error" role="alert" aria-live="polite">{fieldErrors.email || "\u00a0"}</p>
             </div>
             <div className="field-group">
               <div className="auth-field-heading">
@@ -195,7 +203,7 @@ export default function AuthScreen({ onAuthenticated }) {
                 <LockKeyhole size={17} aria-hidden="true" />
                 <input
                   id="auth-password"
-                  
+                  className="outline-none focus:outline-none focus-visible:outline-none"
                   type={showPassword ? "text" : "password"}
                   value={password}
                   onChange={(event) => updatePassword(event.target.value)}
@@ -217,7 +225,7 @@ export default function AuthScreen({ onAuthenticated }) {
                   {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
                 </button>
               </span>
-              {fieldErrors.password && <p className="auth-field-error" id="auth-password-error" role="alert">{fieldErrors.password}</p>}
+              <p className="auth-field-error" id="auth-password-error" role="alert" aria-live="polite">{fieldErrors.password || "\u00a0"}</p>
               {showRecoveryNotice && (
                 <p className="auth-recovery-notice" id="auth-recovery-notice" role="status">
                   Password reset is not set up yet. Try signing in with your connected Google, GitHub, or Discord account, or contact your workspace administrator.
@@ -230,24 +238,34 @@ export default function AuthScreen({ onAuthenticated }) {
             </button>
           </form>
         )}
+        {!isRegister && (
+          <button className="auth-demo-button" type="button" onClick={onTryDemo}>
+            <Sparkles size={16} /> Try Live Demo <ArrowRight size={16} />
+          </button>
+        )}
         {error && <p className="auth-error" role="alert">{error}</p>}
 
-        <div className="auth-divider"><span>{isRegister ? "verify and sign up with" : "or continue with"}</span></div>
+        <div className="auth-divider"><span>{isRegister ? "Verify and sign up with" : "or continue with"}</span></div>
 
         <div className="social-auth-grid" aria-label="Social sign-in providers">
-          {providers.map(({ id, label, icon: Icon }) => (
-            <button
-              className={"social-auth-button social-" + id}
-              type="button"
-              key={id}
-              onClick={() => startOAuth(id)}
-              disabled={Boolean(busyProvider) || busy}
-              aria-label={(isRegister ? "Sign up with " : "Continue with ") + label}
-            >
-              {busyProvider === id ? <span className="social-spinner" /> : <Icon size={18} aria-hidden="true" />}
-              <span>{busyProvider === id ? "Connecting..." : label}</span>
-            </button>
-          ))}
+          {providers.map(({ id, label, icon: Icon }) => {
+            const configured = providerAvailability[id];
+            return (
+              <button
+                className={"social-auth-button social-" + id + (!configured ? " social-auth-unavailable" : "")}
+                type="button"
+                key={id}
+                onClick={() => startOAuth(id)}
+                disabled={!configured || Boolean(busyProvider) || busy}
+                aria-label={(isRegister ? "Sign up with " : "Continue with ") + label + (configured ? "" : ", coming soon")}
+                title={configured ? label : label + " sign-in is not configured yet"}
+              >
+                {busyProvider === id ? <span className="social-spinner" /> : <Icon size={18} aria-hidden="true" />}
+                <span>{busyProvider === id ? "Connecting..." : label}</span>
+                {!configured && <small className="social-auth-badge">Soon</small>}
+              </button>
+            );
+          })}
         </div>
 
         <p className="auth-switch">
