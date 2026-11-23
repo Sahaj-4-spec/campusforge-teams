@@ -1325,7 +1325,6 @@ export default function App() {
                 <kbd>⌘ K</kbd>
               </label>
             )}
-            <span className="preview-status"><i /> Database-backed</span>
             <button className="icon-button notification-button" type="button" aria-label={"Notifications" + (unreadNotifications ? ", " + unreadNotifications + " unread" : "")} onClick={() => navigate("Notifications")}><Bell size={18} />{unreadNotifications > 0 && <span className="notification-count-badge">{Math.min(unreadNotifications, 99)}</span>}</button>
             <button
               className="topbar-profile-button"
