@@ -104,6 +104,7 @@ struct CommentRow {
     id: Uuid,
     task_id: Uuid,
     author_id: Uuid,
+    parent_comment_id: Option<Uuid>,
     body: String,
     created_at: DateTime<Utc>,
 }
@@ -302,7 +303,10 @@ async fn get_workspace(
     .map_err(|cause| internal_error(cause, "Could not load task assignees"))?;
 
     let comments = sqlx::query_as::<_, CommentRow>(
-        "SELECT c.id, c.task_id, c.author_id, c.body, c.created_at FROM comments c          JOIN tasks t ON t.id = c.task_id JOIN lists l ON l.id = t.list_id          JOIN boards b ON b.id = l.board_id WHERE b.workspace_id = $1          ORDER BY c.created_at",
+        "SELECT c.id, c.task_id, c.author_id, c.parent_comment_id, c.body, c.created_at
+         FROM comments c JOIN tasks t ON t.id = c.task_id JOIN lists l ON l.id = t.list_id
+         JOIN boards b ON b.id = l.board_id WHERE b.workspace_id = $1
+         ORDER BY c.created_at",
     )
     .bind(workspace.id)
     .fetch_all(&state.db)
@@ -773,6 +777,7 @@ async fn delete_task(
 #[derive(Debug, Deserialize)]
 struct CommentInput {
     body: String,
+    parent_comment_id: Option<Uuid>,
 }
 
 async fn add_comment(
@@ -799,11 +804,30 @@ async fn add_comment(
         return Err(error(StatusCode::NOT_FOUND, "Task not found"));
     };
 
+    if let Some(parent_comment_id) = input.parent_comment_id {
+        let valid_parent: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+                SELECT 1 FROM comments
+                 WHERE id=$1 AND task_id=$2 AND parent_comment_id IS NULL
+            )",
+        )
+        .bind(parent_comment_id)
+        .bind(task_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|cause| internal_error(cause, "Could not verify reply parent"))?;
+        if !valid_parent {
+            return Err(error(StatusCode::BAD_REQUEST, "Replies must belong to a comment on this task"));
+        }
+    }
+
     let comment_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO comments (task_id, author_id, body) VALUES ($1, $2, $3) RETURNING id",
+        "INSERT INTO comments (task_id, author_id, parent_comment_id, body)
+         VALUES ($1, $2, $3, $4) RETURNING id",
     )
         .bind(task_id)
         .bind(user_id)
+        .bind(input.parent_comment_id)
         .bind(body)
         .fetch_one(&mut *tx)
         .await
@@ -811,8 +835,14 @@ async fn add_comment(
     roadmap::create_mentions_in_transaction(&mut tx, workspace_id, user_id, "task_comment", comment_id, body)
         .await
         .map_err(|cause| internal_error(cause, "Could not create mention notifications"))?;
-    add_activity(&mut tx, workspace_id, board_id, Some(task_id), user_id, "comment_added", "added a comment to a task".to_string())
-        .await.map_err(|cause| internal_error(cause, "Could not record comment activity"))?;
+    add_activity(
+        &mut tx, workspace_id, board_id, Some(task_id), user_id, "comment_added",
+        if input.parent_comment_id.is_some() {
+            "replied in a task discussion".to_string()
+        } else {
+            "added a comment to a task".to_string()
+        },
+    ).await.map_err(|cause| internal_error(cause, "Could not record comment activity"))?;
     tx.commit().await.map_err(|cause| internal_error(cause, "Could not save comment"))?;
     state.publish_workspace_event(workspace_id, Some(board_id), "comment_added", "added a comment to a task");
     Ok(StatusCode::CREATED)
@@ -835,29 +865,32 @@ async fn move_task(
     }
 
     let mut tx = state.db.begin().await.map_err(|cause| internal_error(cause, "Could not begin task move"))?;
-    let source: Option<(Uuid, Uuid, Uuid)> = sqlx::query_as(
-        "SELECT t.list_id, l.board_id, b.workspace_id FROM tasks t          JOIN lists l ON l.id = t.list_id JOIN boards b ON b.id = l.board_id          JOIN workspace_members wm ON wm.workspace_id = b.workspace_id          WHERE t.id = $1 AND wm.user_id = $2",
+    let source: Option<(Uuid, Uuid, Uuid, String, String)> = sqlx::query_as(
+        "SELECT t.list_id, l.board_id, b.workspace_id, l.name, t.title
+           FROM tasks t JOIN lists l ON l.id=t.list_id JOIN boards b ON b.id=l.board_id
+           JOIN workspace_members wm ON wm.workspace_id=b.workspace_id
+          WHERE t.id=$1 AND wm.user_id=$2",
     )
     .bind(task_id)
     .bind(user_id)
     .fetch_optional(&mut *tx)
     .await
     .map_err(|cause| internal_error(cause, "Could not locate task to move"))?;
-    let Some((source_list_id, board_id, workspace_id)) = source else {
+    let Some((source_list_id, board_id, workspace_id, source_list_name, task_title)) = source else {
         return Err(error(StatusCode::NOT_FOUND, "Task not found"));
     };
 
-    let destination_valid: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM lists WHERE id = $1 AND board_id = $2)",
+    let destination_list_name: Option<String> = sqlx::query_scalar(
+        "SELECT name FROM lists WHERE id=$1 AND board_id=$2",
     )
     .bind(input.destination_list_id)
     .bind(board_id)
-    .fetch_one(&mut *tx)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|cause| internal_error(cause, "Could not verify destination list"))?;
-    if !destination_valid {
+    let Some(destination_list_name) = destination_list_name else {
         return Err(error(StatusCode::BAD_REQUEST, "Destination list is not on this board"));
-    }
+    };
 
     let destination_ids: Vec<Uuid> = sqlx::query_scalar(
         "SELECT id FROM tasks WHERE list_id = $1 AND id <> $2 ORDER BY position",
@@ -919,7 +952,12 @@ async fn move_task(
             .map_err(|cause| internal_error(cause, "Could not normalize source task order"))?;
     }
 
-    add_activity(&mut tx, workspace_id, board_id, Some(task_id), user_id, "task_moved", "moved a task to another list or position".to_string())
+    let activity_description = if source_list_id == input.destination_list_id {
+        format!("reordered {task_title} in {source_list_name}")
+    } else {
+        format!("moved {task_title} from {source_list_name} to {destination_list_name}")
+    };
+    add_activity(&mut tx, workspace_id, board_id, Some(task_id), user_id, "task_moved", activity_description)
         .await.map_err(|cause| internal_error(cause, "Could not record task move"))?;
     tx.commit().await.map_err(|cause| internal_error(cause, "Could not save task order"))?;
     state.publish_workspace_event(workspace_id, Some(board_id), "task_moved", "moved a task to another list or position");
