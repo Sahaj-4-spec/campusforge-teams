@@ -54,7 +54,7 @@ function getChecklistProgress(task) {
   return { completed, total };
 }
 
-function TaskCardFace({ task, users, assigneeIds, lists = [], editors = [], onOpen, onMove }) {
+function TaskCardFace({ task, users, assigneeIds, lists = [], editors = [], onOpen, onMove, dragHandleProps }) {
   const assignedUsers = assigneeIds
     .map((id) => users.find((user) => user.id === id))
     .filter(Boolean);
@@ -94,6 +94,7 @@ function TaskCardFace({ task, users, assigneeIds, lists = [], editors = [], onOp
             type="button"
             aria-label={"Drag " + task.title}
             data-drag-handle
+            {...(dragHandleProps || {})}
           >
             <GripVertical size={15} />
           </button>
@@ -159,14 +160,7 @@ function SortableTask({ task, users, assigneeIds, lists, editors = [], onOpen, o
         editors={editors}
         onOpen={onOpen}
         onMove={onMove}
-      />
-      <button
-        className="task-card-drag-sensor"
-        type="button"
-        tabIndex={-1}
-        aria-hidden="true"
-        {...attributes}
-        {...listeners}
+        dragHandleProps={{ ...attributes, ...listeners }}
       />
     </article>
   );
