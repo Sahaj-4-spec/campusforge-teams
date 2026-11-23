@@ -1178,7 +1178,7 @@ export default function App() {
         const timestamp = new Date().toISOString();
         const nextTask = editingTask
           ? { ...editingTask, ...values, updated_at: timestamp, assignee_id: undefined }
-          : { id: createId(), board_id: activeBoard?.id, list_id: values.list_id, title: values.title, description: values.description, priority: values.priority, due_date: values.due_date, estimated_minutes: values.estimated_minutes, position: data.tasks.filter((item) => item.list_id === values.list_id).length + 1, created_by: data.current_user_id, created_at: timestamp, updated_at: timestamp };
+          : { id: createId(), board_id: activeBoard?.id, list_id: values.list_id, title: values.title, description: values.description, priority: values.priority, due_date: values.due_date, estimated_minutes: values.estimated_minutes, checklist: [], labels: [], position: data.tasks.filter((item) => item.list_id === values.list_id).length + 1, created_by: data.current_user_id, created_at: timestamp, updated_at: timestamp };
         setData((current) => {
           const taskAssignees = (current.task_assignees || []).filter((row) => row.task_id !== nextTask.id);
           if (values.assignee_id) taskAssignees.push({ task_id: nextTask.id, user_id: values.assignee_id });
@@ -1244,6 +1244,14 @@ export default function App() {
     } catch (error) {
       setNotice(error.message || "Could not add comment");
     }
+  }
+
+  function updateDemoTask(taskId, updates) {
+    if (!demoMode) return;
+    setData((current) => ({
+      ...current,
+      tasks: current.tasks.map((task) => task.id === taskId ? { ...task, ...updates, updated_at: new Date().toISOString() } : task)
+    }));
   }
 
   async function quickAddTask(listId, title) {
@@ -1593,6 +1601,7 @@ export default function App() {
         refreshKey={realtimeVersion}
         activityEvents={data.activity_events.filter((event) => !editingTask || event.task_id === editingTask.id)}
         demoMode={demoMode}
+        onDemoTaskUpdate={updateDemoTask}
       />
       {notice && (
         <div
