@@ -27,6 +27,12 @@ The provider-only sign-up change adds migration `0009_verified_social_signup.sql
 
 The database guard in migration 0009 blocks password-hash account inserts even if an older API instance temporarily remains active during the rollout. It also requires a new passwordless user to have a corresponding OAuth identity before the transaction can commit.
 
+## Board presence and threaded task comments
+
+Migration `0011_board_presence_and_threaded_comments.sql` is an additive expansion. It adds the current board to each connection-scoped presence lease, an index for active viewers per board, and an optional parent-comment link for one-level task discussion threads. Apply it by deploying the API version that contains migration 0011; do not edit or rewrite already-applied migrations. The preceding workspace-level presence rows remain valid with a null board until each active client selects a board.
+
+The application broadcasts ephemeral board-view and card-editing signals over the authenticated WebSocket. Durable card/list/comment/activity changes remain in PostgreSQL and are delivered to other clients through the existing workspace event refresh path.
+
 ## Rollback
 
 Roll back the application to the bridge release, not to a pre-bridge binary. The bridge runner ignores the later migration version while still allowing the database to retain its additive schema and database guard. Do not manually delete migration-history rows or drop the trigger/column as part of an application rollback.
