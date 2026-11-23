@@ -234,6 +234,16 @@ export const filesApi = {
   remove: (fileId) => request("/api/files/" + encodeURIComponent(fileId), { method: "DELETE" })
 };
 
+export const lockerApi = {
+  getVault: () => request("/api/locker/vault"),
+  createVault: (values) => request("/api/locker/vault", { method: "POST", body: values }),
+  deleteVault: () => request("/api/locker/vault", { method: "DELETE" }),
+  listItems: () => request("/api/locker/items"),
+  createItem: (values) => request("/api/locker/items", { method: "POST", body: values }),
+  updateItem: (itemId, values) => request("/api/locker/items/" + encodeURIComponent(itemId), { method: "PUT", body: values }),
+  removeItem: (itemId) => request("/api/locker/items/" + encodeURIComponent(itemId), { method: "DELETE" })
+};
+
 export const chatApi = {
   list: (boardId, before, limit = 50) => {
     const params = new URLSearchParams({ limit: String(limit) });
