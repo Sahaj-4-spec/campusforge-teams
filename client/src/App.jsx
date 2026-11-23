@@ -1123,6 +1123,10 @@ export default function App() {
   }
 
   async function deleteList(list) {
+    if ((data?.tasks || []).some((task) => task.list_id === list.id)) {
+      setNotice("Move or remove every card before deleting this list.");
+      return;
+    }
     if (!window.confirm("Delete the empty column \"" + list.name + "\"? Columns must be empty before they can be deleted.")) return;
     try {
       if (demoMode) {
