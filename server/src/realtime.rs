@@ -11,7 +11,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 use std::time::Duration;
-use tokio::time::timeout;
+use tokio::time::{interval, timeout, Instant};
 use uuid::Uuid;
 
 use crate::{
@@ -24,6 +24,13 @@ struct AuthenticateMessage {
     #[serde(rename = "type")]
     message_type: String,
     workspace_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClientWorkspaceMessage {
+    #[serde(rename = "type")]
+    message_type: String,
+    board_id: Option<Uuid>,
 }
 
 async fn websocket_handler(
@@ -89,14 +96,41 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, user_id: Uuid, ex
         return;
     }
     let workspace_id = authentication.workspace_id;
+    let connection_id = Uuid::new_v4();
+    if let Err(error) = sqlx::query(
+        "INSERT INTO workspace_presence(connection_id,workspace_id,user_id) VALUES($1,$2,$3)",
+    )
+    .bind(connection_id)
+    .bind(workspace_id)
+    .bind(user_id)
+    .execute(&state.db)
+    .await {
+        tracing::error!(%error, "Could not register workspace presence");
+        send_error(&mut socket, "Unable to establish workspace presence right now").await;
+        return;
+    }
 
     let mut events = state.workspace_events.subscribe();
     let now = chrono::Utc::now().timestamp().max(0) as usize;
     let remaining_seconds = expires_at.saturating_sub(now) as u64;
     let session_expiry = tokio::time::sleep(Duration::from_secs(remaining_seconds));
     tokio::pin!(session_expiry);
+    let mut heartbeat = interval(Duration::from_secs(30));
+    heartbeat.tick().await;
+    let mut last_typing = None::<Instant>;
+
+    state.publish_user_workspace_event(
+        workspace_id,
+        None,
+        Some(user_id),
+        "presence_joined",
+        "A workspace member came online",
+    );
     let ready = json!({ "type": "ready" }).to_string();
     if socket.send(Message::Text(ready.into())).await.is_err() {
+        let _ = sqlx::query("DELETE FROM workspace_presence WHERE connection_id=$1")
+            .bind(connection_id).execute(&state.db).await;
+        state.publish_user_workspace_event(workspace_id,None,Some(user_id),"presence_left","A workspace member went offline");
         return;
     }
 
@@ -106,11 +140,47 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, user_id: Uuid, ex
                 send_error(&mut socket, "Your session has expired; sign in again").await;
                 break;
             }
+            _ = heartbeat.tick() => {
+                if let Err(error) = sqlx::query("UPDATE workspace_presence SET last_seen_at=NOW() WHERE connection_id=$1")
+                    .bind(connection_id).execute(&state.db).await
+                {
+                    tracing::warn!(%error, "Could not refresh workspace presence lease");
+                }
+            }
             incoming = socket.recv() => {
                 match incoming {
                     Some(Ok(Message::Ping(payload))) => {
                         if socket.send(Message::Pong(payload)).await.is_err() {
                             break;
+                        }
+                    }
+                    Some(Ok(Message::Text(text))) if text.len() <= 1024 => {
+                        if let Ok(client_event) = serde_json::from_str::<ClientWorkspaceMessage>(&text) {
+                            if client_event.message_type == "typing" {
+                                let now = Instant::now();
+                                let should_publish = last_typing
+                                    .map(|last| now.duration_since(last) >= Duration::from_millis(1500))
+                                    .unwrap_or(true);
+                                if should_publish {
+                                    let valid_board = if let Some(board_id) = client_event.board_id {
+                                        sqlx::query_scalar::<_,bool>(
+                                            "SELECT EXISTS(SELECT 1 FROM boards WHERE id=$1 AND workspace_id=$2)",
+                                        ).bind(board_id).bind(workspace_id).fetch_one(&state.db).await.unwrap_or(false)
+                                    } else {
+                                        true
+                                    };
+                                    if valid_board {
+                                        state.publish_user_workspace_event(
+                                            workspace_id,
+                                            client_event.board_id,
+                                            Some(user_id),
+                                            "typing_indicator",
+                                            "A workspace member is typing",
+                                        );
+                                        last_typing = Some(now);
+                                    }
+                                }
+                            }
                         }
                     }
                     Some(Ok(Message::Close(_))) | None => break,
@@ -123,7 +193,8 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, user_id: Uuid, ex
             }
             event = events.recv() => {
                 match event {
-                    Ok(event) if event.workspace_id == workspace_id => {
+                    Ok(event) if event.workspace_id == workspace_id
+                        && event.recipient_user_id.map_or(true, |recipient| recipient == user_id) => {
                         let payload = match serde_json::to_string(&json!({
                             "type": "workspace_event",
                             "event": event
@@ -150,6 +221,21 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, user_id: Uuid, ex
             }
         }
     }
+
+    if let Err(error) = sqlx::query("DELETE FROM workspace_presence WHERE connection_id=$1")
+        .bind(connection_id)
+        .execute(&state.db)
+        .await
+    {
+        tracing::warn!(%error, "Could not remove workspace presence lease");
+    }
+    state.publish_user_workspace_event(
+        workspace_id,
+        None,
+        Some(user_id),
+        "presence_left",
+        "A workspace member went offline",
+    );
 }
 
 pub fn router() -> Router<AppState> {
