@@ -95,7 +95,6 @@ async function authorizedFetch(path, options = {}) {
 }
 
 export const authApi = {
-  register: (values) => request("/api/auth/register", { method: "POST", body: values }),
   login: (values) => request("/api/auth/login", { method: "POST", body: values }),
   logout: () => request("/api/auth/logout", { method: "POST" }),
   oauthStartUrl: (provider) => (API_BASE || window.location.origin) + "/api/auth/" + encodeURIComponent(provider) + "/start"
@@ -132,7 +131,14 @@ export const taskApi = {
   move: (taskId, destinationListId, orderedTaskIds) => request(
     "/api/tasks/" + encodeURIComponent(taskId) + "/move",
     { method: "PATCH", body: { destination_list_id: destinationListId, ordered_task_ids: orderedTaskIds } }
-  )
+  ),
+  search: (filters = {}) => {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") params.set(key, String(value));
+    });
+    return request("/api/tasks/search" + (params.size ? "?" + params.toString() : ""));
+  }
 };
 
 export const advancedTaskApi = {
@@ -155,7 +161,7 @@ export const advancedTaskApi = {
 };
 
 export const calendarApi = {
-  list: (from, to) => {
+  list: (from, to, filters = {}) => {
     const [fromYear, fromMonth, fromDay] = from.split("-").map(Number);
     const [toYear, toMonth, toDay] = to.split("-").map(Number);
     const localStart = new Date(fromYear, fromMonth - 1, fromDay);
@@ -167,15 +173,24 @@ export const calendarApi = {
       start_at: localStart.toISOString(),
       end_at: localEnd.toISOString()
     });
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") params.set(key, String(value));
+    });
     return request("/api/calendar?" + params.toString());
   },
   create: (values) => request("/api/calendar", { method: "POST", body: values }),
   update: (eventId, values) => request("/api/calendar/events/" + encodeURIComponent(eventId), { method: "PATCH", body: values }),
+  attendees: (eventId, userIds) => request("/api/calendar/events/" + encodeURIComponent(eventId) + "/attendees", { method: "PUT", body: { user_ids: userIds } }),
+  respond: (eventId, response) => request("/api/calendar/events/" + encodeURIComponent(eventId) + "/respond", { method: "POST", body: { response } }),
   remove: (eventId) => request("/api/calendar/events/" + encodeURIComponent(eventId), { method: "DELETE" })
 };
 
 export const notificationApi = {
-  list: () => request("/api/notifications"),
+  list: (before, limit = 50) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (before) params.set("before", before);
+    return request("/api/notifications?" + params.toString());
+  },
   read: (notificationId) => request("/api/notifications/" + encodeURIComponent(notificationId) + "/read", { method: "PATCH" }),
   readAll: () => request("/api/notifications/read-all", { method: "POST", body: {} }),
   preferences: () => request("/api/notification-preferences"),
@@ -190,6 +205,13 @@ export const notificationApi = {
 
 export const filesApi = {
   list: () => request("/api/files"),
+  usage: () => request("/api/files/usage"),
+  setQuota: (quotaBytes) => request("/api/files/quota", { method: "PUT", body: { quota_bytes: quotaBytes } }),
+  audit: () => request("/api/files/audit"),
+  preview: async (fileId) => {
+    const response = await authorizedFetch("/api/files/" + encodeURIComponent(fileId) + "/preview", { accept: "*/*" });
+    return URL.createObjectURL(await response.blob());
+  },
   upload: async (formData) => {
     const response = await authorizedFetch("/api/files", { method: "POST", body: formData });
     return response.json();
@@ -210,30 +232,100 @@ export const filesApi = {
 };
 
 export const chatApi = {
-  list: (boardId) => request("/api/chat/messages" + (boardId ? "?board_id=" + encodeURIComponent(boardId) : "")),
-  send: (values) => request("/api/chat/messages", { method: "POST", body: values })
+  list: (boardId, before, limit = 50) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (boardId) params.set("board_id", boardId);
+    if (before) params.set("before", before);
+    return request("/api/chat/messages?" + params.toString());
+  },
+  send: (values) => request("/api/chat/messages", { method: "POST", body: values }),
+  directConversations: () => request("/api/chat/direct"),
+  openDirect: (otherUserId) => request("/api/chat/direct", { method: "POST", body: { other_user_id: otherUserId } }),
+  directMessages: (conversationId, before, limit = 50) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (before) params.set("before", before);
+    return request("/api/chat/direct/" + encodeURIComponent(conversationId) + "/messages?" + params.toString());
+  },
+  sendDirect: (conversationId, body) => request("/api/chat/direct/" + encodeURIComponent(conversationId) + "/messages", { method: "POST", body: { body } }),
+  edit: (messageId, body) => request("/api/chat/messages/" + encodeURIComponent(messageId), { method: "PATCH", body: { body } }),
+  remove: (messageId) => request("/api/chat/messages/" + encodeURIComponent(messageId), { method: "DELETE" }),
+  pin: (messageId, pinned) => request("/api/chat/messages/" + encodeURIComponent(messageId) + "/pin", { method: "PATCH", body: { pinned } }),
+  pinned: (boardId) => request("/api/chat/pinned" + (boardId ? "?board_id=" + encodeURIComponent(boardId) : ""))
 };
 
 export const meetingNotesApi = {
   list: () => request("/api/meeting-notes"),
   create: (values) => request("/api/meeting-notes", { method: "POST", body: values }),
   update: (noteId, values) => request("/api/meeting-notes/" + encodeURIComponent(noteId), { method: "PATCH", body: values }),
-  remove: (noteId) => request("/api/meeting-notes/" + encodeURIComponent(noteId), { method: "DELETE" })
+  remove: (noteId) => request("/api/meeting-notes/" + encodeURIComponent(noteId), { method: "DELETE" }),
+  actionItems: (noteId) => request("/api/meeting-notes/" + encodeURIComponent(noteId) + "/action-items"),
+  createActionItem: (noteId, values) => request("/api/meeting-notes/" + encodeURIComponent(noteId) + "/action-items", { method: "POST", body: values }),
+  updateActionItem: (itemId, values) => request("/api/meeting-action-items/" + encodeURIComponent(itemId), { method: "PATCH", body: values }),
+  removeActionItem: (itemId) => request("/api/meeting-action-items/" + encodeURIComponent(itemId), { method: "DELETE" })
+};
+
+export const presenceApi = {
+  list: () => request("/api/presence")
 };
 
 export const analyticsApi = {
-  get: () => request("/api/analytics")
+  get: () => request("/api/analytics"),
+  history: (from, to) => {
+    const params = new URLSearchParams({ from, to });
+    return request("/api/analytics/history?" + params.toString());
+  },
+  exportCsv: async (from, to) => {
+    const params = new URLSearchParams({ from, to });
+    const response = await authorizedFetch("/api/analytics/export.csv?" + params.toString(), { accept: "text/csv" });
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "campusforge-analytics.csv";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }
 };
+
+let activeWorkspaceSocket = null;
+const workspaceSocketListeners = new Set();
+
+export function subscribeWorkspaceSocket(listener) {
+  workspaceSocketListeners.add(listener);
+  return () => workspaceSocketListeners.delete(listener);
+}
+
+export function sendWorkspaceSocketMessage(payload) {
+  if (!activeWorkspaceSocket || activeWorkspaceSocket.readyState !== WebSocket.OPEN) return false;
+  activeWorkspaceSocket.send(JSON.stringify(payload));
+  return true;
+}
 
 export function createWorkspaceSocket() {
   const origin = API_BASE || window.location.origin;
   const websocketOrigin = origin.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:");
   const socket = new WebSocket(websocketOrigin + "/ws");
+  activeWorkspaceSocket = socket;
   socket.addEventListener("open", () => {
     socket.send(JSON.stringify({
       type: "authenticate",
       workspace_id: getStoredWorkspaceId()
     }));
+  });
+  socket.addEventListener("message", (message) => {
+    let payload;
+    try { payload = JSON.parse(message.data); } catch { return; }
+    workspaceSocketListeners.forEach((listener) => {
+      try { listener(payload); } catch {}
+    });
+  });
+  socket.addEventListener("close", () => {
+    if (activeWorkspaceSocket === socket) activeWorkspaceSocket = null;
+    workspaceSocketListeners.forEach((listener) => {
+      try { listener({ type: "connection_state", connected: false }); } catch {}
+    });
   });
   return socket;
 }
