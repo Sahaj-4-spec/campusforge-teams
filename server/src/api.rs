@@ -10,7 +10,7 @@ use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use std::collections::HashSet;
 use uuid::Uuid;
 
-use crate::{auth::{AuthUser, WorkspaceUser}, state::AppState};
+use crate::{auth::{AuthUser, WorkspaceUser}, roadmap, state::AppState};
 
 #[derive(Debug, Serialize)]
 struct ErrorBody {
@@ -799,13 +799,18 @@ async fn add_comment(
         return Err(error(StatusCode::NOT_FOUND, "Task not found"));
     };
 
-    sqlx::query("INSERT INTO comments (task_id, author_id, body) VALUES ($1, $2, $3)")
+    let comment_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO comments (task_id, author_id, body) VALUES ($1, $2, $3) RETURNING id",
+    )
         .bind(task_id)
         .bind(user_id)
         .bind(body)
-        .execute(&mut *tx)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|cause| internal_error(cause, "Could not add comment"))?;
+    roadmap::create_mentions_in_transaction(&mut tx, workspace_id, user_id, "task_comment", comment_id, body)
+        .await
+        .map_err(|cause| internal_error(cause, "Could not create mention notifications"))?;
     add_activity(&mut tx, workspace_id, board_id, Some(task_id), user_id, "comment_added", "added a comment to a task".to_string())
         .await.map_err(|cause| internal_error(cause, "Could not record comment activity"))?;
     tx.commit().await.map_err(|cause| internal_error(cause, "Could not save comment"))?;
