@@ -44,7 +44,7 @@ const providers = [
 function getEmailError(value) {
   const email = value.trim();
   if (!email) return "Enter your email address.";
-  if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) return "Enter a valid email address.";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "Enter a valid email address.";
   return "";
 }
 
@@ -127,6 +127,7 @@ export default function AuthScreen({ onAuthenticated }) {
 
   function startOAuth(provider) {
     setError("");
+    setShowRecoveryNotice(false);
     setBusyProvider(provider);
     window.location.assign(authApi.oauthStartUrl(provider));
   }
@@ -134,6 +135,8 @@ export default function AuthScreen({ onAuthenticated }) {
   function switchMode() {
     navigate(isRegister ? "/login" : "/signup");
     setError("");
+    setFieldErrors({});
+    setShowRecoveryNotice(false);
     setPassword("");
   }
 
