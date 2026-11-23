@@ -195,6 +195,7 @@ export function createDemoData() {
         id: "70000000-0000-4000-8000-000000000001",
         board_id: ids.board,
         actor_id: "20000000-0000-4000-8000-000000000003",
+        task_id: "50000000-0000-4000-8000-000000000005",
         event_type: "task_moved",
         description: "moved a task into In review",
         created_at: "2026-11-21T14:20:00.000Z"
@@ -203,6 +204,7 @@ export function createDemoData() {
         id: "70000000-0000-4000-8000-000000000002",
         board_id: ids.board,
         actor_id: ids.currentUser,
+        task_id: "50000000-0000-4000-8000-000000000003",
         event_type: "task_created",
         description: "created the responsive workspace shell task",
         created_at: "2026-11-20T10:10:00.000Z"
@@ -211,6 +213,7 @@ export function createDemoData() {
         id: "70000000-0000-4000-8000-000000000003",
         board_id: ids.board,
         actor_id: "20000000-0000-4000-8000-000000000004",
+        task_id: "50000000-0000-4000-8000-000000000005",
         event_type: "comment_added",
         description: "commented on the data model review",
         created_at: "2026-11-19T16:40:00.000Z"
