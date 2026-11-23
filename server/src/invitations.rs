@@ -2,7 +2,7 @@ use argon2::password_hash::rand_core::{OsRng, RngCore};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -285,6 +285,127 @@ async fn revoke_invitation(
 }
 
 #[derive(Debug, Deserialize)]
+struct UpdateMemberRoleInput {
+    role: String,
+}
+
+#[derive(Debug, Serialize)]
+struct UpdatedMemberRole {
+    user_id: Uuid,
+    role: String,
+}
+
+async fn update_member_role(
+    State(state): State<AppState>,
+    WorkspaceUser(actor_id, workspace_id): WorkspaceUser,
+    Path(member_id): Path<Uuid>,
+    Json(input): Json<UpdateMemberRoleInput>,
+) -> ApiResult<Json<UpdatedMemberRole>> {
+    let next_role = input.role.trim();
+    if next_role != "member" && next_role != "admin" {
+        return Err(error(StatusCode::BAD_REQUEST, "Workspace role must be member or admin"));
+    }
+    if actor_id == member_id {
+        return Err(error(StatusCode::FORBIDDEN, "You cannot change your own workspace role"));
+    }
+
+    let mut tx = state.db.begin().await
+        .map_err(|cause| internal_error(cause, "Could not begin workspace role update"))?;
+    let actor_role: Option<String> = sqlx::query_scalar(
+        "SELECT role FROM workspace_members WHERE workspace_id=$1 AND user_id=$2 FOR UPDATE",
+    )
+    .bind(workspace_id)
+    .bind(actor_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|cause| internal_error(cause, "Could not verify workspace role permissions"))?;
+    if actor_role.as_deref() != Some("owner") {
+        return Err(error(StatusCode::FORBIDDEN, "Only workspace owners can change teammate roles"));
+    }
+
+    let previous_role: Option<String> = sqlx::query_scalar(
+        "SELECT role FROM workspace_members WHERE workspace_id=$1 AND user_id=$2 FOR UPDATE",
+    )
+    .bind(workspace_id)
+    .bind(member_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|cause| internal_error(cause, "Could not find workspace member"))?;
+    let Some(previous_role) = previous_role else {
+        return Err(error(StatusCode::NOT_FOUND, "Workspace member not found"));
+    };
+    if previous_role == "owner" {
+        return Err(error(StatusCode::FORBIDDEN, "The workspace owner role cannot be changed"));
+    }
+
+    if previous_role == next_role {
+        tx.commit().await
+            .map_err(|cause| internal_error(cause, "Could not finish workspace role update"))?;
+        return Ok(Json(UpdatedMemberRole { user_id: member_id, role: next_role.to_string() }));
+    }
+
+    let member_name: String = sqlx::query_scalar("SELECT full_name FROM users WHERE id=$1")
+        .bind(member_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|cause| internal_error(cause, "Could not load workspace member profile"))?;
+
+    sqlx::query(
+        "UPDATE workspace_members SET role=$3 WHERE workspace_id=$1 AND user_id=$2",
+    )
+    .bind(workspace_id)
+    .bind(member_id)
+    .bind(next_role)
+    .execute(&mut *tx)
+    .await
+    .map_err(|cause| internal_error(cause, "Could not update workspace member role"))?;
+
+    sqlx::query(
+        "UPDATE board_members bm SET role=$3
+         FROM boards b
+         WHERE bm.board_id=b.id AND b.workspace_id=$1 AND bm.user_id=$2",
+    )
+    .bind(workspace_id)
+    .bind(member_id)
+    .bind(if next_role == "admin" { "admin" } else { "member" })
+    .execute(&mut *tx)
+    .await
+    .map_err(|cause| internal_error(cause, "Could not sync project member roles"))?;
+
+    add_activity(
+        &mut tx,
+        workspace_id,
+        actor_id,
+        "member_role_updated",
+        format!("changed {member_name}'s role from {previous_role} to {next_role}"),
+    )
+    .await
+    .map_err(|cause| internal_error(cause, "Could not record workspace role change"))?;
+
+    tx.commit().await
+        .map_err(|cause| internal_error(cause, "Could not save workspace role change"))?;
+    state.publish_workspace_event(
+        workspace_id,
+        None,
+        "member_role_updated",
+        format!("changed {member_name}'s role to {next_role}"),
+    );
+
+    Ok(Json(UpdatedMemberRole { user_id: member_id, role: next_role.to_string() }))
+}
+
+#[cfg(test)]
+mod role_tests {
+    use super::*;
+
+    #[test]
+    fn only_member_and_admin_are_assignable_workspace_roles() {
+        assert!(["member", "admin"].iter().all(|role| *role == "member" || *role == "admin"));
+        assert!(!["owner", "guest", ""].iter().any(|role| *role == "member" || *role == "admin"));
+    }
+}
+
+#[derive(Debug, Deserialize)]
 struct AcceptInvitationInput {
     token: String,
 }
@@ -416,4 +537,5 @@ pub fn router() -> Router<AppState> {
         .route("/", get(list_invitations).post(create_invitation))
         .route("/accept", post(accept_invitation))
         .route("/{invitation_id}", delete(revoke_invitation))
+        .route("/members/{member_id}/role", patch(update_member_role))
 }
