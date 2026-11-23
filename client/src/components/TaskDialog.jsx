@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AtSign, CalendarDays, CornerDownRight, MessageCircle, Reply, Trash2, X } from "lucide-react";
+import { Activity, AtSign, CalendarDays, CornerDownRight, MessageCircle, Reply, Trash2, X } from "lucide-react";
 import TaskAdvancedPanel from "./TaskAdvancedPanel.jsx";
 import { sendWorkspaceSocketMessage } from "../lib/api.js";
 
@@ -11,6 +11,29 @@ function formatCommentDate(value) {
     hour: "numeric",
     minute: "2-digit"
   }).format(new Date(value));
+}
+
+function inlineMarkdown(value) {
+  return value.split(/(\\*\\*[^*]+\\*\\*|\\`[^\\`]+\\`)/g).map((part, index) => {
+    if (part.startsWith("**") && part.endsWith("**")) return <strong key={index}>{part.slice(2, -2)}</strong>;
+    if (part.startsWith("\`") && part.endsWith("\`")) return <code key={index}>{part.slice(1, -1)}</code>;
+    return part;
+  });
+}
+
+function MarkdownDescription({ value }) {
+  const lines = value.split(/\\r?\\n/);
+  return (
+    <div className="task-markdown-content">
+      {lines.map((line, index) => {
+        if (!line.trim()) return <div className="task-markdown-spacer" key={index} />;
+        if (line.startsWith("## ")) return <h4 key={index}>{inlineMarkdown(line.slice(3))}</h4>;
+        if (line.startsWith("# ")) return <h3 key={index}>{inlineMarkdown(line.slice(2))}</h3>;
+        if (/^[-*] /.test(line)) return <p className="task-markdown-list-item" key={index}>• {inlineMarkdown(line.slice(2))}</p>;
+        return <p key={index}>{inlineMarkdown(line)}</p>;
+      })}
+    </div>
+  );
 }
 
 export default function TaskDialog({
@@ -28,8 +51,11 @@ export default function TaskDialog({
   onAddComment,
   allTasks = [],
   onAdvancedChanged,
-  refreshKey = 0
+  refreshKey = 0,
+  activityEvents = [],
+  demoMode = false
 }) {
+  const [mounted, setMounted] = useState(open);
   const [form, setForm] = useState({
     title: "",
     description: "",
@@ -44,6 +70,18 @@ export default function TaskDialog({
   const [mentionUserId, setMentionUserId] = useState("");
   const dialogWasOpen = useRef(false);
   const lastTaskIdentity = useRef(null);
+
+  useEffect(() => {
+    if (open) {
+      setMounted(true);
+      return undefined;
+    }
+    if (mounted) {
+      const timeout = window.setTimeout(() => setMounted(false), 200);
+      return () => window.clearTimeout(timeout);
+    }
+    return undefined;
+  }, [open, mounted]);
 
   useEffect(() => {
     if (!open) {
@@ -108,7 +146,7 @@ export default function TaskDialog({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [open, onClose]);
 
-  if (!open) return null;
+  if (!mounted) return null;
 
   function updateField(event) {
     const { name, value } = event.target;
@@ -192,13 +230,14 @@ export default function TaskDialog({
 
   return (
     <div
-      className="dialog-backdrop"
+      className={"dialog-backdrop task-drawer-backdrop" + (open ? " is-open" : " is-closing")}
       role="presentation"
+      aria-hidden={!open}
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (open && event.target === event.currentTarget) onClose();
       }}
     >
-      <section className="task-dialog" role="dialog" aria-modal="true" aria-labelledby="task-dialog-title">
+      <section className={"task-dialog task-drawer" + (open ? " is-open" : " is-closing")} role="dialog" aria-modal="true" aria-labelledby="task-dialog-title" aria-hidden={!open}>
         <div className="dialog-header">
           <div>
             <p className="eyebrow">{task ? "TASK DETAILS" : "NEW TASK"}</p>
@@ -233,6 +272,12 @@ export default function TaskDialog({
               rows={4}
               maxLength={4000}
             />
+            {form.description.trim() && (
+              <div className="task-markdown-preview">
+                <span className="task-markdown-preview-label">Markdown preview</span>
+                <MarkdownDescription value={form.description} />
+              </div>
+            )}
           </label>
 
           <div className="field-grid">
@@ -284,7 +329,24 @@ export default function TaskDialog({
           </div>
         </form>
 
-        {task && <TaskAdvancedPanel task={task} lists={lists} tasks={allTasks} onChanged={onAdvancedChanged} refreshKey={refreshKey} />}
+        {task && !demoMode && <TaskAdvancedPanel task={task} lists={lists} tasks={allTasks} onChanged={onAdvancedChanged} refreshKey={refreshKey} />}
+
+        {task && activityEvents.length > 0 && (
+          <section className="task-activity-section" aria-label="Card activity">
+            <div className="comments-heading"><h3><Activity size={16} /> Activity</h3><span>{activityEvents.length}</span></div>
+            <ol className="task-activity-list">
+              {[...activityEvents].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).map((event) => {
+                const actor = users.find((user) => user.id === (event.actor_id || event.actor_user_id));
+                return (
+                  <li key={event.id}>
+                    <span className="task-activity-dot" />
+                    <div><p><strong>{actor?.full_name || "A teammate"}</strong> {event.description || event.event_type?.replaceAll("_", " ")}</p><time>{formatCommentDate(event.created_at)}</time></div>
+                  </li>
+                );
+              })}
+            </ol>
+          </section>
+        )}
 
         {task && (
           <section className="comments-section" aria-label="Task comments">
