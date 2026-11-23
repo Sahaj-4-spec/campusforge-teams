@@ -30,6 +30,8 @@ jobs:
         run: npm --prefix client run build
       - name: Test Save Locker encryption
         run: npm --prefix client run test:locker
+      - name: Test optimistic Kanban task moves
+        run: npm --prefix client run test:task-move
 
   backend:
     name: Rust backend check

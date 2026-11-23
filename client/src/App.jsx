@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
+  AlertCircle,
   BarChart3,
   ArrowRight,
   ArrowUpRight,
@@ -46,6 +47,7 @@ import {
   getStoredWorkspaceId, setStoredWorkspaceId, setWorkspaceSocketBoard,
   workspaceApi, taskApi, listApi, invitationApi, notificationApi
 } from "./lib/api.js";
+import { buildOptimisticTaskMove } from "./lib/taskMove.js";
 
 const navigation = [
   { id: "Overview", label: "Dashboard", icon: LayoutDashboard },
@@ -1135,22 +1137,57 @@ export default function App() {
   }
 
   async function moveTask(taskId, destinationListId, overId) {
-    const movingTask = data?.tasks.find((task) => task.id === taskId);
-    if (!movingTask || !destinationListId) return;
+    if (!data?.tasks || !destinationListId) return;
 
-    const destinationTasks = data.tasks
-      .filter((task) => task.list_id === destinationListId && task.id !== taskId)
-      .sort((a, b) => a.position - b.position);
-    const overIndex = destinationTasks.findIndex((task) => task.id === overId);
-    const insertAt = overIndex >= 0 ? overIndex : destinationTasks.length;
-    destinationTasks.splice(insertAt, 0, movingTask);
+    const previousTasks = data.tasks;
+    const optimisticMove = buildOptimisticTaskMove(
+      previousTasks,
+      taskId,
+      destinationListId,
+      overId
+    );
+    if (!optimisticMove) return;
+
+    const workspaceId = data.current_workspace_id;
+    const requestGeneration = workspaceGeneration.current;
+
+    // Render the new column and order before waiting for the API response.
+    setData((current) => current && current.current_workspace_id === workspaceId
+      ? { ...current, tasks: optimisticMove.tasks }
+      : current
+    );
 
     try {
-      await taskApi.move(taskId, destinationListId, destinationTasks.map((task) => task.id));
-      await refreshWorkspace();
+      await taskApi.move(taskId, destinationListId, optimisticMove.orderedTaskIds);
       setNotice("Task moved");
+
+      // Reconcile server timestamps and positions without treating a refresh
+      // failure as a failed move (the write has already succeeded).
+      workspaceApi.get(workspaceId)
+        .then((workspace) => {
+          if (
+            requestGeneration === workspaceGeneration.current &&
+            workspace.current_workspace_id === workspaceId
+          ) {
+            setData((current) => current && current.current_workspace_id === workspaceId
+              ? workspace
+              : current
+            );
+          }
+        })
+        .catch(() => {
+          // The optimistic state remains accurate; live sync can reconcile later.
+        });
     } catch (error) {
-      setNotice(error.message || "Could not move task");
+      // The write failed, so restore the exact pre-drop task ordering.
+      setData((current) => current && current.current_workspace_id === workspaceId
+        ? { ...current, tasks: previousTasks }
+        : current
+      );
+      setNotice(
+        "Move failed — card position restored. " +
+        (error.message || "Please try again.")
+      );
     }
   }
 
@@ -1401,7 +1438,15 @@ export default function App() {
         onAdvancedChanged={refreshWorkspace}
         refreshKey={realtimeVersion}
       />
-      {notice && <div className="toast-message" role="status"><CheckCircle2 size={16} />{notice}</div>}
+      {notice && (
+        <div
+          className={"toast-message" + (notice.startsWith("Move failed") ? " toast-message-error" : "")}
+          role={notice.startsWith("Move failed") ? "alert" : "status"}
+        >
+          {notice.startsWith("Move failed") ? <AlertCircle size={16} /> : <CheckCircle2 size={16} />}
+          {notice}
+        </div>
+      )}
     </div>
   );
 }

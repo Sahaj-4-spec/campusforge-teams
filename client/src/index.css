@@ -340,6 +340,7 @@ a { color: inherit; text-decoration: none; }
 .comment-submit:disabled { cursor: not-allowed; opacity: .45; }
 .dialog-footnote { display: flex; align-items: center; gap: 6px; margin-top: 18px; color: #a3a9b7; font-size: 8px; }
 .toast-message { position: fixed; right: 24px; bottom: 24px; z-index: 70; display: flex; align-items: center; gap: 8px; padding: 12px 15px; border: 1px solid #e4f2ea; border-radius: 10px; color: #4b9274; background: white; box-shadow: 0 12px 30px rgba(34,55,45,.12); font-size: 10px; font-weight: 700; }
+.toast-message-error { border-color: #f1d5d5; color: #ad5459; background: #fffafa; box-shadow: 0 12px 30px rgba(104,42,42,.12); }
 .mobile-nav-overlay { display: none; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; clip-path: inset(50%); }
 @media (max-width: 1180px) {
