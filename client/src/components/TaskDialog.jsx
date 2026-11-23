@@ -289,9 +289,10 @@ export default function TaskDialog({
             />
           </label>
 
-          <label className="field-group">
-            <span>Description</span>
+          <div className="field-group">
+            <label htmlFor="task-description">Description</label>
             <textarea
+              id="task-description"
               name="description"
               value={form.description}
               onChange={updateField}
@@ -305,7 +306,7 @@ export default function TaskDialog({
                 <MarkdownDescription value={form.description} />
               </div>
             )}
-          </label>
+          </div>
 
           <div className="field-grid">
             <label className="field-group">
