@@ -27,10 +27,11 @@ CampusForge Teams is a Trello-inspired Kanban application. Team members can crea
 ## ✨ Implemented Core Features
 
 ### 1. Authentication and User Profiles
-- User registration and login.
-- Secure password hashing.
-- Authenticated and authorized API access.
-- User profiles with names and avatars.
+- New accounts are created only through Google, GitHub, or Discord OAuth after the provider confirms the email address is verified.
+- Existing email/password accounts can still sign in; password-only registration is disabled.
+- Provider identities are validated server-side and are not silently merged with existing unrelated accounts.
+- The account's provider-verified email timestamp is recorded in PostgreSQL.
+- Authenticated and authorized API access, with user profiles and avatars.
 
 ### 2. Project and Board Management
 - Create and manage project boards.
@@ -58,16 +59,28 @@ CampusForge Teams is a Trello-inspired Kanban application. Team members can crea
 - Persist the new order in PostgreSQL.
 - Broadcast authorized board changes to connected members through native WebSockets.
 
-### 6. Collaboration Suite (draft implementation branch — not deployed)
-The collaboration-suite branch adds:
+### 6. Collaboration Suite
+The collaboration suite in merged PR #12 includes:
 - Team calendar with month, week, and day views, task deadlines, meetings, milestones, exams, and submissions.
-- Advanced task tools: subtasks, checklists, workspace labels, same-project dependencies, estimated effort, and recurring task rules.
-- In-app notifications with read state, category preferences, and scheduled deadline reminders.
+- Advanced task tools: subtasks, checklists, labels, same-project dependencies, effort estimates, and recurring task rules.
+- In-app notifications with read state, category preferences, and deadline reminders.
 - Shared workspace/project/task files with authenticated upload, download, and delete.
-- Server-backed productivity analytics for completion, overdue, unassigned, project progress, and member workload.
-- Workspace/project chat and structured meeting notes with agenda and action items.
+- Server-backed productivity analytics for completion, overdue work, unassigned tasks, project progress, and member workload.
+- Workspace/project chat and structured meeting notes with agenda and decisions.
 
-These capabilities are under review in [draft PR #12](https://github.com/Sahaj-4-spec/campusforge-teams/pull/12). They are not in the main branch or live hosted preview yet. File storage now has a local-development adapter and a configurable S3-compatible production adapter; a private bucket, credentials, backups, retention, and malware scanning still need to be configured and verified. Email notification delivery now has an opt-in Resend adapter and retryable outbox; it remains inactive until the sender domain and backend secrets are configured. The AI project assistant remains a future roadmap item. See [the full roadmap](docs/ROADMAP.md), [architecture decisions](docs/ARCHITECTURE.md), and [storage/email operations](docs/OPERATIONS.md).
+### 7. Additional non-AI collaboration capabilities
+The current non-AI completion branch adds:
+- Editable calendar events, event-type/project/attendee filters, timezone-aware all-day events, attendee invitations and responses, and one-time event reminders.
+- Server-backed My Tasks filters for project, status, priority, effort range, blockers, assignee, and due-date range.
+- Cursor-paginated notification and chat histories, workspace-invitation notifications, and mention notifications from task comments and shared channels.
+- Workspace storage quotas and reservations, file content-signature checks, optional ClamAV scanning, authenticated PDF/image preview, file audit history, and admin quota controls.
+- Daily productivity snapshots refreshed throughout the day, history filters, and CSV export.
+- Private direct messages, message edit/delete controls, pinned team announcements, live presence and typing indicators, and recipient-scoped private-message events.
+- Meeting-note action items with assignees, due dates, completion state, and optional task links.
+- PostgreSQL LISTEN/NOTIFY to relay workspace change signals across API instances, plus expiring presence leases.
+- An idempotency ledger for recurring task generation.
+
+These additional features are in draft PR #21 and are not in the deployed Render preview. The AI project assistant is intentionally excluded from this delivery. Production file storage still requires a private S3-compatible bucket and credentials. To require malware scanning, configure a reachable ClamAV TCP service and set `CAMPUSFORGE_REQUIRE_MALWARE_SCAN=true`; without that flag, uploads are marked unscanned and can be downloaded. Resend email and Google/GitHub/Discord login also require provider accounts, callback URLs, and backend secrets. See the [roadmap](docs/ROADMAP.md), [architecture](docs/ARCHITECTURE.md), [operations](docs/OPERATIONS.md), and [social sign-in setup](docs/SOCIAL_AUTH_SETUP.md).
 
 ## 🛠️ Technology Stack
 
@@ -107,7 +120,8 @@ These capabilities are under review in [draft PR #12](https://github.com/Sahaj-4
 ```
 
 ### Communication
-- `POST /api/auth/register` and `POST /api/auth/login` create and authenticate accounts.
+- `POST /api/auth/register` remains for compatibility but returns `403 Forbidden`; new accounts must use `GET /api/auth/google/start`, `/api/auth/github/start`, or `/api/auth/discord/start`, each of which requires a provider-verified email.
+- `POST /api/auth/login` remains available for existing email/password accounts.
 - `GET /api/workspace` returns the signed-in user's workspace, members, boards, lists, tasks, assignments, comments, and activity.
 - `POST /api/tasks`, `PATCH /api/tasks/:id`, and `DELETE /api/tasks/:id` persist task changes.
 - `POST /api/tasks/:id/comments` saves discussion comments; `PATCH /api/tasks/:id/move` persists drag-and-drop order.
@@ -196,6 +210,8 @@ Edit `.env` and replace placeholder values with your local configuration. Never 
 | `VITE_API_BASE_URL` | API origin for a separately hosted frontend; leave blank locally to use the Vite proxy |
 | `CAMPUSFORGE_STORAGE_MODE` | `local` for development or `s3` for a private S3-compatible bucket |
 | `CAMPUSFORGE_UPLOAD_DIR` | Local-mode upload directory (default: `server/uploads`) |
+| `CAMPUSFORGE_CLAMAV_ADDR` | Private TCP address of the ClamAV daemon |
+| `CAMPUSFORGE_REQUIRE_MALWARE_SCAN` | Set to `true` to reject uploads/downloads unless a clean scan is recorded |
 | `CAMPUSFORGE_S3_BUCKET` / `CAMPUSFORGE_S3_REGION` | Private bucket name and region when storage mode is `s3` |
 | `CAMPUSFORGE_S3_ENDPOINT_URL` | Optional S3-compatible endpoint for R2/MinIO-style providers |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Optional server-side credentials; use a dedicated S3 access key and secret in backend secrets |
@@ -240,7 +256,7 @@ The frontend milestone is connected to the authenticated Rust API.
 
 The active React application reads workspace, project, task, assignment, comment, and activity records from the authenticated Rust API backed by PostgreSQL. `client/src/data/demoData.js` remains as an unused legacy sample-data reference and is not the active application data source.
 
-**Connected in the collaboration-suite draft branch:** calendar month/week/day views and event creation, task deadlines, subtasks/checklists/labels/dependencies/estimates/recurrence controls, notification inbox and preferences, local/S3-compatible file storage adapters, server-backed analytics, project/workspace chat with WebSocket-triggered refresh, meeting notes, and an opt-in Resend email outbox with retry/backoff. These changes are in draft PR #12 and are not live on the hosted preview. **Still pending before production:** set up and verify the private object-storage bucket and credentials, configure and test the Resend sender domain/secrets, malware scanning and retention/backup policies, full browser and multi-user acceptance tests, calendar time-zone testing, shared WebSocket pub/sub for horizontal scaling, and granular per-board permissions.
+**Connected in the merged collaboration suite and its non-AI completion branch:** calendar editing, filters, attendee invitations and reminders; advanced task filters, subtasks, checklists, labels, dependencies and idempotent recurrence; paginated notifications and task/channel mentions; shared file preview, quotas, content checks, optional malware scanning and audit; daily analytics snapshots and CSV export; team chat, direct messages, pins, edits/deletes, presence, typing, meeting notes and structured action items. Cross-instance workspace change signals use PostgreSQL LISTEN/NOTIFY. The latest non-AI additions are in draft PR #21 and are not live on the hosted preview. **Still pending before public release:** configure and test Google/GitHub/Discord OAuth applications and callback URLs, provision a private S3-compatible bucket and credentials, configure ClamAV and require scans, verify the Resend sender domain, complete browser/two-user acceptance and backup/restore tests, approve retention/privacy policies, and add fine-grained per-board authorization.
 
 ## 🎨 UI Design System
 
@@ -285,7 +301,7 @@ AI-assisted tools may be used to understand concepts, explore implementation app
 
 ## 🚧 Current Project Status
 
-**Status:** The existing main branch has a hosted preview. The collaboration suite is being developed in draft PR #12 and is not deployed. Its CI/security checks must pass on the latest PR commit before the branch is considered ready for review.
+**Status:** PR #12's six collaboration feature areas are merged into main. Provider-verified sign-up is in PR #19, and the remaining non-AI completion work is in draft PR #21 (which includes the PR #19 change). The existing Render preview is still an older deployment. PR #20 is the SQLx rollback-compatibility prerequisite. The release order is #20 first, then #21; do not deploy until CI, provider configuration, storage/scanning/email setup, and acceptance tests are complete and the user explicitly authorizes release.
 
 The React client authenticates against the Rust API and loads workspace records from PostgreSQL. Task creation, editing, deletion, assignments, comments, project creation, column management, invitation workflows, and drag-and-drop ordering call protected Axum endpoints; they no longer rely on browser-local demo records. New accounts receive a starter workspace and project board when the workspace endpoint is first loaded. Authenticated WebSocket sessions receive workspace-scoped events after committed mutations, and the frontend reloads the snapshot when remote changes arrive.
 
@@ -314,7 +330,7 @@ The React client authenticates against the Rust API and loads workspace records 
 
 ## Social sign-in
 
-CampusForge supports email/password authentication and server-side OAuth sign-in with Google, GitHub, and Discord. The provider integration requires server environment variables for each OAuth client ID and secret. See [Social Sign-in Setup](docs/SOCIAL_AUTH_SETUP.md) for provider console setup, exact callback URLs, local configuration, and the authentication test checklist.
+CampusForge creates new accounts only through server-side OAuth sign-in with Google, GitHub, or Discord using a provider-verified email. Existing email/password accounts can continue signing in. Configure provider client IDs/secrets and exact callback URLs on the backend only. See [Social Sign-in Setup](docs/SOCIAL_AUTH_SETUP.md).
 
 OAuth provider secrets must remain on the Rust API server and must never be added to frontend variables or committed to Git. Social-only accounts are stored with a nullable password hash, while existing password accounts continue to use Argon2 password verification. New OAuth identities are accepted only when the provider returns a verified email address.
 
@@ -328,4 +344,4 @@ The product roadmap and the decisions for the target data model, API boundaries,
 - [Architecture and project decisions](docs/ARCHITECTURE.md)
 - [Storage and email operations](docs/OPERATIONS.md)
 
-The collaboration-suite work is in draft PR #12 and is not merged or deployed. AI project assistance remains planned, not implemented. The roadmap and operations guide record the remaining production blockers.
+The non-AI completion work is in draft PR #21 and is not merged or deployed. The AI project assistant is intentionally excluded from this delivery. PR #20 is the SQLx rollback-compatibility prerequisite; PR #21 includes the provider-verified sign-up work from PR #19 and the remaining non-AI collaboration additions. The roadmap and operations guide record production configuration gates.
