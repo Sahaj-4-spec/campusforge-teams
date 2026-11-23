@@ -160,11 +160,11 @@ export default function AuthScreen({ onAuthenticated }) {
           <form className="auth-form" onSubmit={submit} noValidate>
             <div className="field-group">
               <label htmlFor="auth-email">Email address</label>
-              <span className="auth-input-wrap focus-within:ring-2 focus-within:ring-violet-200">
+              <span className="auth-input-wrap">
                 <Mail size={17} aria-hidden="true" />
                 <input
                   id="auth-email"
-                  className="outline-none"
+                  
                   type="email"
                   value={email}
                   onChange={(event) => updateEmail(event.target.value)}
@@ -195,7 +195,7 @@ export default function AuthScreen({ onAuthenticated }) {
                 <LockKeyhole size={17} aria-hidden="true" />
                 <input
                   id="auth-password"
-                  className="outline-none"
+                  
                   type={showPassword ? "text" : "password"}
                   value={password}
                   onChange={(event) => updatePassword(event.target.value)}
