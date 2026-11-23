@@ -27,10 +27,11 @@ CampusForge Teams is a Trello-inspired Kanban application. Team members can crea
 ## ✨ Implemented Core Features
 
 ### 1. Authentication and User Profiles
-- User registration and login.
-- Secure password hashing.
-- Authenticated and authorized API access.
-- User profiles with names and avatars.
+- New accounts are created only through Google, GitHub, or Discord OAuth after the provider confirms the email address is verified.
+- Existing email/password accounts can still sign in; password-only registration is disabled.
+- Provider identities are validated server-side and are not silently merged with existing unrelated accounts.
+- The account's provider-verified email timestamp is recorded in PostgreSQL.
+- Authenticated and authorized API access, with user profiles and avatars.
 
 ### 2. Project and Board Management
 - Create and manage project boards.
