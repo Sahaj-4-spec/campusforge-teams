@@ -620,8 +620,8 @@ async fn find_or_create_user(
                 return Err("A CampusForge account already uses this email. Sign in with that account first; automatic social linking is disabled.");
             }
             None => sqlx::query_as::<_, OAuthUser>(
-                "INSERT INTO users (email, password_hash, full_name, avatar_url)
-                 VALUES ($1, NULL, $2, $3)
+                "INSERT INTO users (email, password_hash, full_name, avatar_url, email_verified_at)
+                 VALUES ($1, NULL, $2, $3, NOW())
                  RETURNING id, email",
             )
             .bind(&email)
