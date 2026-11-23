@@ -7,7 +7,7 @@ export function searchCommandItems(items, query, limit = 10) {
     if (!normalizedValue) return 0;
     if (normalizedValue === normalizedQuery) return 120;
     if (normalizedValue.startsWith(normalizedQuery)) return 90;
-    const wordMatch = normalizedValue.split(/\\s+/).some((word) => word.startsWith(normalizedQuery));
+    const wordMatch = normalizedValue.split(/\s+/).some((word) => word.startsWith(normalizedQuery));
     if (wordMatch) return 72;
     const position = normalizedValue.indexOf(normalizedQuery);
     return position >= 0 ? Math.max(1, 50 - position) : 0;

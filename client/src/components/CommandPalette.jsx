@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, BarChart3, Bell, CalendarDays, FileText, FolderKanban,
-  LayoutDashboard, ListTodo, MessageSquare, Plus, Search, Users
+  Activity, BarChart3, Bell, CalendarDays, CircleHelp, FileText, FolderKanban,
+  LayoutDashboard, ListTodo, LockKeyhole, MessageSquare, Plus, Search, Settings, Users
 } from "lucide-react";
 import { searchCommandItems } from "../lib/commandSearch.js";
 
@@ -15,7 +15,10 @@ const NAVIGATION = [
   { id: "chat", label: "Chat & notes", description: "Team conversations and meeting notes", category: "Navigate", icon: MessageSquare, keywords: ["messages", "meetings"], view: "Chat" },
   { id: "team", label: "Team", description: "Members, invitations, and roles", category: "Navigate", icon: Users, keywords: ["people", "members"], view: "Team" },
   { id: "activity", label: "Timeline", description: "Recent project and task changes", category: "Navigate", icon: Activity, keywords: ["history", "audit"], view: "Activity" },
-  { id: "reports", label: "Analytics", description: "Completion, progress, and workload trends", category: "Navigate", icon: BarChart3, keywords: ["reports", "metrics"], view: "Reports" }
+  { id: "reports", label: "Analytics", description: "Completion, progress, and workload trends", category: "Navigate", icon: BarChart3, keywords: ["reports", "metrics"], view: "Reports" },
+  { id: "save-locker", label: "Save Locker", description: "Open your encrypted personal project vault", category: "Navigate", icon: LockKeyhole, keywords: ["vault", "private storage"], view: "Save Locker" },
+  { id: "settings", label: "Settings", description: "Account and workspace session settings", category: "Navigate", icon: Settings, keywords: ["preferences", "account"], view: "Settings" },
+  { id: "help", label: "Help & support", description: "Guides and workspace help", category: "Navigate", icon: CircleHelp, keywords: ["support", "documentation"], view: "Help" }
 ];
 
 export default function CommandPalette({
