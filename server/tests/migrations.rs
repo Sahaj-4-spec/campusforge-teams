@@ -114,6 +114,27 @@ async fn applies_all_postgres_migrations_and_creates_collaboration_tables() {
     ).fetch_one(&pool).await.expect("presence index should be queryable");
     assert!(presence_connection_index,"workspace presence should be indexed for active-member lookup");
 
+    let board_presence_index: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pg_indexes
+          WHERE schemaname='public' AND indexname='idx_workspace_presence_board_active')",
+    ).fetch_one(&pool).await.expect("board presence index should be queryable");
+    assert!(board_presence_index, "board-scoped presence should be indexed");
+
+    let presence_board_column: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='workspace_presence'
+            AND column_name='board_id' AND is_nullable='YES')",
+    ).fetch_one(&pool).await.expect("board presence column should be readable");
+    assert!(presence_board_column, "presence rows should store the current board");
+
+    let comment_parent_column: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='comments'
+            AND column_name='parent_comment_id' AND is_nullable='YES')",
+    ).fetch_one(&pool).await.expect("threaded comment parent column should be readable");
+    assert!(comment_parent_column, "comments should support root posts and replies");
+
+
     let first_attempt_timestamp_exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM information_schema.columns
           WHERE table_schema='public' AND table_name='notification_email_outbox'
