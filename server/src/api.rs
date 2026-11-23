@@ -721,33 +721,51 @@ async fn update_task(
 
     let moved = old_list_id != input.list_id;
     let assignment_changed = previous_assignee_id != input.assignee_id;
-    let event_type = if assignment_changed && input.assignee_id.is_some() {
-        "task_assigned"
-    } else if moved {
+
+    // Keep both facts when one edit changes the column and assignee together.
+    if moved {
+        add_activity(
+            &mut tx, workspace_id, board_id, Some(task_id), user_id, "task_moved",
+            format!("moved {old_title} from {old_list_name} to {destination_list_name}"),
+        ).await.map_err(|cause| internal_error(cause, "Could not record task move activity"))?;
+    }
+
+    if assignment_changed {
+        let assignment_event = if input.assignee_id.is_some() { "task_assigned" } else { "task_updated" };
+        let assignment_description = if input.assignee_id.is_some() {
+            format!("assigned {title}")
+        } else {
+            format!("unassigned {title}")
+        };
+        add_activity(
+            &mut tx, workspace_id, board_id, Some(task_id), user_id,
+            assignment_event, assignment_description,
+        ).await.map_err(|cause| internal_error(cause, "Could not record task assignment activity"))?;
+    }
+
+    if !moved && !assignment_changed {
+        add_activity(
+            &mut tx, workspace_id, board_id, Some(task_id), user_id,
+            "task_updated", format!("updated {title}"),
+        ).await.map_err(|cause| internal_error(cause, "Could not record task update activity"))?;
+    }
+
+    let event_description = match (moved, assignment_changed) {
+        (true, true) => format!("moved {old_title} from {old_list_name} to {destination_list_name} and changed its assignee"),
+        (true, false) => format!("moved {old_title} from {old_list_name} to {destination_list_name}"),
+        (false, true) => format!("changed the assignee for {title}"),
+        (false, false) => format!("updated {title}"),
+    };
+    let event_type = if moved {
         "task_moved"
+    } else if assignment_changed && input.assignee_id.is_some() {
+        "task_assigned"
     } else {
         "task_updated"
     };
-    let description = if assignment_changed && input.assignee_id.is_some() {
-        format!("assigned {title}")
-    } else if moved {
-        format!("moved {old_title} from {old_list_name} to {destination_list_name}")
-    } else {
-        format!("updated {title}")
-    };
-    add_activity(&mut tx, workspace_id, board_id, Some(task_id), user_id, event_type, description)
-        .await.map_err(|cause| internal_error(cause, "Could not record task activity"))?;
+
     tx.commit().await.map_err(|cause| internal_error(cause, "Could not save task update"))?;
-    state.publish_workspace_event(
-        workspace_id,
-        Some(board_id),
-        if moved { "task_moved" } else { "task_updated" },
-        if moved {
-            format!("moved {old_title} from {old_list_name} to {destination_list_name}")
-        } else {
-            format!("updated {title}")
-        },
-    );
+    state.publish_workspace_event(workspace_id, Some(board_id), event_type, event_description);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -784,6 +802,7 @@ async fn delete_task(
 #[derive(Debug, Deserialize)]
 struct CommentInput {
     body: String,
+    #[serde(default)]
     parent_comment_id: Option<Uuid>,
 }
 
