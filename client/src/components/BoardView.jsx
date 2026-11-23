@@ -179,23 +179,25 @@ export default function BoardView({
       if (event.event_type === "card_editing_started") {
         const user = users.find((row) => row.id === event.actor_user_id);
         if (!user) return;
-        const previous = editingTimeouts.current.get(event.task_id);
+        const editorKey = event.task_id + ":" + user.id;
+        const previous = editingTimeouts.current.get(editorKey);
         if (previous) window.clearTimeout(previous);
         setEditingByTask((current) => ({
           ...current,
           [event.task_id]: [...(current[event.task_id] || []).filter((row) => row.id !== user.id), user]
         }));
-        editingTimeouts.current.set(event.task_id, window.setTimeout(() => {
+        editingTimeouts.current.set(editorKey, window.setTimeout(() => {
           setEditingByTask((current) => ({
             ...current,
             [event.task_id]: (current[event.task_id] || []).filter((row) => row.id !== user.id)
           }));
-          editingTimeouts.current.delete(event.task_id);
+          editingTimeouts.current.delete(editorKey);
         }, 16000));
       } else if (event.event_type === "card_editing_stopped") {
-        const timeout = editingTimeouts.current.get(event.task_id);
+        const editorKey = event.task_id + ":" + event.actor_user_id;
+        const timeout = editingTimeouts.current.get(editorKey);
         if (timeout) window.clearTimeout(timeout);
-        editingTimeouts.current.delete(event.task_id);
+        editingTimeouts.current.delete(editorKey);
         setEditingByTask((current) => ({
           ...current,
           [event.task_id]: (current[event.task_id] || []).filter((row) => row.id !== event.actor_user_id)
