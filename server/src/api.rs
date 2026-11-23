@@ -613,31 +613,34 @@ async fn update_task(
     let due_at: Option<DateTime<Utc>> = input.due_date.map(|date| date.and_hms_opt(0, 0, 0).unwrap().and_utc());
 
     let mut tx = state.db.begin().await.map_err(|cause| internal_error(cause, "Could not begin task update"))?;
-    let existing: Option<(Uuid, Uuid, Uuid, String)> = sqlx::query_as(
-        "SELECT b.workspace_id, b.id, t.list_id, t.title FROM tasks t          JOIN lists l ON l.id = t.list_id JOIN boards b ON b.id = l.board_id          JOIN workspace_members wm ON wm.workspace_id = b.workspace_id          WHERE t.id = $1 AND wm.user_id = $2",
+    let existing: Option<(Uuid, Uuid, Uuid, String, String)> = sqlx::query_as(
+        "SELECT b.workspace_id, b.id, t.list_id, t.title, l.name
+           FROM tasks t JOIN lists l ON l.id=t.list_id JOIN boards b ON b.id=l.board_id
+           JOIN workspace_members wm ON wm.workspace_id=b.workspace_id
+          WHERE t.id=$1 AND wm.user_id=$2",
     )
     .bind(task_id)
     .bind(user_id)
     .fetch_optional(&mut *tx)
     .await
     .map_err(|cause| internal_error(cause, "Could not load task"))?;
-    let Some((workspace_id, board_id, old_list_id, old_title)) = existing else {
+    let Some((workspace_id, board_id, old_list_id, old_title, old_list_name)) = existing else {
         return Err(error(StatusCode::NOT_FOUND, "Task not found"));
     };
 
-    let target_is_valid: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM lists l JOIN boards b ON b.id = l.board_id
-         WHERE l.id = $1 AND b.workspace_id = $2 AND b.id = $3)",
+    let destination_list_name: Option<String> = sqlx::query_scalar(
+        "SELECT l.name FROM lists l JOIN boards b ON b.id=l.board_id
+          WHERE l.id=$1 AND b.workspace_id=$2 AND b.id=$3",
     )
     .bind(input.list_id)
     .bind(workspace_id)
     .bind(board_id)
-    .fetch_one(&mut *tx)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|cause| internal_error(cause, "Could not verify destination list"))?;
-    if !target_is_valid {
+    let Some(destination_list_name) = destination_list_name else {
         return Err(error(StatusCode::BAD_REQUEST, "Destination list is not in this workspace"));
-    }
+    };
 
     if let Some(assignee_id) = input.assignee_id {
         let is_member = ensure_assignee(&mut tx, workspace_id, assignee_id)
@@ -728,7 +731,7 @@ async fn update_task(
     let description = if assignment_changed && input.assignee_id.is_some() {
         format!("assigned {title}")
     } else if moved {
-        format!("moved {old_title} to another list")
+        format!("moved {old_title} from {old_list_name} to {destination_list_name}")
     } else {
         format!("updated {title}")
     };
@@ -739,7 +742,11 @@ async fn update_task(
         workspace_id,
         Some(board_id),
         if moved { "task_moved" } else { "task_updated" },
-        if moved { format!("moved {old_title} to another list") } else { format!("updated {title}") },
+        if moved {
+            format!("moved {old_title} from {old_list_name} to {destination_list_name}")
+        } else {
+            format!("updated {title}")
+        },
     );
     Ok(StatusCode::NO_CONTENT)
 }
