@@ -14,7 +14,16 @@ import {
   verticalListSortingStrategy
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { CalendarDays, GripVertical, Pencil, Plus, Trash2, UserRound } from "lucide-react";
+import {
+  CalendarDays,
+  CheckCircle2,
+  GripVertical,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  Trash2,
+  UserRound
+} from "lucide-react";
 import { presenceApi, subscribeWorkspaceSocket } from "../lib/api.js";
 
 function formatDueDate(value) {
@@ -33,90 +42,209 @@ function initials(name) {
     .toUpperCase();
 }
 
-function SortableTask({ task, users, assigneeIds, editors = [], onOpen, movePending = false }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: task.id,
-    disabled: movePending
-  });
+function getChecklistProgress(task) {
+  const items = Array.isArray(task.checklist) ? task.checklist : [];
+  const total = Number(task.checklist_total ?? task.checklist_count ?? items.length);
+  if (!total) return null;
+  const completed = Number(
+    task.checklist_completed_count ??
+    task.checklist_done_count ??
+    items.filter((item) => item.is_done || item.completed).length
+  );
+  return { completed, total };
+}
+
+function TaskCardFace({ task, users, assigneeIds, lists = [], editors = [], onOpen, onMove }) {
   const assignedUsers = assigneeIds
     .map((id) => users.find((user) => user.id === id))
     .filter(Boolean);
+  const checklist = getChecklistProgress(task);
+  const label = task.category || task.labels?.[0]?.name || task.label || task.priority || "Task";
+  const labelTone = task.priority || "medium";
+
+  return (
+    <>
+      <div className="task-card-topline">
+        <span className={"priority-tag priority-" + labelTone}>{label}</span>
+        <div className="task-card-controls">
+          <details className="task-quick-menu">
+            <summary aria-label={"Card actions for " + task.title} title="Card actions">
+              <MoreHorizontal size={16} />
+            </summary>
+            <div className="task-quick-menu-panel">
+              <button type="button" onClick={() => onOpen(task)}>Open card details</button>
+              <label>
+                <span>Move to list</span>
+                <select
+                  aria-label={"Move " + task.title + " to list"}
+                  value={task.list_id}
+                  onChange={(event) => {
+                    const listId = event.target.value;
+                    if (listId && listId !== task.list_id) onMove?.(task.id, listId, "list:" + listId);
+                    event.currentTarget.closest("details")?.removeAttribute("open");
+                  }}
+                >
+                  {lists.map((list) => <option key={list.id} value={list.id}>{list.name}</option>)}
+                </select>
+              </label>
+            </div>
+          </details>
+          <button
+            className="drag-handle"
+            type="button"
+            aria-label={"Drag " + task.title}
+            data-drag-handle
+          >
+            <GripVertical size={15} />
+          </button>
+        </div>
+      </div>
+      <button className="task-title-button" type="button" onClick={() => onOpen(task)}>
+        {task.title}
+      </button>
+      <div className="task-card-footer">
+        <span className={"task-date" + (task.due_date && task.due_date < new Date().toISOString().slice(0, 10) ? " overdue" : "")}>
+          <CalendarDays size={12} /> <time className="tabular-nums" dateTime={task.due_date || undefined}>{formatDueDate(task.due_date)}</time>
+        </span>
+        <span className="task-card-meta">
+          {checklist && (
+            <span className="task-checklist-progress" title={checklist.completed + " of " + checklist.total + " checklist items complete"}>
+              <CheckCircle2 size={12} /> <span className="tabular-nums">{checklist.completed}/{checklist.total}</span>
+            </span>
+          )}
+          <span className="task-assignees" aria-label="Task assignees">
+            {assignedUsers.length > 0
+              ? assignedUsers.slice(0, 2).map((user) => (
+                  <span className="mini-avatar" key={user.id} title={user.full_name}>{initials(user.full_name)}</span>
+                ))
+              : <span className="unassigned-avatar" title="Unassigned"><UserRound size={11} /></span>}
+          </span>
+        </span>
+      </div>
+      {editors.length > 0 && <span className="task-card-editor-signal" aria-label={editors.map((user) => user.full_name).join(", ") + " editing"} />}
+    </>
+  );
+}
+
+function SortableTask({ task, users, assigneeIds, lists, editors = [], onOpen, onMove, movePending = false }) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+    isOver
+  } = useSortable({
+    id: task.id,
+    disabled: movePending
+  });
 
   return (
     <article
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
-      className={"task-card" + (isDragging ? " task-card-dragging" : "") + (editors.length ? " task-card-being-edited" : "")}
+      className={
+        "task-card" +
+        (isDragging ? " task-card-dragging" : "") +
+        (isOver ? " task-card-drop-target" : "") +
+        (editors.length ? " task-card-being-edited" : "")
+      }
     >
-      <div className="task-card-topline">
-        <span className={"priority-tag priority-" + task.priority}>{task.priority}</span>
-        <button
-          className="drag-handle"
-          type="button"
-          aria-label={"Drag " + task.title}
-          {...attributes}
-          {...listeners}
-        >
-          <GripVertical size={16} />
-        </button>
-      </div>
-      <button className="task-title-button" type="button" onClick={() => onOpen(task)}>
-        {task.title}
-      </button>
-      {task.description && <p className="task-description">{task.description}</p>}
-      {editors.length > 0 && (
-        <div className="task-editing-indicator" title={editors.map((user) => user.full_name).join(", ") + " editing this card"}>
-          <Pencil size={11} />
-          <span>{editors.length === 1 ? editors[0].full_name + " is editing" : editors.map((user) => user.full_name).join(", ") + " are editing"}</span>
-        </div>
-      )}
-      <div className="task-card-footer">
-        <span className={"task-date" + (task.due_date && task.due_date < new Date().toISOString().slice(0, 10) ? " overdue" : "")}>
-          <CalendarDays size={13} /> {formatDueDate(task.due_date)}
-        </span>
-        <div className="task-assignees" aria-label="Task assignees">
-          {assignedUsers.length > 0
-            ? assignedUsers.map((user) => (
-                <span className="mini-avatar" key={user.id} title={user.full_name}>{initials(user.full_name)}</span>
-              ))
-            : <span className="unassigned-avatar" title="Unassigned"><UserRound size={12} /></span>}
-        </div>
-      </div>
+      <TaskCardFace
+        task={task}
+        users={users}
+        assigneeIds={assigneeIds}
+        lists={lists}
+        editors={editors}
+        onOpen={onOpen}
+        onMove={onMove}
+      />
+      <button
+        className="task-card-drag-sensor"
+        type="button"
+        tabIndex={-1}
+        aria-hidden="true"
+        {...attributes}
+        {...listeners}
+      />
     </article>
   );
 }
 
-function BoardColumn({ list, tasks, users, assigneesByTask, editingByTask, onOpenTask, onAddTask, onRenameList, onDeleteList, canManageLists, movePending }) {
+function BoardColumn({
+  list,
+  lists,
+  tasks,
+  users,
+  assigneesByTask,
+  editingByTask,
+  onOpenTask,
+  onAddTask,
+  onQuickAddTask,
+  onMoveTask,
+  onRenameList,
+  onDeleteList,
+  canManageLists,
+  movePending
+}) {
   const { setNodeRef, isOver } = useDroppable({
     id: "list:" + list.id,
     data: { type: "column", listId: list.id }
   });
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const [draftTitle, setDraftTitle] = useState("");
+  const [savingQuickAdd, setSavingQuickAdd] = useState(false);
+  const quickAddRef = useRef(null);
+
+  useEffect(() => {
+    if (quickAddOpen) quickAddRef.current?.focus();
+  }, [quickAddOpen]);
+
+  async function submitQuickAdd(event) {
+    event.preventDefault();
+    if (!draftTitle.trim() || savingQuickAdd) return;
+    setSavingQuickAdd(true);
+    try {
+      await onQuickAddTask(list.id, draftTitle.trim());
+      setDraftTitle("");
+      setQuickAddOpen(false);
+    } finally {
+      setSavingQuickAdd(false);
+    }
+  }
+
+  function cancelQuickAdd() {
+    setDraftTitle("");
+    setQuickAddOpen(false);
+  }
 
   return (
-    <section className={"board-column" + (isOver ? " board-column-over" : "")}>
-      <div className="column-heading">
+    <section className={"board-column" + (isOver ? " board-column-over" : "")} aria-label={list.name + " list"}>
+      <header className="column-heading">
         <div className="column-title-wrap">
           <span className={"column-dot dot-" + list.name.toLowerCase().replaceAll(" ", "-")} />
-          <h3>{list.name}</h3>
-          <span className="column-count">{tasks.length}</span>
+          <h3 title={list.name}>{list.name}</h3>
+          <span className="column-count tabular-nums" aria-label={tasks.length + " cards"}>{tasks.length}</span>
         </div>
         <div className="column-actions">
           {canManageLists && (
             <>
-              <button className="column-add" type="button" onClick={() => onRenameList(list)} aria-label={"Rename " + list.name} title="Rename column">
-                <Pencil size={14} />
+              <button className="column-add" type="button" onClick={() => onRenameList(list)} aria-label={"Rename " + list.name} title="Rename list">
+                <Pencil size={13} />
               </button>
-              <button className="column-add column-delete" type="button" onClick={() => onDeleteList(list)} aria-label={"Delete " + list.name} title="Delete empty column">
-                <Trash2 size={14} />
+              <button className="column-add column-delete" type="button" onClick={() => onDeleteList(list)} aria-label={"Delete " + list.name} title="Delete empty list">
+                <Trash2 size={13} />
               </button>
             </>
           )}
-          <button className="column-add" type="button" onClick={() => onAddTask(list.id)} aria-label={"Add a task to " + list.name} title="Add task">
-            <Plus size={16} />
+          <button className="column-add" type="button" onClick={() => onAddTask(list.id)} aria-label={"Open card editor in " + list.name} title="Create detailed card">
+            <Plus size={17} />
           </button>
         </div>
-      </div>
-      <div ref={setNodeRef} className="column-dropzone" data-list-id={list.id}>
+      </header>
+
+      <div ref={setNodeRef} className={"column-dropzone" + (isOver ? " column-dropzone-over" : "")} data-list-id={list.id}>
         <SortableContext items={tasks.map((task) => task.id)} strategy={verticalListSortingStrategy}>
           {tasks.length > 0 ? (
             tasks.map((task) => (
@@ -125,19 +253,47 @@ function BoardColumn({ list, tasks, users, assigneesByTask, editingByTask, onOpe
                 task={task}
                 users={users}
                 assigneeIds={assigneesByTask[task.id] || []}
+                lists={lists}
                 editors={editingByTask[task.id] || []}
                 onOpen={onOpenTask}
+                onMove={onMoveTask}
                 movePending={movePending}
               />
             ))
           ) : (
-            <div className="column-empty">Drop a task here or add a new one.</div>
+            <button className="column-empty" type="button" onClick={() => setQuickAddOpen(true)}>
+              <Plus size={15} />
+              <strong>Add your first card</strong>
+              <span>Keep it short. Add details any time.</span>
+            </button>
           )}
         </SortableContext>
       </div>
-      <button className="column-add-task" type="button" onClick={() => onAddTask(list.id)}>
-        <Plus size={15} /> Add task
-      </button>
+
+      {quickAddOpen ? (
+        <form className="column-quick-add" onSubmit={submitQuickAdd}>
+          <label className="sr-only" htmlFor={"quick-add-" + list.id}>New card title</label>
+          <input
+            ref={quickAddRef}
+            id={"quick-add-" + list.id}
+            value={draftTitle}
+            onChange={(event) => setDraftTitle(event.target.value)}
+            onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); cancelQuickAdd(); } }}
+            placeholder="Write a card title…"
+            maxLength={180}
+            disabled={savingQuickAdd}
+          />
+          <div className="column-quick-add-actions">
+            <button className="primary-button" type="submit" disabled={!draftTitle.trim() || savingQuickAdd}>{savingQuickAdd ? "Adding…" : "Add card"}</button>
+            <button className="secondary-button" type="button" onClick={cancelQuickAdd} disabled={savingQuickAdd}>Cancel</button>
+            <span>Enter to add · Esc to cancel</span>
+          </div>
+        </form>
+      ) : (
+        <button className="column-add-task" type="button" onClick={() => setQuickAddOpen(true)}>
+          <Plus size={15} /> Add a card
+        </button>
+      )}
     </section>
   );
 }
@@ -150,20 +306,27 @@ export default function BoardView({
   taskAssignees,
   onOpenTask,
   onAddTask,
+  onQuickAddTask,
   onMoveTask,
   onCreateList,
   onRenameList,
   onDeleteList,
   canManageLists,
   currentUserId,
-  realtimeConnected = true
+  realtimeConnected = true,
+  demoMode = false
 }) {
   const [presenceUsers, setPresenceUsers] = useState([]);
   const [editingByTask, setEditingByTask] = useState({});
   const [movePending, setMovePending] = useState(false);
+  const [activeTaskId, setActiveTaskId] = useState("");
   const editingTimeouts = useRef(new Map());
 
   useEffect(() => {
+    if (demoMode) {
+      setPresenceUsers(users.slice(0, 3).map((user) => ({ user_id: user.id, full_name: user.full_name })));
+      return undefined;
+    }
     let cancelled = false;
     const loadPresence = () => {
       presenceApi.list(board.id)
@@ -175,9 +338,7 @@ export default function BoardView({
     const unsubscribe = subscribeWorkspaceSocket((payload) => {
       if (payload.type !== "workspace_event" || !payload.event || payload.event.board_id !== board.id) return;
       const event = payload.event;
-      if (event.event_type === "presence_joined" || event.event_type === "presence_left") {
-        loadPresence();
-      }
+      if (event.event_type === "presence_joined" || event.event_type === "presence_left") loadPresence();
       if (!event.task_id || !event.actor_user_id || event.actor_user_id === currentUserId) return;
       if (event.event_type === "card_editing_started") {
         const user = users.find((row) => row.id === event.actor_user_id);
@@ -214,11 +375,9 @@ export default function BoardView({
       editingTimeouts.current.forEach((timeout) => window.clearTimeout(timeout));
       editingTimeouts.current.clear();
     };
-  }, [board.id, currentUserId, users]);
+  }, [board.id, currentUserId, users, demoMode]);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 7 } })
-  );
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 7 } }));
   const assigneesByTask = useMemo(() => {
     return taskAssignees.reduce((result, assignment) => {
       result[assignment.task_id] = result[assignment.task_id] || [];
@@ -227,9 +386,12 @@ export default function BoardView({
     }, {});
   }, [taskAssignees]);
 
+  const activeTask = tasks.find((task) => task.id === activeTaskId) || null;
+
   function handleDragEnd(event) {
     const activeId = String(event.active.id);
     const overId = event.over ? String(event.over.id) : "";
+    setActiveTaskId("");
     if (!overId || activeId === overId || movePending) return;
 
     let destinationListId = "";
@@ -239,7 +401,6 @@ export default function BoardView({
       const overTask = tasks.find((task) => task.id === overId);
       destinationListId = overTask ? overTask.list_id : "";
     }
-
     if (!destinationListId) return;
 
     setMovePending(true);
@@ -269,21 +430,25 @@ export default function BoardView({
       <div className="board-toolbar">
         <div className="board-toolbar-note">
           <span className={"live-dot" + (realtimeConnected ? "" : " live-dot-offline")} />
-          {movePending ? "Saving card position…" : realtimeConnected ? "Live board sync" : "Reconnecting live sync"}
-          <span className="toolbar-divider">·</span> Drag cards to update their list
+          <span className={"board-connection-pill" + (realtimeConnected ? " is-live" : " is-reconnecting")}>
+            {demoMode ? "Demo workspace" : realtimeConnected ? "Live" : "Reconnecting…"}
+          </span>
+          {movePending ? "Saving card position…" : "Drag cards to update their list"}
         </div>
         <div className="board-toolbar-actions">
-          {canManageLists && <button className="secondary-button" type="button" onClick={onCreateList}>
-            <Plus size={16} /> Add column
-          </button>}
-          <button className="primary-button" type="button" onClick={() => onAddTask(lists[0]?.id)}>
-            <Plus size={17} /> New task
-          </button>
+          {canManageLists && <button className="secondary-button" type="button" onClick={onCreateList}><Plus size={16} /> Add list</button>}
+          <button className="primary-button" type="button" onClick={() => onAddTask(lists[0]?.id)}><Plus size={17} /> New card</button>
         </div>
       </div>
 
-      <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={handleDragEnd}>
-        <div className="kanban-columns">
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCorners}
+        onDragStart={(event) => setActiveTaskId(String(event.active.id))}
+        onDragCancel={() => setActiveTaskId("")}
+        onDragEnd={handleDragEnd}
+      >
+        <div className="kanban-columns" aria-label="Kanban board columns">
           {lists.map((list) => {
             const columnTasks = tasks
               .filter((task) => task.list_id === list.id)
@@ -292,12 +457,15 @@ export default function BoardView({
               <BoardColumn
                 key={list.id}
                 list={list}
+                lists={lists}
                 tasks={columnTasks}
                 users={users}
                 assigneesByTask={assigneesByTask}
                 editingByTask={editingByTask}
                 onOpenTask={onOpenTask}
                 onAddTask={onAddTask}
+                onQuickAddTask={onQuickAddTask}
+                onMoveTask={onMoveTask}
                 onRenameList={onRenameList}
                 onDeleteList={onDeleteList}
                 canManageLists={canManageLists}
@@ -307,7 +475,19 @@ export default function BoardView({
           })}
         </div>
         <DragOverlay dropAnimation={null}>
-          {null}
+          {activeTask ? (
+            <article className="task-card task-card-overlay">
+              <TaskCardFace
+                task={activeTask}
+                users={users}
+                assigneeIds={assigneesByTask[activeTask.id] || []}
+                lists={lists}
+                editors={editingByTask[activeTask.id] || []}
+                onOpen={onOpenTask}
+                onMove={onMoveTask}
+              />
+            </article>
+          ) : null}
         </DragOverlay>
       </DndContext>
     </section>
