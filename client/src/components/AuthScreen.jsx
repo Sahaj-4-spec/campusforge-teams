@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   ArrowRight,
   Eye,
@@ -37,7 +38,6 @@ const providers = [
 ];
 
 export default function AuthScreen({ onAuthenticated }) {
-  const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -45,27 +45,29 @@ export default function AuthScreen({ onAuthenticated }) {
   const [busyProvider, setBusyProvider] = useState("");
   const [error, setError] = useState("");
 
-  const isRegister = mode === "register";
+  const location = useLocation();
+  const navigate = useNavigate();
+  const isRegister = location.pathname === "/signup";
 
   useEffect(() => {
-    // Remove legacy token fragments from the address bar without reading or storing them.
-    if (window.location.hash.includes("oauth_token=")) {
-      window.history.replaceState({}, "", window.location.pathname + window.location.search);
+    const query = new URLSearchParams(location.search);
+    const hasOAuthError = query.has("oauth_error");
+    const oauthError = query.get("oauth_error");
+    if (hasOAuthError) {
+      query.delete("oauth_error");
+      setError(oauthError || "Authentication failed. Please try again.");
     }
 
-    const query = new URLSearchParams(window.location.search);
-    const oauthError = query.get("oauth_error");
-    if (oauthError) {
-      query.delete("oauth_error");
-      const nextSearch = query.toString();
-      window.history.replaceState(
-        {},
-        "",
-        window.location.pathname + (nextSearch ? "?" + nextSearch : "") + window.location.hash
-      );
-      setError(oauthError);
+    const nextPath = isRegister ? "/signup" : "/login";
+    const nextSearch = query.toString();
+    const nextHash = location.hash.includes("oauth_token=") ? "" : location.hash;
+    const nextUrl = nextPath + (nextSearch ? "?" + nextSearch : "") + nextHash;
+    const currentUrl = location.pathname + location.search + location.hash;
+
+    if (nextUrl !== currentUrl) {
+      navigate(nextUrl, { replace: true });
     }
-  }, []);
+  }, [isRegister, location.hash, location.pathname, location.search, navigate]);
 
   async function submit(event) {
     event.preventDefault();
@@ -88,7 +90,7 @@ export default function AuthScreen({ onAuthenticated }) {
   }
 
   function switchMode() {
-    setMode(isRegister ? "login" : "register");
+    navigate(isRegister ? "/login" : "/signup");
     setError("");
     setPassword("");
   }
@@ -113,9 +115,10 @@ export default function AuthScreen({ onAuthenticated }) {
           <form className="auth-form" onSubmit={submit}>
             <label className="field-group">
               <span>Email address</span>
-              <span className="auth-input-wrap">
+              <span className="auth-input-wrap focus-within:ring-2 focus-within:ring-violet-200">
                 <Mail size={17} aria-hidden="true" />
                 <input
+                  className="outline-none"
                   type="email"
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
@@ -131,6 +134,7 @@ export default function AuthScreen({ onAuthenticated }) {
                 <LockKeyhole size={17} aria-hidden="true" />
                 <input
                   id="auth-password"
+                  className="outline-none"
                   type={showPassword ? "text" : "password"}
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
