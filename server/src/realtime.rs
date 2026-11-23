@@ -30,7 +30,12 @@ struct AuthenticateMessage {
 struct ClientWorkspaceMessage {
     #[serde(rename = "type")]
     message_type: String,
+    #[serde(default)]
     board_id: Option<Uuid>,
+    #[serde(default)]
+    task_id: Option<Uuid>,
+    #[serde(default)]
+    editing: Option<bool>,
 }
 
 async fn websocket_handler(
@@ -156,7 +161,65 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, user_id: Uuid, ex
                     }
                     Some(Ok(Message::Text(text))) if text.len() <= 1024 => {
                         if let Ok(client_event) = serde_json::from_str::<ClientWorkspaceMessage>(&text) {
-                            if client_event.message_type == "typing" {
+                            if client_event.message_type == "board_view" {
+                                let valid_board = if let Some(board_id) = client_event.board_id {
+                                    sqlx::query_scalar::<_,bool>(
+                                        "SELECT EXISTS(SELECT 1 FROM boards WHERE id=$1 AND workspace_id=$2)",
+                                    ).bind(board_id).bind(workspace_id).fetch_one(&state.db).await.unwrap_or(false)
+                                } else {
+                                    true
+                                };
+                                if valid_board {
+                                    let previous_board: Option<Uuid> = sqlx::query_scalar(
+                                        "SELECT board_id FROM workspace_presence WHERE connection_id=$1",
+                                    ).bind(connection_id).fetch_optional(&state.db).await.ok().flatten();
+                                    if previous_board != client_event.board_id {
+                                        if let Err(error) = sqlx::query(
+                                            "UPDATE workspace_presence SET board_id=$1,last_seen_at=NOW() WHERE connection_id=$2",
+                                        ).bind(client_event.board_id).bind(connection_id).execute(&state.db).await {
+                                            tracing::warn!(%error, "Could not update active board presence");
+                                        } else {
+                                            if let Some(previous_board) = previous_board {
+                                                state.publish_user_workspace_event(
+                                                    workspace_id, Some(previous_board), Some(user_id),
+                                                    "presence_left", "A teammate left this board",
+                                                );
+                                            }
+                                            if let Some(board_id) = client_event.board_id {
+                                                state.publish_user_workspace_event(
+                                                    workspace_id, Some(board_id), Some(user_id),
+                                                    "presence_joined", "A teammate is viewing this board",
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if client_event.message_type == "card_editing" {
+                                if let (Some(board_id), Some(task_id), Some(editing)) =
+                                    (client_event.board_id, client_event.task_id, client_event.editing)
+                                {
+                                    let is_viewing_board: bool = sqlx::query_scalar(
+                                        "SELECT EXISTS(SELECT 1 FROM workspace_presence
+                                         WHERE connection_id=$1 AND workspace_id=$2 AND board_id=$3)",
+                                    ).bind(connection_id).bind(workspace_id).bind(board_id)
+                                        .fetch_one(&state.db).await.unwrap_or(false);
+                                    let task_on_board: bool = sqlx::query_scalar(
+                                        "SELECT EXISTS(SELECT 1 FROM tasks t
+                                         JOIN lists l ON l.id=t.list_id
+                                         WHERE t.id=$1 AND l.board_id=$2)",
+                                    ).bind(task_id).bind(board_id).fetch_one(&state.db).await.unwrap_or(false);
+                                    if is_viewing_board && task_on_board {
+                                        state.publish_task_workspace_event(
+                                            workspace_id,
+                                            board_id,
+                                            task_id,
+                                            Some(user_id),
+                                            if editing { "card_editing_started" } else { "card_editing_stopped" },
+                                            if editing { "A teammate is editing this card" } else { "A teammate stopped editing this card" },
+                                        );
+                                    }
+                                }
+                            } else if client_event.message_type == "typing" {
                                 let now = Instant::now();
                                 let should_publish = last_typing
                                     .map(|last| now.duration_since(last) >= Duration::from_millis(1500))
@@ -222,12 +285,21 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, user_id: Uuid, ex
         }
     }
 
+    let active_board: Option<Uuid> = sqlx::query_scalar(
+        "SELECT board_id FROM workspace_presence WHERE connection_id=$1",
+    ).bind(connection_id).fetch_optional(&state.db).await.ok().flatten();
     if let Err(error) = sqlx::query("DELETE FROM workspace_presence WHERE connection_id=$1")
         .bind(connection_id)
         .execute(&state.db)
         .await
     {
         tracing::warn!(%error, "Could not remove workspace presence lease");
+    }
+    if let Some(board_id) = active_board {
+        state.publish_user_workspace_event(
+            workspace_id, Some(board_id), Some(user_id),
+            "presence_left", "A teammate left this board",
+        );
     }
     state.publish_user_workspace_event(
         workspace_id,

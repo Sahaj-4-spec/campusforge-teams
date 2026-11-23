@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { CalendarDays, MessageCircle, Trash2, X } from "lucide-react";
+import { AtSign, CalendarDays, CornerDownRight, MessageCircle, Reply, Trash2, X } from "lucide-react";
 import TaskAdvancedPanel from "./TaskAdvancedPanel.jsx";
+import { sendWorkspaceSocketMessage } from "../lib/api.js";
 
 function formatCommentDate(value) {
   if (!value) return "";
@@ -39,6 +40,8 @@ export default function TaskDialog({
     estimated_minutes: ""
   });
   const [commentDraft, setCommentDraft] = useState("");
+  const [replyToCommentId, setReplyToCommentId] = useState("");
+  const [mentionUserId, setMentionUserId] = useState("");
   const dialogWasOpen = useRef(false);
   const lastTaskIdentity = useRef(null);
 
@@ -73,10 +76,28 @@ export default function TaskDialog({
         });
       }
       setCommentDraft("");
+      setReplyToCommentId("");
+      setMentionUserId("");
       lastTaskIdentity.current = identity;
     }
     dialogWasOpen.current = true;
   }, [open, task?.id]);
+
+  useEffect(() => {
+    if (!open || !task?.id || !task?.board_id) return undefined;
+    const publishEditing = (editing) => sendWorkspaceSocketMessage({
+      type: "card_editing",
+      board_id: task.board_id,
+      task_id: task.id,
+      editing
+    });
+    publishEditing(true);
+    const heartbeat = window.setInterval(() => publishEditing(true), 7000);
+    return () => {
+      window.clearInterval(heartbeat);
+      publishEditing(false);
+    };
+  }, [open, task?.id, task?.board_id]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -111,13 +132,63 @@ export default function TaskDialog({
   function submitComment(event) {
     event.preventDefault();
     if (!task || !commentDraft.trim()) return;
-    onAddComment(task.id, commentDraft.trim());
+    onAddComment(task.id, commentDraft.trim(), replyToCommentId || null);
     setCommentDraft("");
+    setReplyToCommentId("");
+    setMentionUserId("");
+  }
+
+  function insertCommentMention(userId) {
+    if (!userId) return;
+    setCommentDraft((current) => (current ? current + " " : "") + "@{" + userId + "} ");
+    setMentionUserId("");
+  }
+
+  function displayCommentBody(body) {
+    let remaining = body || "";
+    let rendered = "";
+    while (remaining) {
+      const start = remaining.indexOf("@{");
+      if (start < 0) return rendered + remaining;
+      const end = remaining.indexOf("}", start + 2);
+      if (end < 0) return rendered + remaining;
+      const userId = remaining.slice(start + 2, end).trim();
+      const user = users.find((row) => row.id === userId);
+      rendered += remaining.slice(0, start) + "@" + (user?.full_name || "workspace member");
+      remaining = remaining.slice(end + 1);
+    }
+    return rendered;
   }
 
   const taskComments = task
     ? comments.filter((comment) => comment.task_id === task.id)
     : [];
+  const rootComments = taskComments.filter((comment) => !comment.parent_comment_id);
+  const replyTarget = taskComments.find((comment) => comment.id === replyToCommentId);
+
+  function renderComment(comment, isReply = false) {
+    const author = users.find((user) => user.id === comment.author_id);
+    const replies = isReply ? [] : taskComments.filter((row) => row.parent_comment_id === comment.id);
+    return (
+      <article className={"comment-item" + (isReply ? " comment-reply" : "")} key={comment.id}>
+        {isReply && <CornerDownRight className="comment-reply-mark" size={14} />}
+        <div className="avatar avatar-small">{(author?.full_name || "M").slice(0, 1)}</div>
+        <div className="comment-body">
+          <div className="comment-meta">
+            <strong>{author?.full_name || "Workspace member"}</strong>
+            <time>{formatCommentDate(comment.created_at)}</time>
+          </div>
+          <p>{displayCommentBody(comment.body)}</p>
+          {!isReply && (
+            <button className="comment-reply-button" type="button" onClick={() => setReplyToCommentId(comment.id)}>
+              <Reply size={12} /> Reply
+            </button>
+          )}
+          {replies.length > 0 && <div className="comment-replies">{replies.map((reply) => renderComment(reply, true))}</div>}
+        </div>
+      </article>
+    );
+  }
 
   return (
     <div
@@ -221,38 +292,43 @@ export default function TaskDialog({
               <h3><MessageCircle size={16} /> Discussion</h3>
               <span>{taskComments.length}</span>
             </div>
-            {taskComments.length > 0 ? (
+            {rootComments.length > 0 ? (
               <div className="comment-list">
-                {taskComments.map((comment) => {
-                  const author = users.find((user) => user.id === comment.author_id);
-                  return (
-                    <article className="comment-item" key={comment.id}>
-                      <div className="avatar avatar-small">{(author?.full_name || "M").slice(0, 1)}</div>
-                      <div className="comment-body">
-                        <div className="comment-meta">
-                          <strong>{author?.full_name || "Workspace member"}</strong>
-                          <time>{formatCommentDate(comment.created_at)}</time>
-                        </div>
-                        <p>{comment.body}</p>
-                      </div>
-                    </article>
-                  );
-                })}
+                {rootComments.map((comment) => renderComment(comment))}
               </div>
             ) : (
               <p className="comment-empty">No comments yet. Start the discussion with your team.</p>
             )}
-            <form className="comment-form" onSubmit={submitComment}>
+            <form className="comment-form comment-thread-composer" onSubmit={submitComment}>
               <div className="avatar avatar-small">{(currentUser?.full_name || "Y").slice(0, 1)}</div>
-              <label className="sr-only" htmlFor="comment-draft">Write a comment</label>
-              <input
-                id="comment-draft"
-                value={commentDraft}
-                onChange={(event) => setCommentDraft(event.target.value)}
-                placeholder="Write a comment..."
-                maxLength={2000}
-              />
-              <button className="comment-submit" type="submit" disabled={!commentDraft.trim()}>Send</button>
+              <div className="comment-compose-main">
+                {replyTarget && (
+                  <div className="comment-replying-to">
+                    Replying to {users.find((user) => user.id === replyTarget.author_id)?.full_name || "a teammate"}
+                    <button type="button" onClick={() => setReplyToCommentId("")} aria-label="Cancel reply"><X size={12} /></button>
+                  </div>
+                )}
+                <input
+                  id="comment-draft"
+                  value={commentDraft}
+                  onChange={(event) => setCommentDraft(event.target.value)}
+                  placeholder={replyTarget ? "Write a reply..." : "Write a comment..."}
+                  maxLength={2000}
+                  aria-label={replyTarget ? "Write a threaded reply" : "Write a comment"}
+                />
+                <div className="comment-compose-actions">
+                  <label className="comment-mention-picker">
+                    <AtSign size={13} />
+                    <select value={mentionUserId} onChange={(event) => insertCommentMention(event.target.value)} aria-label="Mention a teammate">
+                      <option value="">Mention teammate</option>
+                      {users.filter((user) => user.id !== currentUser?.id).map((user) => (
+                        <option key={user.id} value={user.id}>{user.full_name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <button className="comment-submit" type="submit" disabled={!commentDraft.trim()}>Send</button>
+                </div>
+              </div>
             </form>
           </section>
         )}

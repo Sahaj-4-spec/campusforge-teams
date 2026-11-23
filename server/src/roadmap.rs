@@ -1067,6 +1067,11 @@ pub async fn run_roadmap_jobs(state: AppState) {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct PresenceQuery {
+    board_id: Option<Uuid>,
+}
+
 #[derive(Debug, Serialize, FromRow)]
 struct PresenceRow {
     user_id: Uuid,
@@ -1077,15 +1082,18 @@ struct PresenceRow {
 async fn workspace_presence(
     State(state): State<AppState>,
     WorkspaceUser(_user_id, workspace_id): WorkspaceUser,
+    Query(query): Query<PresenceQuery>,
 ) -> ApiResult<Json<Vec<PresenceRow>>> {
     let rows=sqlx::query_as::<_,PresenceRow>(
         "SELECT p.user_id,u.full_name,MAX(p.last_seen_at) AS last_seen_at
            FROM workspace_presence p
            JOIN users u ON u.id=p.user_id
-          WHERE p.workspace_id=$1 AND p.last_seen_at >= NOW()-INTERVAL '90 seconds'
+          WHERE p.workspace_id=$1
+            AND p.last_seen_at >= NOW()-INTERVAL '90 seconds'
+            AND ($2::uuid IS NULL OR p.board_id=$2)
           GROUP BY p.user_id,u.full_name
           ORDER BY u.full_name",
-    ).bind(workspace_id).fetch_all(&state.db).await
+    ).bind(workspace_id).bind(query.board_id).fetch_all(&state.db).await
       .map_err(|error|internal(error,"Could not load workspace presence"))?;
     Ok(Json(rows))
 }

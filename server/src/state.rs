@@ -12,6 +12,8 @@ pub struct WorkspaceEvent {
     pub actor_user_id: Option<Uuid>,
     #[serde(default)]
     pub recipient_user_id: Option<Uuid>,
+    #[serde(default)]
+    pub task_id: Option<Uuid>,
     pub event_type: String,
     pub description: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -52,7 +54,7 @@ impl AppState {
         event_type: impl Into<String>,
         description: impl Into<String>,
     ) {
-        self.publish_event(workspace_id,board_id,None,None,event_type,description);
+        self.publish_event(workspace_id,board_id,None,None,None,event_type,description);
     }
 
     pub fn publish_user_workspace_event(
@@ -63,7 +65,7 @@ impl AppState {
         event_type: impl Into<String>,
         description: impl Into<String>,
     ) {
-        self.publish_event(workspace_id,board_id,actor_user_id,None,event_type,description);
+        self.publish_event(workspace_id,board_id,actor_user_id,None,None,event_type,description);
     }
 
     /// Publish an event that is delivered only to one workspace member.
@@ -77,7 +79,20 @@ impl AppState {
         event_type: impl Into<String>,
         description: impl Into<String>,
     ) {
-        self.publish_event(workspace_id,None,actor_user_id,Some(recipient_user_id),event_type,description);
+        self.publish_event(workspace_id,None,actor_user_id,Some(recipient_user_id),None,event_type,description);
+    }
+
+    /// Publish an ephemeral task-level event, such as a teammate editing a card.
+    pub fn publish_task_workspace_event(
+        &self,
+        workspace_id: Uuid,
+        board_id: Uuid,
+        task_id: Uuid,
+        actor_user_id: Option<Uuid>,
+        event_type: impl Into<String>,
+        description: impl Into<String>,
+    ) {
+        self.publish_event(workspace_id,Some(board_id),actor_user_id,None,Some(task_id),event_type,description);
     }
 
     fn publish_event(
@@ -86,6 +101,7 @@ impl AppState {
         board_id: Option<Uuid>,
         actor_user_id: Option<Uuid>,
         recipient_user_id: Option<Uuid>,
+        task_id: Option<Uuid>,
         event_type: impl Into<String>,
         description: impl Into<String>,
     ) {
@@ -94,6 +110,7 @@ impl AppState {
             board_id,
             actor_user_id,
             recipient_user_id,
+            task_id,
             event_type: event_type.into(),
             description: description.into(),
             created_at: chrono::Utc::now(),
