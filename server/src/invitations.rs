@@ -365,7 +365,11 @@ async fn update_member_role(
     .map_err(|cause| internal_error(cause, "Could not update workspace member role"))?;
 
     sqlx::query(
-        "UPDATE board_members bm SET role=$3
+        "UPDATE board_members bm SET role=CASE
+             WHEN $3='admin' THEN 'admin'
+             WHEN bm.role='admin' THEN 'member'
+             ELSE bm.role
+         END
          FROM boards b
          WHERE bm.board_id=b.id AND b.workspace_id=$1 AND bm.user_id=$2",
     )
