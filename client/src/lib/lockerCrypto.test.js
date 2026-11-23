@@ -8,6 +8,7 @@ import {
   deriveLockerKey,
   encryptLockerPayload,
   randomBytes,
+  randomUuid,
   verifyLockerKey
 } from "./lockerCrypto.js";
 
@@ -19,8 +20,11 @@ test("Save Locker encryption round-trips unicode project content", async () => {
     project: "CampusForge",
     content: "Private project notes — only the owner should read this."
   };
-  const encrypted = await encryptLockerPayload(key, original);
-  assert.deepEqual(await decryptLockerPayload(key, encrypted), original);
+  const itemId = randomUuid();
+  const context = "item:test-user:" + itemId;
+  const encrypted = await encryptLockerPayload(key, original, context);
+  assert.deepEqual(await decryptLockerPayload(key, encrypted, context), original);
+  await assert.rejects(() => decryptLockerPayload(key, encrypted, "item:another-user:" + itemId));
   assert.notEqual(encrypted.ciphertext, JSON.stringify(original));
 });
 
