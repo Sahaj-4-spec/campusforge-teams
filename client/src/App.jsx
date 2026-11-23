@@ -1044,9 +1044,9 @@ export default function App() {
     }
   }
 
-  async function addComment(taskId, body) {
+  async function addComment(taskId, body, parentCommentId = null) {
     try {
-      await taskApi.addComment(taskId, body);
+      await taskApi.addComment(taskId, body, parentCommentId);
       await refreshWorkspace();
       setNotice("Comment added");
     } catch (error) {
