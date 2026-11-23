@@ -1032,7 +1032,7 @@ export function ChatAndMeetingsPage({ data, realtimeVersion = 0 }) {
                 </article>;
               }) : <div className="feature-empty"><MessageCircle size={24} /><strong>{chatMode === "direct" && !activeConversation ? "Choose a teammate" : "No messages yet"}</strong><span>{chatMode === "direct" && !activeConversation ? "Start a private conversation from the member selector." : "Start a conversation with your team."}</span></div>}
             </div>
-            <form className="feature-chat-composer" onSubmit={sendMessage}>
+            <form className={"feature-chat-composer" + (chatMode === "direct" ? " is-direct" : "")} onSubmit={sendMessage}>
               {chatMode === "team" && <div className="feature-chat-compose-tools">
                 <select value={mentionUserId} onChange={(event) => insertMention(event.target.value)} aria-label="Mention a teammate"><option value="">Mention teammate…</option>{data.users.filter((user) => user.id !== data.current_user_id).map((user) => <option key={user.id} value={user.id}>{user.full_name}</option>)}</select>
                 <small>Mentions notify the selected team member.</small>
