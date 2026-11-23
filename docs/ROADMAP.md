@@ -1,154 +1,161 @@
 # CampusForge Teams — Product Roadmap
 
-**Status:** Six collaboration areas have implementation work on draft PR #12. They are not merged into the main branch or deployed. AI project assistance remains an approved future capability.  
-**Release rule:** Work on feature branches, test locally, review security, and obtain explicit approval before merging or deploying.
+## Product objective
 
-## Product direction
+CampusForge Teams is a project and collaboration workspace for student teams and small delivery groups. The product combines project boards, task planning, coordination, shared resources, calendar workflows, team communications, and measurable project progress.
 
-CampusForge Teams is a shared workspace for student teams. The existing foundation includes authentication, project boards, task assignment, comments, invitations, activity history, and workspace-scoped real-time updates.
+**AI project assistance is explicitly excluded from this delivery.** No AI assistant, AI provider integration, or AI-generated project action is part of the current scope.
 
-The collaboration-suite branch adds calendar planning, advanced task controls, notifications, files, team analytics, chat, and meeting notes. The delivery status below reflects what is in the draft branch, not a production release.
+## Delivery status
 
-## Feature delivery status
+- **PR #12 — collaboration suite:** merged into `main`. It delivered the team calendar, advanced task controls, notification centre, shared files, productivity analytics, chat, and meeting notes.
+- **PR #19 — provider-verified sign-up:** contains the Google, GitHub, and Discord-only self-service account creation policy while retaining email/password login for existing accounts.
+- **PR #20 — SQLx rollback bridge:** must be merged and deployed before the provider-sign-up migration is applied.
+- **PR #21 — non-AI roadmap completion:** bundles the PR #19 provider sign-up change with the remaining non-AI collaboration enhancements described below. It is a draft implementation branch and is not deployed.
 
-| Area | Draft-branch implementation | Remaining before production |
-|---|---|---|
-| Team calendar and deadline planner | Month/week/day views, task deadlines, manual meeting/milestone/exam/submission events | Event attendees, edit/reschedule, stronger date-only/time-zone handling and browser tests |
-| Advanced task management | Estimates, subtasks, checklists, labels, same-project dependencies, recurring rules and scheduled occurrence processing | Parent/child cycle constraints, dependency and recurrence concurrency tests, full filtering and subtask ordering |
-| Smart notification centre | Persistent inbox, read state, category preferences, task/comment notifications, due-soon/overdue reminders, opt-in Resend email outbox with retry/backoff | Configure verified sender domain and secrets, test delivery/bounces, mentions, invitation-specific recipients, pagination and retention |
-| Shared files and documents | Workspace library, project/task attachment, authenticated upload/list/download/delete, 10 MB limit, local and S3-compatible adapters, extension allowlist | Configure and verify a private production bucket/credentials, malware scanning, backups, retention, preview and lifecycle cleanup |
-| Team productivity analytics | Server-side completion, overdue and unassigned counts, project progress and member workload | Historical trends, date filters, export, metric verification and privacy review |
-| Team chat and meeting notes | Workspace/project message history and saved notes with attendees, agenda, discussion notes and action items; WebSocket events trigger client refresh | Direct messages, mentions, presence/typing, durable chat pagination, edit/delete policy and two-browser acceptance |
-| AI project assistant | Approved future roadmap item; not implemented in this branch | Provider review, server adapter, permission-aware context, suggestions-only workflow, quotas and AI safety tests |
+**Release sequence:** merge and deploy PR #20 first; then merge and deploy PR #21. PR #21 contains the provider-verified sign-up changes from PR #19, so PR #19 is superseded by the combined PR #21 change set. Do not deploy PR #21 before the PR #20 migration-runner compatibility release is active on every API instance.
 
-## Phase 0 — Release foundations
+## Phase 1 — Core workspaces and project boards
 
-- Keep React + Vite, Rust + Axum, PostgreSQL, SQLx, and native WebSockets.
-- Add migration, API authorization, database relationship, and browser tests.
-- Test two distinct workspace members in separate browser sessions.
-- Make background processing retry-safe and observable.
-- Confirm local development does not require production storage or email credentials.
+Implemented:
+- Workspace membership, member roles, starter workspace and project.
+- Project boards, task lists, tasks, task assignments and comments.
+- Persisted task ordering and workspace activity history.
+- Invitation creation, revocation, expiry and email-bound acceptance.
+- Protected Rust/Axum routes backed by PostgreSQL and SQLx.
 
-**Exit criteria:** frontend build, Rust compile/tests, migration tests, API integration tests, authorization checks, accessibility checks, and core browser flows pass.
+## Phase 2 — Authentication and account security
 
-## Phase 1 — Advanced tasks and subtasks
+Implemented in PR #19 and included in PR #21:
+- New self-service accounts must use Google, GitHub or Discord OAuth.
+- A new account is created only after the provider response confirms its email is verified.
+- Google uses the `email_verified` claim, GitHub uses the verified email list, and Discord uses its verified-email flag.
+- Existing email/password accounts can continue to log in; password-only registration returns `403 Forbidden`.
+- OAuth state is one-time, hashed in PostgreSQL, and bound to a short-lived HttpOnly browser cookie.
+- Provider identities are not silently linked to existing accounts solely because the email matches.
+- PostgreSQL records `email_verified_at`; migration 0009 includes database-side guards so password-only user inserts from old API instances are rejected.
 
-### Draft-branch scope
-- Parent tasks and subtasks.
-- Ordered checklist items with per-item completion.
-- Workspace-scoped labels.
-- Same-project task dependencies with cycle checks.
-- Estimated effort in minutes.
-- Recurrence rules processed by a background worker after the current occurrence is completed and the rule is due.
+External setup still required:
+- Create the three provider applications.
+- Register the exact production HTTPS callback URLs.
+- Store provider client IDs and secrets only in the backend environment.
+- Complete OAuth consent/branding/privacy policy requirements.
 
-### Remaining work
-- Add database-level or transaction-protected invariants for parent/child project scope.
-- Add recursive cycle checks for task hierarchy.
-- Make recurrence creation fully idempotent under concurrent workers.
-- Improve status transitions without silently completing a parent when a child completes.
-- Add filtering by labels, dependency state, estimate, and parent/child structure.
+## Phase 3 — Team calendar and deadline planner
 
-## Phase 2 — Team calendar and deadline planner
+Implemented:
+- Month, week and day views for project and workspace events.
+- Task due dates displayed with event deadlines.
+- Event types for meetings, milestones, exams, submissions and focus blocks.
+- Create, edit, reschedule and delete events.
+- Filters by event type, project and attendee.
+- All-day events retain their selected calendar dates and time zone.
+- Workspace-member attendee invitations and accepted/declined responses.
+- One-time attendee reminders with durable notification deduplication.
 
-### Draft-branch scope
-- Month, week, and day views.
-- Task deadlines read from existing task records, not duplicated.
-- Workspace/project events for meetings, milestones, exams, submissions, and focus blocks.
-- Create/delete events and query by date range.
+External/acceptance gates:
+- Configure a deployment time zone policy and test daylight-saving transitions for the supported regions.
+- Complete two-user attendee invitation and reminder acceptance tests.
+- Calendar events are not integrated with external Google Calendar/Outlook calendars.
 
-### Remaining work
-- Event attendees and invitations.
-- Full edit/reschedule controls and reminders.
-- Preserve all-day event dates across time zones.
-- Test daylight-saving and local-time transitions.
-- Add filters by project, type, and member.
+## Phase 4 — Advanced task management
 
-## Phase 3 — Smart notification centre
+Implemented:
+- Subtasks, checklists, workspace labels, estimates and dependency links.
+- Same-project dependency validation and cycle checks in the API.
+- Recurring task rules and a durable `task_recurrence_runs` idempotency ledger.
+- Atomic recurrence generation so task creation, copied assignments, ledger insertion, and rule advancement commit together.
+- Server-backed My Tasks filters for project, status, priority, assignee, effort range, blockers and due-date range.
 
-### Draft-branch scope
-- Persistent in-app inbox, unread count, mark-one/read-all.
-- Per-user in-app and email category preferences.
-- Task/comment activity notifications.
-- Scheduled reminders for assigned tasks due within 24 hours and tasks newly overdue.
-- Transactional notification email outbox with a Resend API adapter, idempotency keys, and retry/backoff. Email remains inactive until a verified sender and server secrets are configured.
+Acceptance gates:
+- Test recurring jobs with multiple workers, delayed schedules and concurrent retries against PostgreSQL.
+- Verify task hierarchy and dependency behavior with real multi-user project data.
+- Define how reopened, cancelled, and archived tasks affect reporting metrics.
 
-### Remaining work
-- Mention parsing and targeted recipients.
-- Invitation-specific notifications.
-- Cursor pagination and retention controls.
-- Complete the Resend account and verified-domain setup, test delivery/bounce behavior, and define unsubscribe/suppression policies before public release.
-- Add multi-worker idempotency and background-job concurrency tests.
+## Phase 5 — Smart notification centre
 
-## Phase 4 — Shared files and documents
+Implemented:
+- Persistent inbox, unread counts, mark-read and mark-all-read.
+- Cursor-based older-notification pagination.
+- Per-category in-app and email preferences.
+- Deadline and calendar reminders.
+- Workspace invitation notices for already registered invitees.
+- Mention notifications from task comments and shared team channels.
+- Notification deduplication using stable keys.
+- Email outbox retry, attempt fencing and suppression controls from the earlier collaboration work.
 
-### Draft-branch scope
-- Workspace file listing and authenticated upload/download.
-- Optional project or task attachment.
-- Uploader-only delete.
-- 10 MB limit, opaque server-generated storage key, SHA-256 checksum, safe content-disposition, and nosniff response header.
+External gates:
+- Configure Resend API credentials and a verified sender domain.
+- Validate SPF, DKIM, DMARC, bounce handling, unsubscribe/suppression and privacy/retention policy before enabling email delivery.
 
-### Local-only storage boundary
-The backend now has two storage modes. Local mode stores file bytes in a private server directory, configurable through CAMPUSFORGE_UPLOAD_DIR and defaulting to server/uploads; this is for localhost only. S3 mode uses the AWS SDK for Rust to upload, download, and delete objects in a configured private S3-compatible bucket. Production is still blocked until the bucket, credentials/IAM role, encryption, backup/versioning, lifecycle, retention, and restore procedure are configured and verified.
+## Phase 6 — Shared files and documents
 
-### Required production work
-- Select and configure a private S3-compatible bucket after reviewing region, cost, durability, access controls, retention, backup, and deletion requirements.
-- The current implementation uses server-mediated upload/download so credentials and object keys stay on the API server. Do not expose public bucket URLs.
-- Add malware scanning, file-type allowlists, quotas, abandoned-upload cleanup, audit history, and backup/restore tests.
-- Never expose raw storage keys or treat client-provided URLs as authorization.
+Implemented:
+- Authenticated workspace, project and task file upload, listing, download and deletion.
+- Opaque server-generated storage keys and SHA-256 checksums.
+- File content-signature checks against supported extensions.
+- Per-workspace storage quota, upload reservations and quota-overrun prevention.
+- Admin quota management and file audit history for upload, preview, download, queued deletion and completed deletion.
+- Authenticated inline PDF and raster-image preview.
+- Optional ClamAV `INSTREAM` scanning.
+- When `CAMPUSFORGE_REQUIRE_MALWARE_SCAN=true`, unscanned files cannot be downloaded or previewed; infected files are blocked.
 
-## Phase 5 — Team chat and meeting notes
+External gates:
+- Provision a private S3-compatible bucket, encryption, least-privilege access keys, backup and lifecycle rules.
+- Run a ClamAV service reachable from the API and configure `CAMPUSFORGE_CLAMAV_ADDR`; set the require-scan flag before public use.
+- Complete malware test-file, oversized file, interrupted-upload, delete/restore and quota-race tests.
+- Approve retention and deletion policies. Local filesystem storage is for localhost development, not production durability.
 
-### Draft-branch scope
-- Workspace-wide and project-specific message channels.
-- Persisted message history; WebSocket change events trigger connected clients to refresh the current channel.
-- Meeting notes with title, date/time, project, attendees, agenda, discussion notes, and action items.
+## Phase 7 — Team chat and meeting notes
 
-### Remaining work
-- Real-time chat delivery and pagination.
-- Direct messages, mentions, presence/typing, pinned announcements, and message edit/delete policy.
-- Meeting-note permissions and collaborative editing.
-- Link action items to tasks and dates.
-- Add accessibility and two-user live acceptance tests.
+Implemented:
+- Workspace-wide and project channels with cursor-paginated message history.
+- Direct messages stored in private conversations with participant-only REST authorization.
+- Recipient-scoped private-message WebSocket events; private message activity is not broadcast to every workspace member.
+- Shared-channel mentions, pinned announcements, author edits/deletes and workspace-admin moderation.
+- Live presence leases, typing indicators, and PostgreSQL LISTEN/NOTIFY relay across API instances.
+- Meeting notes with title, meeting time, project, attendees, agenda and discussion notes.
+- Structured meeting action items with assignee, due date, completion and optional linked task.
 
-## Phase 6 — Team productivity analytics
+Acceptance gates:
+- Run multi-browser/two-account tests for private-message isolation, member removal, presence reconnect and typing behavior.
+- Add end-user-facing retention/export/delete rules for chat and meeting records.
+- Fine-grained per-board/channel authorization remains a separate permission-hardening item.
 
-### Draft-branch scope
-- Server-calculated total, completed, overdue, and unassigned task counts.
-- Per-project completion statistics.
-- Per-member open and completed assignment counts.
-- Analytics panel displays actual API metrics.
+## Phase 8 — Team productivity analytics
 
-### Remaining work
-- Historical snapshots for trend charts rather than inferring history from current task state.
-- Date-range filters and export.
-- Metric definitions for reopened/cancelled tasks and shared assignments.
-- Review privacy and fairness before individual rankings or contribution scores.
+Implemented:
+- Live workspace metrics for task completion, overdue work, unassigned work, project progress and member workload.
+- Daily snapshots stored in PostgreSQL and refreshed during the day.
+- Date-range history, trend visualization and CSV export.
+- Workspace-scoped analytics access.
 
-## Phase 7 — AI project assistant
+Acceptance gates:
+- Agree on metric definitions for reopened, cancelled, archived and multi-assignee tasks.
+- Review privacy and fairness before showing comparative individual-contribution rankings.
+- Retain/aggregate historical data according to an approved policy.
 
-### Approved future scope
-- Draft a project plan from a user brief.
-- Suggest subtasks and milestone dates.
-- Explain workload and dependency risks.
-- Summarize explicitly selected boards, discussions, or documents.
+## Non-AI out-of-scope items
 
-### Decisions
-- Keep provider credentials and the AI adapter server-side.
-- Select a provider only after privacy, retention, region, cost, latency, and quality review.
-- AI output is advisory and cannot mutate project data without explicit user approval.
-- Show which resources are included; verify access server-side.
-- Treat comments and uploaded files as untrusted content.
-- Default to no raw prompt/document/response retention.
+The following items are intentionally not part of the current delivery:
+- AI project assistant, AI summaries, AI task generation or AI provider integrations.
+- External Google/Outlook calendar synchronization.
+- Full video meetings, call recording or meeting transcription.
+- External email delivery until Resend is configured and verified.
+- Full rich-text collaborative document editing.
 
-## Cross-feature release requirements
+## Cross-feature engineering and security requirements
 
-- Enforce workspace/resource authorization on every request and file operation.
-- Add migration and rollback guidance for every schema change. A PostgreSQL-backed SQLx migration smoke test now runs in backend CI.
-- Add unit, API integration, migration, browser, accessibility, and multi-user acceptance tests.
-- Add observability for background jobs, notification retries, file transfer failures, and WebSocket disconnects.
-- Define export, deletion, privacy, retention, and backup behavior before public launch.
-- Use shared pub/sub before running more than one API instance.
+- PostgreSQL is the source of truth; mutations are committed before change events are published.
+- Every resource endpoint verifies workspace/resource scope and the authenticated user.
+- File storage remains private and server-mediated.
+- Email jobs require explicit opt-in.
+- Private direct-message events are sent only to the intended participant.
+- Database changes are additive and versioned. Never edit applied migrations.
+- Use PR #20's SQLx migration runner compatibility release before applying migration 0009 and newer schema versions.
+- Run the PostgreSQL-backed migration tests, frontend build, Rust tests, dependency audit and CodeQL on the final PR head.
+- Complete browser, accessibility, multi-user, backup/restore and operational acceptance tests before public release.
 
 ## Deployment gate
 
-PR #12 is a draft feature branch. Its work is not in the main branch and has not been deployed. Do not merge or deploy until implementation, tests, security review, object-storage decisions, provider configuration, and production-readiness checks are complete and the user explicitly authorizes release.
+The non-AI completion work is in draft PR #21 and has not been merged or deployed. Render remains unchanged. Before release, verify provider OAuth applications, the private S3 bucket, ClamAV, Resend, database backups, retention, privacy, and the two-user acceptance tests. Deploy only in the order described above and only after the user explicitly authorizes release.

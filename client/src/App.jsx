@@ -258,27 +258,48 @@ function OverviewPage({ data, onOpenBoard, onOpenTask, onCreateTask, onNavigate 
 
 function MyTasksPage({ data, onOpenTask, search }) {
   const [filter, setFilter] = useState("all");
-  const assignedTaskIds = new Set(
-    data.task_assignees
-      .filter((assignment) => assignment.user_id === data.current_user_id)
-      .map((assignment) => assignment.task_id)
-  );
-  const tasks = data.tasks.filter((task) => {
-    const assignedToCurrentUser = assignedTaskIds.has(task.id);
-    const queryMatch = !search || (task.title + " " + task.description).toLowerCase().includes(search.toLowerCase());
-    const filterMatch = filter === "all" || task.priority === filter || getListName(task, data.lists).toLowerCase() === filter;
-    return assignedToCurrentUser && queryMatch && filterMatch;
-  }).sort((a, b) => (a.due_date || "9999").localeCompare(b.due_date || "9999"));
+  const [boardFilter, setBoardFilter] = useState("");
+  const [minEstimated, setMinEstimated] = useState("");
+  const [maxEstimated, setMaxEstimated] = useState("");
+  const [hasBlockers, setHasBlockers] = useState("");
+  const [dueAfter, setDueAfter] = useState("");
+  const [dueBefore, setDueBefore] = useState("");
+  const [tasks, setTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    const filters = {
+      assignee_id: data.current_user_id,
+      board_id: boardFilter || undefined,
+      priority: filter === "high" ? "high" : undefined,
+      status: filter === "in progress" || filter === "done" ? filter : undefined,
+      min_estimated_minutes: minEstimated || undefined,
+      max_estimated_minutes: maxEstimated || undefined,
+      has_blockers: hasBlockers === "" ? undefined : hasBlockers === "yes",
+      due_after: dueAfter || undefined,
+      due_before: dueBefore || undefined,
+      q: search || undefined
+    };
+    setLoading(true);
+    setError("");
+    taskApi.search(filters)
+      .then((rows) => { if (!cancelled) setTasks(rows || []); })
+      .catch((requestError) => { if (!cancelled) setError(requestError.message || "Could not filter your tasks."); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [data.current_user_id, boardFilter, filter, minEstimated, maxEstimated, hasBlockers, dueAfter, dueBefore, search]);
 
   return (
     <div className="page-stack">
       <div className="page-title-row">
-        <div><p className="eyebrow">YOUR PERSONAL QUEUE</p><h1>My tasks</h1><p className="page-subtitle">A focused view of the work happening across your boards.</p></div>
+        <div><p className="eyebrow">YOUR PERSONAL QUEUE</p><h1>My tasks</h1><p className="page-subtitle">Filter your assigned work by project, status, effort, blockers and due dates.</p></div>
         <span className="count-chip">{tasks.length} tasks</span>
       </div>
       <section className="surface-panel task-table-panel">
         <div className="filter-row">
-          <div className="filter-label"><Filter size={15} /> Filter by</div>
+          <div className="filter-label"><Filter size={15} /> Status / priority</div>
           <div className="filter-chips">
             {[
               ["all", "All tasks"],
@@ -290,21 +311,31 @@ function MyTasksPage({ data, onOpenTask, search }) {
             ))}
           </div>
         </div>
+        <div className="my-task-advanced-filters">
+          <label>Project<select value={boardFilter} onChange={(event) => setBoardFilter(event.target.value)}><option value="">All projects</option>{data.boards.map((board) => <option key={board.id} value={board.id}>{board.name}</option>)}</select></label>
+          <label>Min effort (minutes)<input type="number" min="1" max="100000" value={minEstimated} onChange={(event) => setMinEstimated(event.target.value)} placeholder="Any" /></label>
+          <label>Max effort (minutes)<input type="number" min="1" max="100000" value={maxEstimated} onChange={(event) => setMaxEstimated(event.target.value)} placeholder="Any" /></label>
+          <label>Dependencies<select value={hasBlockers} onChange={(event) => setHasBlockers(event.target.value)}><option value="">All tasks</option><option value="yes">Has blockers</option><option value="no">No blockers</option></select></label>
+          <label>Due after<input type="date" value={dueAfter} onChange={(event) => setDueAfter(event.target.value)} /></label>
+          <label>Due before<input type="date" value={dueBefore} min={dueAfter || undefined} onChange={(event) => setDueBefore(event.target.value)} /></label>
+          <button className="secondary-button" type="button" onClick={() => { setBoardFilter(""); setMinEstimated(""); setMaxEstimated(""); setHasBlockers(""); setDueAfter(""); setDueBefore(""); setFilter("all"); }}>Clear filters</button>
+        </div>
+        {error && <p className="auth-error" role="alert">{error}</p>}
         <div className="task-table">
           <div className="task-table-head"><span>Task</span><span>Project</span><span>Status</span><span>Due date</span><span>Priority</span></div>
-          {tasks.map((task) => {
+          {loading ? <p className="muted-copy">Applying task filters…</p> : tasks.map((task) => {
             const board = data.boards.find((item) => item.id === task.board_id);
             return (
-              <button className="task-table-row" type="button" key={task.id} onClick={() => onOpenTask(task)}>
-                <span className="task-table-title"><i className={"priority-dot priority-" + task.priority} /><strong>{task.title}</strong></span>
+              <button className="task-table-row" type="button" key={task.id} onClick={() => onOpenTask(data.tasks.find((current) => current.id === task.id))}>
+                <span className="task-table-title"><i className={"priority-dot priority-" + task.priority} /><strong>{task.title}</strong>{task.estimated_minutes ? <small>{task.estimated_minutes} min</small> : null}</span>
                 <span className="table-muted">{board?.name || "Project"}</span>
-                <span><span className="status-pill">{getListName(task, data.lists)}</span></span>
+                <span><span className="status-pill">{task.list_name}</span></span>
                 <span className="table-muted">{task.due_date ? formatDate(task.due_date) : "Not set"}</span>
                 <span className={"priority-text priority-" + task.priority}>{task.priority}</span>
               </button>
             );
           })}
-          {tasks.length === 0 && <EmptyState title="No tasks found" description="Try a different filter or search term." />}
+          {!loading && tasks.length === 0 && <EmptyState title="No tasks found" description="Try a different filter or search term." />}
         </div>
       </section>
     </div>
@@ -588,6 +619,22 @@ export default function App() {
   const workspaceGeneration = useRef(0);
 
   useEffect(() => {
+    if (!mobileMenuOpen) return undefined;
+
+    const previousBodyOverflow = document.body.style.overflow;
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setMobileMenuOpen(false);
+    };
+
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [mobileMenuOpen]);
+
+  useEffect(() => {
     if (!isAuthenticated) {
       setData(null);
       setLoading(false);
@@ -676,6 +723,9 @@ export default function App() {
             clearStoredWorkspaceId();
             setIsAuthenticated(false);
             setData(null);
+            return;
+          }
+          if (payload.type === "workspace_event" && ["typing_indicator","presence_joined","presence_left"].includes(payload.event?.event_type)) {
             return;
           }
           if (payload.type === "workspace_event" || payload.type === "refresh_required") {
@@ -1154,7 +1204,7 @@ export default function App() {
       <div className="main-content">
         <header className="topbar">
           <div className="topbar-left">
-            <button className="mobile-menu-button" type="button" aria-label="Open navigation" onClick={() => setMobileMenuOpen((value) => !value)}>
+            <button className="mobile-menu-button" type="button" aria-label="Open navigation" aria-expanded={mobileMenuOpen} aria-controls="mobile-navigation-dialog" onClick={() => setMobileMenuOpen((value) => !value)}>
               <Command size={18} />
             </button>
             <div className="breadcrumbs"><span>Workspace</span><span className="breadcrumb-divider">/</span><strong>{pageTitle}</strong></div>
@@ -1181,12 +1231,38 @@ export default function App() {
         </header>
 
         {mobileMenuOpen && (
-          <div className="mobile-nav-overlay">
-            <div className="mobile-nav-card">
-              <div className="mobile-nav-heading"><strong>CampusForge</strong><button type="button" onClick={() => setMobileMenuOpen(false)} aria-label="Close navigation"><X size={18} /></button></div>
-              <label className="mobile-workspace-select">Current workspace<select aria-label="Switch workspace" value={data.current_workspace_id || ""} onChange={(event) => switchWorkspace(event.target.value)} disabled={(data.workspaces || []).length < 2}>{(data.workspaces || []).map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select></label>
-              {navigation.map(({ id, label, icon: Icon }) => <button key={id} type="button" className="nav-item" onClick={() => navigate(id)}><Icon size={18} />{label}</button>)}
-              <button type="button" className="nav-item" onClick={() => navigate("Projects")}><FolderKanban size={18} />Projects</button>
+          <div className="mobile-nav-overlay" onClick={() => setMobileMenuOpen(false)}>
+            <div
+              id="mobile-navigation-dialog"
+              className="mobile-nav-card"
+              role="dialog"
+              aria-modal="true"
+              aria-label="CampusForge navigation"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="mobile-nav-heading">
+                <strong>CampusForge</strong>
+                <button type="button" onClick={() => setMobileMenuOpen(false)} aria-label="Close navigation"><X size={18} /></button>
+              </div>
+              <label className="mobile-workspace-select">
+                <span>Current workspace</span>
+                <select aria-label="Switch workspace" value={data.current_workspace_id || ""} onChange={(event) => switchWorkspace(event.target.value)} disabled={(data.workspaces || []).length < 2}>
+                  {(data.workspaces || []).map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}
+                </select>
+              </label>
+              <nav className="mobile-nav-list" aria-label="Workspace navigation">
+                {navigation.map(({ id, label, icon: Icon }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={"nav-item" + (activeView === id ? " active" : "")}
+                    aria-current={activeView === id ? "page" : undefined}
+                    onClick={() => navigate(id)}
+                  >
+                    <Icon size={18} />{label}
+                  </button>
+                ))}
+              </nav>
             </div>
           </div>
         )}

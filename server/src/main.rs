@@ -8,6 +8,7 @@ mod lists;
 mod oauth;
 mod notifications;
 mod realtime;
+mod roadmap;
 mod state;
 mod storage;
 
@@ -95,6 +96,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(async move {
         collaboration::run_file_cleanup(file_cleanup_state).await;
     });
+    let roadmap_state = state.clone();
+    tokio::spawn(async move {
+        roadmap::run_roadmap_jobs(roadmap_state).await;
+    });
+    let realtime_state = state.clone();
+    tokio::spawn(async move {
+        state::run_postgres_workspace_listener(realtime_state).await;
+    });
     let cors = CorsLayer::new()
         .allow_origin(frontend_origin.parse::<HeaderValue>()?)
         .allow_methods([
@@ -116,7 +125,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(api::router())
         .merge(lists::router())
         .merge(advanced_tasks::router())
-        .merge(collaboration::router());
+        .merge(collaboration::router())
+        .merge(roadmap::router());
     let auth_router = auth::router().merge(oauth::router());
 
     let app = Router::new()

@@ -206,6 +206,28 @@ async fn create_invitation(
     .await
     .map_err(|cause| internal_error(cause, "Could not create invitation"))?;
 
+    let invitee_user_id: Option<Uuid> = sqlx::query_scalar("SELECT id FROM users WHERE lower(email)=$1")
+        .bind(&email)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|cause| internal_error(cause, "Could not find an existing invited account"))?;
+    if let Some(invitee_user_id) = invitee_user_id {
+        crate::roadmap::create_notification_in_transaction(
+            &mut tx,
+            workspace_id,
+            invitee_user_id,
+            Some(user_id),
+            "workspace_invitation",
+            "Workspace invitation",
+            "You have been invited to join a CampusForge workspace.",
+            Some("invitation"),
+            Some(invitation.id),
+            Some(&format!("workspace-invitation:{}", invitation.id)),
+        )
+        .await
+        .map_err(|cause| internal_error(cause, "Could not create invitation notification"))?;
+    }
+
     add_activity(&mut tx, workspace_id, user_id, "invitation_created", format!("invited {email} to the workspace"))
         .await
         .map_err(|cause| internal_error(cause, "Could not record invitation activity"))?;
@@ -246,6 +268,13 @@ async fn revoke_invitation(
     if result.rows_affected() == 0 {
         return Err(error(StatusCode::NOT_FOUND, "Pending invitation not found"));
     }
+
+    sqlx::query("DELETE FROM notifications WHERE workspace_id=$1 AND resource_type='invitation' AND resource_id=$2")
+        .bind(workspace_id)
+        .bind(invitation_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|cause| internal_error(cause, "Could not remove revoked invitation notifications"))?;
 
     add_activity(&mut tx, workspace_id, user_id, "invitation_revoked", "revoked a workspace invitation".to_string())
         .await

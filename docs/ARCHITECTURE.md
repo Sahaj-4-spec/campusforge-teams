@@ -122,43 +122,52 @@ Draft implementation includes an authenticated workspace file listing, upload, d
 
 **Production blocker:** The S3 adapter is code-complete but no private bucket/credentials are configured. Before public use, provision and verify the chosen private bucket, IAM policy, encryption, backups/versioning, retention/deletion, malware scanning, quotas, object/database reconciliation, and restore procedures. A client-provided storage key/URL is never an authorization credential.
 
-### ADR-009 — AI project assistant (future)
+### ADR-009 — AI project assistant
 
-**Decision:** Keep AI integration behind a server-side provider adapter and keep responses advisory.
+**Decision:** Explicitly excluded from the current delivery.
 
-Potential functions include project-plan drafting, task breakdown, milestone suggestions, workload/dependency explanations, and summaries of explicitly selected resources. Do not select a provider until privacy, data region, retention, cost, and quality are reviewed. Show the user what context is sent; verify access server-side; treat uploaded files and comments as untrusted; require explicit user approval before applying any suggestion. Default to no raw prompt/document/response retention.
+No AI assistant, AI provider integration, AI-generated tasks, AI-generated summaries or model-driven project actions are being implemented in this release. Revisit only as a separately approved product scope and architecture decision.
 
 ### ADR-010 — Team productivity analytics
 
-**Decision:** Calculate live operational counts from PostgreSQL and be explicit about what each metric means. Do not present current totals as historical trends.
+**Decision:** Keep operational metrics server-calculated and store explicit daily snapshots for trend reporting.
 
-Draft API GET /api/analytics returns workspace totals for tasks, completed tasks, completion percentage, overdue tasks, unassigned tasks, project completion counts, and per-member open/completed assignments. The Reports/Analytics view displays these server-calculated values alongside existing activity/project reports.
+- `GET /api/analytics` returns workspace-scoped current metrics.
+- `GET /api/analytics/history` returns daily snapshots for a bounded date range.
+- `GET /api/analytics/export.csv` exports the selected history range.
+- A background job upserts the current day's metrics during the day so the snapshot is refreshed as work changes.
+- The UI exposes date filters, a completion trend and CSV export.
 
-Remaining: historical snapshots, date filters, export, metric definitions for reopened/cancelled tasks, and privacy review before member ranking or contribution scoring.
+Metric definitions for reopened/cancelled/archived tasks and fairness/privacy review remain required before individual rankings are introduced. No individual leaderboard is part of this scope.
 
 ### ADR-011 — Team chat and meeting notes
 
-**Decision:** Keep workspace/project message history and meeting notes as separate PostgreSQL resources scoped to the same workspace.
+**Decision:** Store shared channels, private conversations, meeting notes and action items in PostgreSQL. Keep direct-message reads and change events private to the two participants.
 
-- chat_messages supports workspace-wide or board-specific channels with author and timestamp.
-- meeting_notes supports title, meeting time, attendees, agenda, discussion notes, and action items.
+- `chat_messages` stores workspace/project channel messages and direct-conversation messages.
+- Direct conversations use a normalized participant pair and enforce access on every REST read/write.
+- Shared channels support mentions, pinning, edits, soft deletes and workspace-admin moderation.
+- Direct-message events carry a recipient user ID and are delivered only to that participant; they are not broadcast to the workspace.
+- Meeting notes have a separate `meeting_note_action_items` table with assignee, due date, completion state and optional task link.
+- Cursor pagination is used for both team and direct message history.
 
-Draft UI/API supports sending/listing messages and creating/listing/updating/deleting meeting notes (delete is limited to the creator). WebSocket change events now cause connected clients to refresh the active workspace/project channel. This is not yet a full messenger: direct messages, typing/presence, pins, and mention parsing are not included. Two-browser acceptance tests and shared pub/sub for horizontal scaling remain.
+Workspace presence and typing use expiring per-connection leases. PostgreSQL LISTEN/NOTIFY forwards committed workspace change signals to other API instances; WebSocket events remain small update signals, and the client reloads authorized data from REST.
 
 ## 5. API and real-time conventions
 
 REST routes require a valid bearer session unless explicitly public. Every resource lookup validates the authenticated user's workspace membership and the relationship between referenced IDs.
 
-Draft route groups include:
-- /api/calendar and /api/calendar/events/:id
-- /api/tasks/:id/advanced, /subtasks, /checklist, /labels, /dependencies, /estimate, and /recurrence
-- /api/notifications and /notification-preferences
-- /api/files and /api/files/:id/download
-- /api/chat/messages
-- /api/meeting-notes
-- /api/analytics
+Implemented route groups include:
+- Calendar events, attendee management, attendee responses and all-day date ranges.
+- Advanced task details, subtasks, checklists, labels, dependencies, estimates, recurrence and filtered task search.
+- Notification inbox, cursor pagination, read state and category preferences.
+- Workspace files, upload/download/delete, previews, storage usage/quota, audit history and scan gating.
+- Team chat, direct conversations, cursor-paginated messages, pins, mentions and message moderation.
+- Meeting notes and structured action items.
+- Current analytics, historical snapshots, and CSV export.
+- Workspace presence lookup and authenticated WebSocket sessions.
 
-PostgreSQL is the source of truth. Mutations use SQLx; background jobs must be observable and retry-safe. WebSocket payloads should contain minimal update signals; the client reloads authorized data from REST. The current broadcast channel is in-process and requires shared pub/sub before horizontal scaling.
+PostgreSQL is the source of truth. Mutations use SQLx; recurrence, reminder, analytics and file-cleanup jobs use database-backed claiming or idempotency records. PostgreSQL LISTEN/NOTIFY relays workspace change events across API instances. Direct-message events include a recipient and are filtered before delivery.
 
 ## 6. Security, privacy, and operations
 
@@ -175,6 +184,25 @@ PostgreSQL is the source of truth. Mutations use SQLx; background jobs must be o
 
 ## 7. Deployment decision
 
-PR #12 is a draft feature branch. No new collaboration-suite feature is in the live preview until it is merged and deployed by explicit authorization. Before that, the branch needs completed CI/security checks, PostgreSQL-backed migration validation, browser/multi-user testing, verified private storage bucket configuration, sender-domain/email integration testing, production retention/backup design, malware scanning, and security review.
+PR #12's collaboration suite is merged into main. Provider-verified sign-up and the remaining non-AI enhancements are in draft PR #21, which stacks the PR #19 changes. PR #20 is the SQLx rollback-compatibility prerequisite.
 
-Operational configuration instructions are in docs/OPERATIONS.md. Do not merge or deploy until the user explicitly authorizes release.
+Release order: deploy PR #20 first, then PR #21. After PR #21, configure provider OAuth applications, private S3-compatible storage, ClamAV (with scan enforcement), Resend sender-domain credentials, backups, retention and privacy controls. Complete browser/two-user acceptance tests before public release. The existing Render preview has not been updated by these changes.
+
+Operational configuration instructions are in docs/OPERATIONS.md. No merge or deployment should happen until the user explicitly authorizes release.
+
+### ADR-012 — Calendar attendees, time zones and reminders
+
+**Decision:** Store all-day start/end dates independently from instants and retain the event's IANA time-zone identifier. Store attendees as workspace-member foreign keys with explicit invited/accepted/declined responses. A reminder is one-shot per attendee and is deduplicated in the notification store.
+
+### ADR-013 — Shared file governance and scanning
+
+**Decision:** Keep file bytes in a private storage adapter and metadata, quotas, reservations and audit events in PostgreSQL. Check file signatures before storage. ClamAV scanning is optional for local development, but public deployments must set `CAMPUSFORGE_REQUIRE_MALWARE_SCAN=true` and configure a reachable ClamAV service. Preview routes are workspace-authorized, no-store and restricted to PDF and raster images.
+
+### ADR-014 — Idempotent recurring task generation
+
+**Decision:** Every recurrence run records `(recurrence_rule_id, scheduled_for, generated_task_id)` in `task_recurrence_runs`. Task creation, assignment copy, ledger insert and rule advancement commit in one transaction. The unique key prevents duplicate generation for the same scheduled occurrence.
+
+### ADR-015 — Recipient-scoped private real-time events
+
+**Decision:** Shared workspace changes may be relayed to workspace members, but direct-message signals carry a recipient user ID and are filtered at the WebSocket connection. Direct-message body content is never put in workspace broadcast payloads.
+

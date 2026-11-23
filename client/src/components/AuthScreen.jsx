@@ -8,7 +8,6 @@ import {
   Mail,
   ShieldCheck,
   Sparkles,
-  UserRound
 } from "lucide-react";
 import { authApi } from "../lib/api.js";
 
@@ -39,7 +38,6 @@ const providers = [
 
 export default function AuthScreen({ onAuthenticated }) {
   const [mode, setMode] = useState("login");
-  const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -74,14 +72,10 @@ export default function AuthScreen({ onAuthenticated }) {
     setError("");
     setBusy(true);
     try {
-      if (isRegister) {
-        await authApi.register({ full_name: fullName.trim(), email: email.trim(), password });
-      } else {
-        await authApi.login({ email: email.trim(), password });
-      }
+      await authApi.login({ email: email.trim(), password });
       onAuthenticated();
     } catch (requestError) {
-      setError(requestError.message || "Unable to authenticate. Please try again.");
+      setError(requestError.message || "Unable to sign in. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -111,77 +105,60 @@ export default function AuthScreen({ onAuthenticated }) {
           <p className="eyebrow">{isRegister ? "START COLLABORATING" : "WELCOME BACK"}</p>
           <h1>{isRegister ? "Create your account" : "Welcome back"}</h1>
           <p>{isRegister
-            ? "Set up your account and bring your team's work into one place."
+            ? "Create your account with Google, GitHub, or Discord. We verify your email with the provider before creating your account."
             : "Sign in to continue to your projects, tasks, and team."}</p>
         </div>
 
-        <form className="auth-form" onSubmit={submit}>
-          {isRegister && (
+        {!isRegister && (
+          <form className="auth-form" onSubmit={submit}>
             <label className="field-group">
-              <span>Full name</span>
+              <span>Email address</span>
               <span className="auth-input-wrap">
-                <UserRound size={17} aria-hidden="true" />
+                <Mail size={17} aria-hidden="true" />
                 <input
-                  value={fullName}
-                  onChange={(event) => setFullName(event.target.value)}
-                  placeholder="Your name"
-                  autoComplete="name"
-                  minLength={2}
-                  maxLength={80}
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder="you@example.com"
+                  autoComplete="email"
                   required
                 />
               </span>
             </label>
-          )}
-          <label className="field-group">
-            <span>Email address</span>
-            <span className="auth-input-wrap">
-              <Mail size={17} aria-hidden="true" />
-              <input
-                type="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                placeholder="you@example.com"
-                autoComplete="email"
-                required
-              />
-            </span>
-          </label>
-          <div className="field-group">
-            <label htmlFor="auth-password">Password</label>
-            <span className="auth-input-wrap">
-              <LockKeyhole size={17} aria-hidden="true" />
-              <input
-                id="auth-password"
-                type={showPassword ? "text" : "password"}
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder={isRegister ? "At least 8 characters" : "Enter your password"}
-                autoComplete={isRegister ? "new-password" : "current-password"}
-                minLength={isRegister ? 8 : 1}
-                maxLength={128}
-                required
-              />
-              <button
-                className="auth-password-toggle"
-                type="button"
-                onClick={() => setShowPassword((value) => !value)}
-                aria-label={showPassword ? "Hide password" : "Show password"}
-              >
-                {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
-              </button>
-            </span>
-          </div>
+            <div className="field-group">
+              <label htmlFor="auth-password">Password</label>
+              <span className="auth-input-wrap">
+                <LockKeyhole size={17} aria-hidden="true" />
+                <input
+                  id="auth-password"
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder="Enter your password"
+                  autoComplete="current-password"
+                  minLength={1}
+                  maxLength={128}
+                  required
+                />
+                <button
+                  className="auth-password-toggle"
+                  type="button"
+                  onClick={() => setShowPassword((value) => !value)}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+                </button>
+              </span>
+            </div>
+            <button className="primary-button auth-submit" type="submit" disabled={busy || Boolean(busyProvider)}>
+              {busy ? "Please wait..." : "Sign in"}
+              <ArrowRight size={17} />
+            </button>
+          </form>
+        )}
+        {error && <p className="auth-error" role="alert">{error}</p>}
 
-          {error && <p className="auth-error" role="alert">{error}</p>}
-
-          <button className="primary-button auth-submit" type="submit" disabled={busy || Boolean(busyProvider)}>
-            {busy ? "Please wait..." : isRegister ? "Create account" : "Sign in"}
-            <ArrowRight size={17} />
-          </button>
-        </form>
-
-        <div className="auth-divider"><span>or continue with</span></div>
+        <div className="auth-divider"><span>{isRegister ? "verify and sign up with" : "or continue with"}</span></div>
 
         <div className="social-auth-grid" aria-label="Social sign-in providers">
           {providers.map(({ id, label, icon: Icon }) => (
@@ -191,7 +168,7 @@ export default function AuthScreen({ onAuthenticated }) {
               key={id}
               onClick={() => startOAuth(id)}
               disabled={Boolean(busyProvider) || busy}
-              aria-label={"Continue with " + label}
+              aria-label={(isRegister ? "Sign up with " : "Continue with ") + label}
             >
               {busyProvider === id ? <span className="social-spinner" /> : <Icon size={18} aria-hidden="true" />}
               <span>{busyProvider === id ? "Connecting..." : label}</span>
@@ -206,7 +183,11 @@ export default function AuthScreen({ onAuthenticated }) {
           </button>
         </p>
 
-        <p className="auth-security"><ShieldCheck size={14} /> Protected sign-in. Your CampusForge session expires after 24 hours.</p>
+        {isRegister ? (
+          <p className="auth-security"><ShieldCheck size={14} /> New accounts require an email verified by Google, GitHub, or Discord.</p>
+        ) : (
+          <p className="auth-security"><ShieldCheck size={14} /> Protected sign-in. Your CampusForge session expires after 24 hours.</p>
+        )}
       </section>
 
     </main>
