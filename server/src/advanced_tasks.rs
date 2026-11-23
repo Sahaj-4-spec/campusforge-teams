@@ -598,12 +598,17 @@ struct RecurrenceJob {
     interval_days:i32,
     workspace_id:Uuid,
     board_id:Uuid,
+    scheduled_for:chrono::DateTime<Utc>,
 }
 
 async fn process_recurrences(state:&AppState){
-    let mut tx=match state.db.begin().await{Ok(tx)=>tx,Err(error)=>{tracing::error!(%error,"Could not begin recurrence job");return;}};
+    let mut tx=match state.db.begin().await {
+        Ok(tx)=>tx,
+        Err(error)=>{tracing::error!(%error,"Could not begin recurrence job");return;}
+    };
     let jobs=match sqlx::query_as::<_,RecurrenceJob>(
-        "SELECT r.id,r.template_task_id,r.target_list_id,r.interval_days,b.workspace_id,b.id AS board_id
+        "SELECT r.id,r.template_task_id,r.target_list_id,r.interval_days,
+                b.workspace_id,b.id AS board_id,r.next_run_at AS scheduled_for
          FROM task_recurrence_rules r
          JOIN tasks t ON t.id=r.template_task_id
          JOIN lists status_list ON status_list.id=t.list_id
@@ -613,22 +618,60 @@ async fn process_recurrences(state:&AppState){
            AND lower(status_list.name) IN ('done','complete','completed')
          ORDER BY r.next_run_at
          LIMIT 20 FOR UPDATE OF r SKIP LOCKED")
-        .fetch_all(&mut *tx).await{
-            Ok(rows)=>rows,Err(error)=>{tracing::error!(%error,"Could not load due recurrence rules");return;}
+        .fetch_all(&mut *tx).await {
+            Ok(rows)=>rows,
+            Err(error)=>{tracing::error!(%error,"Could not load due recurrence rules");return;}
         };
     let mut committed_events: Vec<(Uuid, Uuid, Uuid)> = Vec::new();
-    for job in jobs{
+
+    for job in jobs {
+        let already_generated:bool=match sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM task_recurrence_runs WHERE recurrence_rule_id=$1 AND scheduled_for=$2)",
+        ).bind(job.id).bind(job.scheduled_for).fetch_one(&mut *tx).await {
+            Ok(value)=>value,
+            Err(error)=>{
+                tracing::error!(%error,rule_id=%job.id,"Could not check recurrence idempotency ledger");
+                let _=tx.rollback().await;
+                return;
+            }
+        };
+        if already_generated {
+            if let Err(error)=sqlx::query(
+                "UPDATE task_recurrence_rules
+                    SET template_task_id=(
+                            SELECT generated_task_id FROM task_recurrence_runs
+                             WHERE recurrence_rule_id=$2 AND scheduled_for=$3
+                        ),
+                        next_run_at=NOW()+make_interval(days=>$1),updated_at=NOW()
+                  WHERE id=$2",
+            ).bind(job.interval_days).bind(job.id).bind(job.scheduled_for).execute(&mut *tx).await {
+                tracing::error!(%error,rule_id=%job.id,"Could not advance already processed recurrence");
+                let _=tx.rollback().await;
+                return;
+            }
+            continue;
+        }
+
         let template=match sqlx::query_as::<_,(String,Option<String>,String,Option<chrono::DateTime<Utc>>,Uuid,Option<Uuid>,Option<i32>)>(
             "SELECT t.title,t.description,t.priority,t.due_at,t.created_by,t.parent_task_id,t.estimated_minutes
              FROM tasks t WHERE t.id=$1")
             .bind(job.template_task_id).fetch_optional(&mut *tx).await {
                 Ok(Some(row)) => row,
                 Ok(None) => continue,
-                Err(error) => { tracing::error!(%error,"Could not load recurring task template"); continue; }
+                Err(error) => {
+                    tracing::error!(%error,"Could not load recurring task template");
+                    let _=tx.rollback().await;
+                    return;
+                }
             };
-        let position: i32=match sqlx::query_scalar("SELECT COALESCE(MAX(position),0)+1 FROM tasks WHERE list_id=$1")
-            .bind(job.target_list_id).fetch_one(&mut *tx).await{
-                Ok(value)=>value,Err(error)=>{tracing::error!(%error,"Could not get recurrence task position");continue;}
+        let position:i32=match sqlx::query_scalar("SELECT COALESCE(MAX(position),0)+1 FROM tasks WHERE list_id=$1")
+            .bind(job.target_list_id).fetch_one(&mut *tx).await {
+                Ok(value)=>value,
+                Err(error)=>{
+                    tracing::error!(%error,rule_id=%job.id,"Could not get recurrence task position");
+                    let _=tx.rollback().await;
+                    return;
+                }
             };
         let new_id:Uuid=match sqlx::query_scalar(
             "INSERT INTO tasks(list_id,title,description,priority,due_at,position,created_by,parent_task_id,estimated_minutes)
@@ -636,28 +679,54 @@ async fn process_recurrences(state:&AppState){
              RETURNING id")
             .bind(job.target_list_id).bind(&template.0).bind(&template.1).bind(&template.2)
             .bind(template.3).bind(job.interval_days).bind(position).bind(template.4).bind(template.5).bind(template.6)
-            .fetch_one(&mut *tx).await{
-                Ok(value)=>value,Err(error)=>{tracing::error!(%error,"Could not create recurring task");continue;}
+            .fetch_one(&mut *tx).await {
+                Ok(value)=>value,
+                Err(error)=>{
+                    tracing::error!(%error,rule_id=%job.id,"Could not create recurring task");
+                    let _=tx.rollback().await;
+                    return;
+                }
             };
+
         if let Err(error)=sqlx::query(
             "INSERT INTO task_assignees(task_id,user_id)
              SELECT $1,user_id FROM task_assignees WHERE task_id=$2 ON CONFLICT DO NOTHING")
-            .bind(new_id).bind(job.template_task_id).execute(&mut *tx).await{
-                tracing::error!(%error,"Could not copy recurring task assignments");continue;
+            .bind(new_id).bind(job.template_task_id).execute(&mut *tx).await {
+                tracing::error!(%error,task_id=%new_id,"Could not copy recurring task assignments");
+                let _=tx.rollback().await;
+                return;
         }
-        if let Err(error)=sqlx::query("UPDATE task_recurrence_rules SET template_task_id=$1,next_run_at=NOW()+make_interval(days=>$2),updated_at=NOW() WHERE id=$3")
-            .bind(new_id).bind(job.interval_days).bind(job.id).execute(&mut *tx).await{
-                tracing::error!(%error,"Could not advance recurring task rule");continue;
+
+        if let Err(error)=sqlx::query(
+            "INSERT INTO task_recurrence_runs(recurrence_rule_id,scheduled_for,generated_task_id)
+             VALUES($1,$2,$3)",
+        ).bind(job.id).bind(job.scheduled_for).bind(new_id).execute(&mut *tx).await {
+            tracing::error!(%error,rule_id=%job.id,"Could not record generated recurrence");
+            let _=tx.rollback().await;
+            return;
         }
+
+        if let Err(error)=sqlx::query(
+            "UPDATE task_recurrence_rules
+                SET template_task_id=$1,next_run_at=NOW()+make_interval(days=>$2),updated_at=NOW()
+              WHERE id=$3",
+        ).bind(new_id).bind(job.interval_days).bind(job.id).execute(&mut *tx).await {
+            tracing::error!(%error,rule_id=%job.id,"Could not advance recurrence rule");
+            let _=tx.rollback().await;
+            return;
+        }
+
         if let Err(error)=sqlx::query(
             "INSERT INTO activity_events(workspace_id,board_id,task_id,actor_id,event_type,payload)
              VALUES($1,$2,$3,NULL,'recurring_task_created',jsonb_build_object('description','created the next recurring task'))")
             .bind(job.workspace_id).bind(job.board_id).bind(new_id).execute(&mut *tx).await {
-                tracing::error!(%error,"Could not record recurring task activity");
-                continue;
+                tracing::error!(%error,task_id=%new_id,"Could not record recurring task activity");
+                let _=tx.rollback().await;
+                return;
         }
         committed_events.push((job.workspace_id, job.board_id, new_id));
     }
+
     match tx.commit().await {
         Ok(()) => {
             for (workspace_id, board_id, task_id) in committed_events {
