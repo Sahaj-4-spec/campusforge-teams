@@ -788,9 +788,13 @@ async fn chat_list(
         "SELECT m.id, m.workspace_id, m.board_id, m.author_id, u.full_name AS author_name,
                 m.body, m.created_at
          FROM chat_messages m JOIN users u ON u.id=m.author_id
-         WHERE m.workspace_id=$1 AND (
+         WHERE m.workspace_id=$1
+           AND (
              ($2::uuid IS NULL AND m.board_id IS NULL) OR m.board_id=$2
-         )
+           )
+           -- Use the row JSON representation so this bridge binary also works
+           -- before migration 0010 adds conversation_id, while hiding DMs after it.
+           AND COALESCE(to_jsonb(m)->>'conversation_id','')=''
          ORDER BY m.created_at DESC LIMIT 100",
     )
     .bind(workspace_id)
