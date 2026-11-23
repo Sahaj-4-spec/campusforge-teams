@@ -76,6 +76,8 @@ export default function TaskDialog({
         });
       }
       setCommentDraft("");
+      setReplyToCommentId("");
+      setMentionUserId("");
       lastTaskIdentity.current = identity;
     }
     dialogWasOpen.current = true;
