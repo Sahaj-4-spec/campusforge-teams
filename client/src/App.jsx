@@ -269,7 +269,7 @@ function MyTasksPage({ data, onOpenTask, search }) {
   const [dueAfter, setDueAfter] = useState("");
   const [dueBefore, setDueBefore] = useState("");
   const [tasks, setTasks] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !hasOAuthError);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -678,7 +678,8 @@ function AppSidebar({
 }
 
 export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(true);
+  const hasOAuthError = new URLSearchParams(window.location.search).has("oauth_error");
+  const [isAuthenticated, setIsAuthenticated] = useState(() => !hasOAuthError);
   const [data, setData] = useState(null);
   const [invitations, setInvitations] = useState([]);
   const [loading, setLoading] = useState(true);
