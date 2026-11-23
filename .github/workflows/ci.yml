@@ -32,6 +32,8 @@ jobs:
         run: npm --prefix client run test:locker
       - name: Test optimistic Kanban task moves
         run: npm --prefix client run test:task-move
+      - name: Test command palette search ranking
+        run: npm --prefix client run test:command-search
 
   backend:
     name: Rust backend check

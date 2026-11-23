@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test:locker": "node --test src/lib/lockerCrypto.test.js",
-    "test:task-move": "node --test src/lib/taskMove.test.js"
+    "test:task-move": "node --test src/lib/taskMove.test.js",
+    "test:command-search": "node --test src/lib/commandSearch.test.js"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
