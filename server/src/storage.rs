@@ -19,6 +19,7 @@ struct S3Backend {
     secret_access_key: String,
     session_token: Option<String>,
     endpoint_url: Option<String>,
+    virtual_host_style: bool,
 }
 
 #[derive(Clone)]
@@ -59,7 +60,14 @@ fn object_url(backend: &S3Backend, key: &str) -> Result<Url, String> {
             return Err("S3-compatible endpoints must use HTTPS outside localhost".to_string());
         }
         let base = url.path().trim_end_matches('/');
-        url.set_path(&format!("{base}/{}/{}", backend.bucket, key));
+        if backend.virtual_host_style {
+            let host = url.host_str().ok_or_else(|| "The S3-compatible endpoint host is missing".to_string())?;
+            url.set_host(Some(&format!("{}.{}", backend.bucket, host)))
+                .map_err(|_| "The S3-compatible virtual-host endpoint is invalid".to_string())?;
+            url.set_path(&format!("{base}/{key}"));
+        } else {
+            url.set_path(&format!("{base}/{}/{}", backend.bucket, key));
+        }
         url.set_query(None);
         url.set_fragment(None);
         Ok(url)
@@ -216,6 +224,9 @@ impl StorageService {
                 let secret_access_key = required("AWS_SECRET_ACCESS_KEY")?;
                 let session_token = env::var("AWS_SESSION_TOKEN").ok().filter(|value| !value.trim().is_empty());
                 let endpoint_url = env::var("CAMPUSFORGE_S3_ENDPOINT_URL").ok().filter(|value| !value.trim().is_empty());
+                let virtual_host_style = env::var("CAMPUSFORGE_S3_URL_STYLE")
+                    .map(|value| value.eq_ignore_ascii_case("virtual-host"))
+                    .unwrap_or(false);
                 let client = Client::builder()
                     .timeout(std::time::Duration::from_secs(60))
                     // SigV4 credentials include x-amz-security-token; never forward them across redirects.
@@ -227,7 +238,7 @@ impl StorageService {
                 Ok(Self {
                     backend: Backend::S3(S3Backend {
                         client, bucket, region, access_key_id, secret_access_key,
-                        session_token, endpoint_url,
+                        session_token, endpoint_url, virtual_host_style,
                     })
                 })
             }
