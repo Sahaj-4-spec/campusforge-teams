@@ -284,6 +284,10 @@ async fn revoke_invitation(
     Ok(StatusCode::NO_CONTENT)
 }
 
+fn is_assignable_workspace_role(role: &str) -> bool {
+    matches!(role, "member" | "admin")
+}
+
 #[derive(Debug, Deserialize)]
 struct UpdateMemberRoleInput {
     role: String,
@@ -302,7 +306,7 @@ async fn update_member_role(
     Json(input): Json<UpdateMemberRoleInput>,
 ) -> ApiResult<Json<UpdatedMemberRole>> {
     let next_role = input.role.trim();
-    if next_role != "member" && next_role != "admin" {
+    if !is_assignable_workspace_role(next_role) {
         return Err(error(StatusCode::BAD_REQUEST, "Workspace role must be member or admin"));
     }
     if actor_id == member_id {
@@ -400,8 +404,11 @@ mod role_tests {
 
     #[test]
     fn only_member_and_admin_are_assignable_workspace_roles() {
-        assert!(["member", "admin"].iter().all(|role| *role == "member" || *role == "admin"));
-        assert!(!["owner", "guest", ""].iter().any(|role| *role == "member" || *role == "admin"));
+        assert!(is_assignable_workspace_role("member"));
+        assert!(is_assignable_workspace_role("admin"));
+        assert!(!is_assignable_workspace_role("owner"));
+        assert!(!is_assignable_workspace_role("guest"));
+        assert!(!is_assignable_workspace_role(""));
     }
 }
 
