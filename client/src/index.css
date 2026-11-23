@@ -963,9 +963,6 @@ dialog.feature-modal::backdrop {
 .topbar-profile-button:hover { transform: translateY(-1px); box-shadow: 0 0 0 4px rgba(81,130,98,.1); }
 .topbar-profile-button:focus-visible { outline: 3px solid rgba(103,89,232,.28); outline-offset: 2px; }
 
-.auth-screen-split .auth-card {
-  animation: cf-auth-card-in .72s cubic-bezier(.2,.75,.25,1) both;
-}
 .auth-screen-split .auth-side-panel {
   animation: cf-auth-panel-in .84s cubic-bezier(.2,.75,.25,1) .06s both;
 }
