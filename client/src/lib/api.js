@@ -265,7 +265,7 @@ export const meetingNotesApi = {
 };
 
 export const presenceApi = {
-  list: () => request("/api/presence")
+  list: (boardId) => request("/api/presence" + (boardId ? "?board_id=" + encodeURIComponent(boardId) : ""))
 };
 
 export const analyticsApi = {
@@ -303,6 +303,13 @@ export function sendWorkspaceSocketMessage(payload) {
   return true;
 }
 
+let desiredWorkspaceBoardId = null;
+
+export function setWorkspaceSocketBoard(boardId) {
+  desiredWorkspaceBoardId = boardId || null;
+  sendWorkspaceSocketMessage({ type: "board_view", board_id: desiredWorkspaceBoardId });
+}
+
 export function createWorkspaceSocket() {
   const origin = API_BASE || window.location.origin;
   const websocketOrigin = origin.replace(/^https:/i, "wss:").replace(/^http:/i, "ws:");
@@ -317,6 +324,9 @@ export function createWorkspaceSocket() {
   socket.addEventListener("message", (message) => {
     let payload;
     try { payload = JSON.parse(message.data); } catch { return; }
+    if (payload.type === "ready") {
+      socket.send(JSON.stringify({ type: "board_view", board_id: desiredWorkspaceBoardId }));
+    }
     workspaceSocketListeners.forEach((listener) => {
       try { listener(payload); } catch {}
     });
