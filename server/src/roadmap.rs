@@ -1262,10 +1262,17 @@ struct SaveLockerItemInput {
     ciphertext: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct SaveLockerItemCreateInput {
+    id: Uuid,
+    iv: String,
+    ciphertext: String,
+}
+
 async fn save_locker_item_create(
     State(state): State<AppState>,
     AuthUser(user_id): AuthUser,
-    Json(input): Json<SaveLockerItemInput>,
+    Json(input): Json<SaveLockerItemCreateInput>,
 ) -> ApiResult<Json<SaveLockerItemRow>> {
     let size_bytes = validate_locker_item(&input.iv, &input.ciphertext)?;
     let mut tx = state.db.begin().await
@@ -1300,7 +1307,7 @@ async fn save_locker_item_create(
         return Err(fail(StatusCode::PAYLOAD_TOO_LARGE, "Save Locker is full. Remove an item before saving more."));
     }
 
-    let item_id = Uuid::new_v4();
+    let item_id = input.id;
     let row = sqlx::query_as::<_, SaveLockerItemRow>(
         "INSERT INTO save_locker_items(id,user_id,iv,ciphertext,size_bytes)
          VALUES($1,$2,$3,$4,$5)
