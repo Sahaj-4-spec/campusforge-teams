@@ -261,6 +261,15 @@ export function WorkspaceTimeline({ data }) {
 
 export function WorkspaceReports({ data, realtimeVersion = 0 }) {
   const metrics = getWorkspaceMetrics(data);
+  const todayDate = new Date();
+  const defaultTo = todayDate.toISOString().slice(0,10);
+  const defaultFromDate = new Date(todayDate);
+  defaultFromDate.setDate(defaultFromDate.getDate() - 29);
+  const [historyFrom, setHistoryFrom] = useState(defaultFromDate.toISOString().slice(0,10));
+  const [historyTo, setHistoryTo] = useState(defaultTo);
+  const [history, setHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
   const [serverAnalytics, setServerAnalytics] = useState(null);
   useEffect(() => {
     let cancelled = false;
@@ -270,6 +279,22 @@ export function WorkspaceReports({ data, realtimeVersion = 0 }) {
       .catch(() => { if (!cancelled) setServerAnalytics(null); });
     return () => { cancelled = true; };
   }, [data, realtimeVersion]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!historyFrom || !historyTo || historyTo < historyFrom) {
+      setHistoryError("Choose a valid date range.");
+      setHistory([]);
+      return () => { cancelled = true; };
+    }
+    setHistoryLoading(true);
+    setHistoryError("");
+    analyticsApi.history(historyFrom, historyTo)
+      .then((rows) => { if (!cancelled) setHistory(rows || []); })
+      .catch((error) => { if (!cancelled) setHistoryError(error.message || "Could not load analytics history."); })
+      .finally(() => { if (!cancelled) setHistoryLoading(false); });
+    return () => { cancelled = true; };
+  }, [historyFrom, historyTo, realtimeVersion]);
   const projectRows = metrics.boards.map((board) => {
     const tasks = metrics.tasks.filter((task) => task.board_id === board.id);
     const done = tasks.filter((task) => metrics.doneIds.has(task.id)).length;
@@ -305,6 +330,29 @@ export function WorkspaceReports({ data, realtimeVersion = 0 }) {
         <StatCard icon={BarChart3} label="Average project progress" value={averageCompletion + "%"} note={healthCount + " projects on track"} tone="violet" />
         <StatCard icon={CircleAlert} label="Overdue tasks" value={overdueCount} note="Across all projects" tone="orange" />
         <StatCard icon={Users} label="Team members" value={metrics.users.length} note={totalAssigned + " active assignments"} tone="blue" />
+      </section>
+
+      <section className="ref-panel feature-analytics-history">
+        <div className="ref-panel-title"><h2><Activity size={16} /> Historical productivity</h2><button className="secondary-button" type="button" onClick={() => analyticsApi.exportCsv(historyFrom, historyTo).catch((error) => setHistoryError(error.message || "Could not export analytics."))} disabled={!history.length}>Export CSV</button></div>
+        <div className="feature-analytics-filters">
+          <label>From<input type="date" value={historyFrom} max={historyTo} onChange={(event) => setHistoryFrom(event.target.value)} /></label>
+          <label>To<input type="date" value={historyTo} min={historyFrom} max={defaultTo} onChange={(event) => setHistoryTo(event.target.value)} /></label>
+        </div>
+        {historyError && <p className="auth-error" role="alert">{historyError}</p>}
+        {historyLoading ? <p className="feature-muted">Loading daily snapshots…</p> : history.length ? <>
+          <div className="feature-history-chart">{history.slice(-21).map((row) => {
+            const completion = row.total_tasks ? Math.round(row.completed_tasks / row.total_tasks * 100) : 0;
+            return <div className="feature-history-column" key={row.snapshot_date} title={row.snapshot_date + ": " + completion + "% completed"}>
+              <strong>{completion}%</strong><span><i style={{ height: completion + "%" }} /></span><small>{row.snapshot_date.slice(5)}</small>
+            </div>;
+          })}</div>
+          <div className="ref-health-table feature-history-table">
+            <div className="ref-health-head"><span>Date</span><span>Tasks</span><span>Completed</span><span>Overdue / Unassigned</span></div>
+            {history.slice(-10).reverse().map((row) => <div className="ref-health-row" key={row.snapshot_date}>
+              <strong>{row.snapshot_date}</strong><span>{row.total_tasks}</span><span>{row.completed_tasks}</span><span>{row.overdue_tasks} / {row.unassigned_tasks}</span>
+            </div>)}
+          </div>
+        </> : <p className="ref-empty-copy">Daily snapshots appear here as your workspace is used. Historical reporting starts after the first scheduled snapshot.</p>}
       </section>
 
       {serverAnalytics && (
