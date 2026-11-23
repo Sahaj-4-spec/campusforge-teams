@@ -127,7 +127,9 @@ export const taskApi = {
   create: (values) => request("/api/tasks", { method: "POST", body: values }),
   update: (taskId, values) => request("/api/tasks/" + encodeURIComponent(taskId), { method: "PATCH", body: values }),
   remove: (taskId) => request("/api/tasks/" + encodeURIComponent(taskId), { method: "DELETE" }),
-  addComment: (taskId, body) => request("/api/tasks/" + encodeURIComponent(taskId) + "/comments", { method: "POST", body: { body } }),
+  addComment: (taskId, body, parentCommentId = null) => request("/api/tasks/" + encodeURIComponent(taskId) + "/comments", {
+    method: "POST", body: { body, parent_comment_id: parentCommentId }
+  }),
   move: (taskId, destinationListId, orderedTaskIds) => request(
     "/api/tasks/" + encodeURIComponent(taskId) + "/move",
     { method: "PATCH", body: { destination_list_id: destinationListId, ordered_task_ids: orderedTaskIds } }
