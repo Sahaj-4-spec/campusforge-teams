@@ -7,7 +7,7 @@ import {
   calendarApi, chatApi, filesApi, lockerApi, meetingNotesApi, notificationApi, presenceApi,
   sendWorkspaceSocketMessage, subscribeWorkspaceSocket
 } from "../lib/api.js";
-import { base64ToBytes, bytesToBase64, createLockerKeyCheck, decryptLockerPayload, deriveLockerKey, encryptLockerPayload, LOCKER_KDF_ITERATIONS, randomBytes, verifyLockerKey } from "../lib/lockerCrypto.js";
+import { base64ToBytes, bytesToBase64, createLockerKeyCheck, decryptLockerPayload, deriveLockerKey, encryptLockerPayload, LOCKER_KDF_ITERATIONS, randomBytes, randomUuid, verifyLockerKey } from "../lib/lockerCrypto.js";
 
 const dateKey = (date) => {
   const value = new Date(date);
@@ -1122,7 +1122,7 @@ export function SaveLockerPage({ data }) {
   async function decryptItemRows(key, rows) {
     return Promise.all((rows || []).map(async (row) => {
       try {
-        const payload = await decryptLockerPayload(key, row);
+        const payload = await decryptLockerPayload(key, row, "item:" + data.current_user_id + ":" + row.id);
         return { ...row, payload, corrupt: false };
       } catch {
         return { ...row, payload: null, corrupt: true };
@@ -1282,8 +1282,9 @@ export function SaveLockerPage({ data }) {
           data: bytesToBase64(await selectedFile.arrayBuffer())
         } : null
       };
-      const encrypted = await encryptLockerPayload(unlockedKey, payload);
-      const saved = await lockerApi.createItem(encrypted);
+      const itemId = randomUuid();
+      const encrypted = await encryptLockerPayload(unlockedKey, payload, "item:" + data.current_user_id + ":" + itemId);
+      const saved = await lockerApi.createItem({ id: itemId, ...encrypted });
       setItems((current) => [{ ...saved, payload, corrupt: false }, ...current]);
       setVaultState((current) => current ? {
         ...current,
