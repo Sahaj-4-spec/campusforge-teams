@@ -24,7 +24,8 @@ Set the following only on the backend service:
 | CAMPUSFORGE_STORAGE_MODE | Yes | Set to s3 to select object storage |
 | CAMPUSFORGE_S3_BUCKET | Yes | Private bucket name |
 | CAMPUSFORGE_S3_REGION | Yes | Bucket region (defaults to us-east-1) |
-| CAMPUSFORGE_S3_ENDPOINT_URL | No | Endpoint URL for compatible services such as R2 or MinIO; path-style addressing is enabled when set |
+| CAMPUSFORGE_S3_ENDPOINT_URL | No | Endpoint URL for compatible services such as Railway Buckets or R2 |
+| CAMPUSFORGE_S3_URL_STYLE | No | Set to `virtual-host` when the provider requires bucket-prefixed hostnames; defaults to path-style |
 | AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY | Yes | Dedicated least-privilege S3 credentials, supplied as backend secrets |
 | AWS_SESSION_TOKEN | No | Session token when using temporary S3 credentials |
 
