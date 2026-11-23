@@ -1896,3 +1896,109 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .feature-action-form .feature-form-grid { grid-template-columns: minmax(0,1fr); }
   .feature-history-chart { grid-template-columns: repeat(7,minmax(0,1fr)); height: 150px; }
 }
+
+/* Desktop chat layout: keep the conversation, presence and composer in natural flow. */
+.feature-chat {
+  display: flex;
+  min-height: 440px;
+  flex-direction: column;
+}
+
+.feature-chat-messages {
+  flex: 1 1 auto;
+  min-height: 220px;
+  max-height: min(58vh, 620px);
+}
+
+.feature-chat-composer {
+  display: grid;
+  grid-template-columns: minmax(210px, 280px) minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  padding: 16px 20px;
+}
+
+.feature-chat-compose-tools {
+  display: grid;
+  min-width: 0;
+  align-content: center;
+  gap: 6px;
+}
+
+.feature-chat-compose-tools select {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid #e4e9e2;
+  border-radius: 9px;
+  color: #46564a;
+  background: #fff;
+  font: inherit;
+  font-size: 13px;
+}
+
+.feature-chat-compose-tools small {
+  color: #849083;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.feature-chat-composer > div:last-child {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.feature-chat-composer input {
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  flex: 1 1 auto;
+  padding: 10px 14px;
+  font-size: 14px;
+}
+
+.feature-chat-composer .ref-primary-button {
+  min-height: 48px;
+  flex: 0 0 auto;
+  justify-content: center;
+  padding: 0 22px;
+  white-space: nowrap;
+}
+
+.feature-chat-composer.is-direct {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (max-width: 760px) {
+  .feature-chat-composer {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .feature-chat-compose-tools select {
+    min-height: 42px;
+  }
+
+  .feature-chat-composer > div:last-child {
+    width: 100%;
+  }
+
+  .feature-chat-composer .ref-primary-button {
+    padding: 0 16px;
+  }
+}
+
+@media (max-width: 420px) {
+  .feature-chat-composer > div:last-child {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .feature-chat-composer .ref-primary-button {
+    width: 100%;
+  }
+}
