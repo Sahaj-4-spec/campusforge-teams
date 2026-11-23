@@ -1,5 +1,5 @@
 use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    password_hash::{PasswordHash, PasswordVerifier},
     Argon2,
 };
 use axum::{
@@ -16,16 +16,6 @@ use sqlx::FromRow;
 use validator::Validate;
 
 use crate::state::AppState;
-
-#[derive(Debug, Deserialize, Validate)]
-struct RegisterRequest {
-    #[validate(email)]
-    email: String,
-    #[validate(length(min = 2, max = 80))]
-    full_name: String,
-    #[validate(length(min = 8, max = 128))]
-    password: String,
-}
 
 #[derive(Debug, Deserialize, Validate)]
 struct LoginRequest {
@@ -62,15 +52,6 @@ struct UserWithPassword {
     full_name: String,
     avatar_url: Option<String>,
     password_hash: Option<String>,
-    created_at: chrono::DateTime<Utc>,
-}
-
-#[derive(Debug, FromRow)]
-struct UserWithoutPassword {
-    id: uuid::Uuid,
-    email: String,
-    full_name: String,
-    avatar_url: Option<String>,
     created_at: chrono::DateTime<Utc>,
 }
 
@@ -295,89 +276,13 @@ fn invalid_request() -> (StatusCode, Json<ApiError>) {
     )
 }
 
-async fn register(
-    axum::extract::State(state): axum::extract::State<AppState>,
-    Json(request): Json<RegisterRequest>,
-) -> Result<Response, (StatusCode, Json<ApiError>)> {
-    request.validate().map_err(|_| invalid_request())?;
-
-    let email = request.email.trim().to_lowercase();
-    let full_name = request.full_name.trim().to_owned();
-    if full_name.chars().count() < 2 {
-        return Err(invalid_request());
-    }
-
-    let salt = SaltString::generate(&mut OsRng);
-    let password_hash = Argon2::default()
-        .hash_password(request.password.as_bytes(), &salt)
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiError {
-                    error: "Unable to create account",
-                }),
-            )
-        })?
-        .to_string();
-
-    let user = sqlx::query_as::<_, UserWithoutPassword>(
-        "INSERT INTO users (email, password_hash, full_name)
-         VALUES ($1, $2, $3)
-         RETURNING id, email, full_name, avatar_url, created_at",
-    )
-    .bind(&email)
-    .bind(password_hash)
-    .bind(&full_name)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|error| {
-        if let sqlx::Error::Database(database_error) = &error {
-            if database_error.code().as_deref() == Some("23505") {
-                return (
-                    StatusCode::CONFLICT,
-                    Json(ApiError {
-                        error: "An account with this email already exists",
-                    }),
-                );
-            }
-        }
-        tracing::error!(%error, "Account registration failed");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiError {
-                error: "Unable to create account",
-            }),
-        )
-    })?;
-
-    let (token, expires_in) = issue_token(user.id, &user.email, &state.jwt_secret)
-        .map_err(|status| {
-            (
-                status,
-                Json(ApiError {
-                    error: "Unable to create session",
-                }),
-            )
-        })?;
-
-    let cookie = session_cookie_header(&token, expires_in).map_err(|status| {
-        (status, Json(ApiError { error: "Unable to create session" }))
-    })?;
-    let mut response = (
-        StatusCode::CREATED,
-        Json(AuthResponse {
-            expires_in,
-            user: UserResponse {
-                id: user.id,
-                email: user.email,
-                full_name: user.full_name,
-                avatar_url: user.avatar_url,
-                created_at: user.created_at,
-            },
+async fn register() -> (StatusCode, Json<ApiError>) {
+    (
+        StatusCode::FORBIDDEN,
+        Json(ApiError {
+            error: "New accounts must sign up with Google, GitHub, or Discord using a verified email address",
         }),
-    ).into_response();
-    response.headers_mut().append(header::SET_COOKIE, cookie);
-    Ok(response)
+    )
 }
 
 async fn login(
