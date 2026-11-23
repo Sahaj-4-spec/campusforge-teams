@@ -36,8 +36,9 @@ Create an application in the Discord Developer Portal and configure the OAuth2 r
 
 ## 5. Account behavior and security
 
-- New self-service accounts can be created only by completing Google, GitHub, or Discord OAuth with a provider-verified email address. `POST /api/auth/register` is retained for compatibility but rejects new registrations.
+- New self-service accounts can be created only by completing Google, GitHub, or Discord OAuth with a provider-verified email address. `POST /api/auth/register` is retained for compatibility but always returns `403 Forbidden`.
 - The API records `users.email_verified_at` when a verified provider identity creates the account. Existing provider accounts are backfilled from their OAuth account creation timestamp.
+- Migration 0009 adds database-level guards: inserts with a password hash are rejected, and a new passwordless user cannot commit without an OAuth identity row in the same transaction. This also blocks password registrations from an older API instance during a rolling deployment; older OAuth-capable binaries are covered by a database trigger that fills the verification timestamp.
 - Existing email/password accounts can continue to sign in, but they are not automatically linked to a provider, even when the verified email matches. Users must sign in through the existing account method first.
 - New provider-only accounts have a NULL password hash; email/password login remains available for existing password accounts.
 - OAuth state is a high-entropy random value. Only its SHA-256 hash is stored, and it is deleted when used or allowed to expire after ten minutes.
@@ -52,18 +53,31 @@ Create an application in the Discord Developer Portal and configure the OAuth2 r
 
 ## 6. Test checklist
 
-1. Try `POST /api/auth/register`; confirm it rejects password-only account creation.
+1. Try `POST /api/auth/register`; confirm it rejects password-only account creation with `403 Forbidden`.
 2. Create a new account with each configured provider using a previously unseen email; confirm the account is created only after the provider reports the email as verified.
 3. Sign out and sign in again with each provider.
 4. Attempt sign-in with a second provider whose verified email belongs to an existing CampusForge user; confirm automatic linking is rejected and the user is instructed to sign in through the existing method.
-4. Try a provider account with no verified email; confirm sign-in is rejected.
-5. Replay an OAuth callback state value; confirm it is rejected.
-6. Start OAuth in one browser and attempt to complete the callback in a different browser; confirm the browser-bound HttpOnly cookie check rejects it.
-7. Try signing in with a provider whose verified email already belongs to a local CampusForge account that is not linked to that provider; confirm the server asks the user to authenticate with their existing method instead of silently linking accounts.
+5. Try a provider account with no verified email; confirm sign-in is rejected.
+6. Replay an OAuth callback state value; confirm it is rejected.
+7. Start OAuth in one browser and attempt to complete the callback in a different browser; confirm the browser-bound HttpOnly cookie check rejects it.
 8. Confirm a successful first sign-in creates a default workspace when the workspace endpoint is opened.
 9. Confirm missing provider secrets show a friendly message instead of a raw API error.
+10. Apply migration 0009 and attempt a direct insert with a non-NULL password hash; confirm PostgreSQL rejects it.
+11. Attempt a passwordless user insert without an `oauth_accounts` row; confirm transaction commit fails.
+12. Create a passwordless user and its OAuth identity in the same transaction without supplying `email_verified_at`; confirm the database trigger sets the timestamp and commit succeeds.
 
+## 7. Deployment order and rollback
 
+**Do not apply migration 0009 until every API instance is running the SQLx rollback-compatibility release in [PR #20](https://github.com/Sahaj-4-spec/campusforge-teams/pull/20).**
+
+1. Merge and deploy PR #20 first. It changes the API migration runner but does not change the database schema.
+2. Confirm every API instance runs that compatibility release.
+3. Then merge and deploy this provider-verified sign-up change. Migration 0009 applies the provider signup guards.
+4. Keep the PR #20 release (or a newer release with the same migration compatibility) as the rollback target. Do not roll back to a pre-PR #20 binary after migration 0009 has been applied.
+5. Verify all three OAuth callbacks, existing password login, direct registration rejection, and the two-user rollout behavior before opening sign-up to the public.
+
+See [Database Migration Release Order](DATABASE_MIGRATION_RELEASE_ORDER.md) for the compatibility rationale and expand/contract policy.
+ 
 ## Account-linking safety
 
 OAuth state is bound to a short-lived, HttpOnly, SameSite=Lax cookie scoped to the API authentication routes. A callback without the matching browser cookie is rejected. Existing local accounts are not automatically linked to a new provider merely because the provider reports a verified email; sign in through the existing account method first. Provider linking through authenticated account settings is not implemented yet.
