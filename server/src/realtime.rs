@@ -30,8 +30,11 @@ struct AuthenticateMessage {
 struct ClientWorkspaceMessage {
     #[serde(rename = "type")]
     message_type: String,
+    #[serde(default)]
     board_id: Option<Uuid>,
+    #[serde(default)]
     task_id: Option<Uuid>,
+    #[serde(default)]
     editing: Option<bool>,
 }
 
