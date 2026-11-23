@@ -2,13 +2,17 @@ import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   ArrowRight,
+  CalendarDays,
+  Check,
   Eye,
   EyeOff,
   Github,
   LockKeyhole,
   Mail,
+  MessageCircle,
   ShieldCheck,
   Sparkles,
+  Users,
 } from "lucide-react";
 import { authApi } from "../lib/api.js";
 
@@ -37,6 +41,13 @@ const providers = [
   { id: "discord", label: "Discord", icon: DiscordIcon }
 ];
 
+function getEmailError(value) {
+  const email = value.trim();
+  if (!email) return "Enter your email address.";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "Enter a valid email address.";
+  return "";
+}
+
 export default function AuthScreen({ onAuthenticated }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -44,6 +55,8 @@ export default function AuthScreen({ onAuthenticated }) {
   const [busy, setBusy] = useState(false);
   const [busyProvider, setBusyProvider] = useState("");
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [showRecoveryNotice, setShowRecoveryNotice] = useState(false);
 
   const location = useLocation();
   const navigate = useNavigate();
@@ -72,6 +85,15 @@ export default function AuthScreen({ onAuthenticated }) {
   async function submit(event) {
     event.preventDefault();
     setError("");
+    setShowRecoveryNotice(false);
+
+    const nextFieldErrors = {
+      email: getEmailError(email),
+      password: password ? "" : "Enter your password."
+    };
+    setFieldErrors(nextFieldErrors);
+    if (Object.values(nextFieldErrors).some(Boolean)) return;
+
     setBusy(true);
     try {
       await authApi.login({ email: email.trim(), password });
@@ -83,8 +105,29 @@ export default function AuthScreen({ onAuthenticated }) {
     }
   }
 
+  function handleEmailBlur() {
+    setFieldErrors((current) => ({ ...current, email: getEmailError(email) }));
+  }
+
+  function handlePasswordBlur() {
+    setFieldErrors((current) => ({ ...current, password: password ? "" : "Enter your password." }));
+  }
+
+  function updateEmail(value) {
+    setEmail(value);
+    setFieldErrors((current) => ({ ...current, email: "" }));
+    setError("");
+  }
+
+  function updatePassword(value) {
+    setPassword(value);
+    setFieldErrors((current) => ({ ...current, password: "" }));
+    setError("");
+  }
+
   function startOAuth(provider) {
     setError("");
+    setShowRecoveryNotice(false);
     setBusyProvider(provider);
     window.location.assign(authApi.oauthStartUrl(provider));
   }
@@ -92,6 +135,8 @@ export default function AuthScreen({ onAuthenticated }) {
   function switchMode() {
     navigate(isRegister ? "/login" : "/signup");
     setError("");
+    setFieldErrors({});
+    setShowRecoveryNotice(false);
     setPassword("");
   }
 
@@ -104,7 +149,7 @@ export default function AuthScreen({ onAuthenticated }) {
         </a>
 
         <div className="auth-intro">
-          <p className="eyebrow">{isRegister ? "START COLLABORATING" : "WELCOME BACK"}</p>
+          <p className="eyebrow">{isRegister ? "START COLLABORATING" : "WORKSPACE ACCESS"}</p>
           <h1>{isRegister ? "Create your account" : "Welcome back"}</h1>
           <p>{isRegister
             ? "Create your account with Google, GitHub, or Discord. We verify your email with the provider before creating your account."
@@ -112,24 +157,40 @@ export default function AuthScreen({ onAuthenticated }) {
         </div>
 
         {!isRegister && (
-          <form className="auth-form" onSubmit={submit}>
-            <label className="field-group">
-              <span>Email address</span>
+          <form className="auth-form" onSubmit={submit} noValidate>
+            <div className="field-group">
+              <label htmlFor="auth-email">Email address</label>
               <span className="auth-input-wrap focus-within:ring-2 focus-within:ring-violet-200">
                 <Mail size={17} aria-hidden="true" />
                 <input
+                  id="auth-email"
                   className="outline-none"
                   type="email"
                   value={email}
-                  onChange={(event) => setEmail(event.target.value)}
+                  onChange={(event) => updateEmail(event.target.value)}
+                  onBlur={handleEmailBlur}
                   placeholder="you@example.com"
                   autoComplete="email"
+                  aria-invalid={Boolean(fieldErrors.email)}
+                  aria-describedby={fieldErrors.email ? "auth-email-error" : undefined}
                   required
                 />
               </span>
-            </label>
+              {fieldErrors.email && <p className="auth-field-error" id="auth-email-error" role="alert">{fieldErrors.email}</p>}
+            </div>
             <div className="field-group">
-              <label htmlFor="auth-password">Password</label>
+              <div className="auth-field-heading">
+                <label htmlFor="auth-password">Password</label>
+                <button
+                  className="auth-forgot-link"
+                  type="button"
+                  onClick={() => { setShowRecoveryNotice(true); setError(""); }}
+                  aria-expanded={showRecoveryNotice}
+                  aria-controls="auth-recovery-notice"
+                >
+                  Forgot password?
+                </button>
+              </div>
               <span className="auth-input-wrap">
                 <LockKeyhole size={17} aria-hidden="true" />
                 <input
@@ -137,11 +198,14 @@ export default function AuthScreen({ onAuthenticated }) {
                   className="outline-none"
                   type={showPassword ? "text" : "password"}
                   value={password}
-                  onChange={(event) => setPassword(event.target.value)}
+                  onChange={(event) => updatePassword(event.target.value)}
+                  onBlur={handlePasswordBlur}
                   placeholder="Enter your password"
                   autoComplete="current-password"
                   minLength={1}
                   maxLength={128}
+                  aria-invalid={Boolean(fieldErrors.password)}
+                  aria-describedby={fieldErrors.password ? "auth-password-error" : undefined}
                   required
                 />
                 <button
@@ -153,6 +217,12 @@ export default function AuthScreen({ onAuthenticated }) {
                   {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
                 </button>
               </span>
+              {fieldErrors.password && <p className="auth-field-error" id="auth-password-error" role="alert">{fieldErrors.password}</p>}
+              {showRecoveryNotice && (
+                <p className="auth-recovery-notice" id="auth-recovery-notice" role="status">
+                  Password reset is not set up yet. Try signing in with your connected Google, GitHub, or Discord account, or contact your workspace administrator.
+                </p>
+              )}
             </div>
             <button className="primary-button auth-submit" type="submit" disabled={busy || Boolean(busyProvider)}>
               {busy ? "Please wait..." : "Sign in"}
@@ -194,6 +264,86 @@ export default function AuthScreen({ onAuthenticated }) {
         )}
       </section>
 
+      <aside className="auth-preview-panel" aria-label="CampusForge product preview">
+        <div className="auth-preview-topline">
+          <span className="auth-preview-brand-mark"><img src="/campusforge-mark.svg" alt="" /></span>
+          <span className="auth-preview-brand-name">CAMPUSFORGE TEAMS</span>
+          <span className="auth-preview-pill"><Sparkles size={12} /> TEAM WORKSPACE</span>
+        </div>
+
+        <div className="auth-preview-copy">
+          <p className="auth-preview-eyebrow">PLAN · TRACK · SHIP</p>
+          <h2>Bring every project into focus.</h2>
+          <p>Turn scattered tasks into shared momentum with boards, deadlines, and team conversations in one workspace.</p>
+        </div>
+
+        <section className="auth-board-preview" aria-label="Illustrative sample Kanban board">
+          <header className="auth-board-header">
+            <div>
+              <span className="auth-board-kicker">SAMPLE PROJECT BOARD</span>
+              <strong>Campus launch</strong>
+            </div>
+            <div className="auth-board-avatars" aria-label="Sample teammates">
+              <span>SK</span><span>AM</span><span>JR</span>
+            </div>
+          </header>
+
+          <div className="auth-board-columns">
+            <section className="auth-board-column">
+              <header><span className="auth-board-status status-todo" />To do <b>02</b></header>
+              <article className="auth-board-task">
+                <span className="auth-task-tag tag-design">DESIGN</span>
+                <strong>Map the onboarding flow</strong>
+                <footer><span>◷ This week</span><span className="auth-task-avatar">SK</span></footer>
+              </article>
+              <article className="auth-board-task">
+                <span className="auth-task-tag tag-research">RESEARCH</span>
+                <strong>Collect beta feedback</strong>
+                <footer><span>◷ Nov 27</span><span className="auth-task-avatar task-avatar-blue">AM</span></footer>
+              </article>
+            </section>
+
+            <section className="auth-board-column">
+              <header><span className="auth-board-status status-progress" />In progress <b>02</b></header>
+              <article className="auth-board-task">
+                <span className="auth-task-tag tag-build">BUILD</span>
+                <strong>Build the team dashboard</strong>
+                <footer><span>◷ Today</span><span className="auth-task-avatar task-avatar-orange">JR</span></footer>
+              </article>
+              <article className="auth-board-task">
+                <span className="auth-task-tag tag-product">PRODUCT</span>
+                <strong>Connect the team calendar</strong>
+                <footer><span>◷ Nov 28</span><span className="auth-task-avatar">SK</span></footer>
+              </article>
+            </section>
+
+            <section className="auth-board-column">
+              <header><span className="auth-board-status status-done" />Done <b>02</b></header>
+              <article className="auth-board-task">
+                <span className="auth-task-tag tag-launch">LAUNCH</span>
+                <strong>Set up the workspace</strong>
+                <footer><span><Check size={11} /> Complete</span><span className="auth-task-avatar task-avatar-green">AM</span></footer>
+              </article>
+              <article className="auth-board-task">
+                <span className="auth-task-tag tag-design">DESIGN</span>
+                <strong>Approve brand direction</strong>
+                <footer><span><Check size={11} /> Complete</span><span className="auth-task-avatar task-avatar-orange">JR</span></footer>
+              </article>
+            </section>
+          </div>
+
+          <footer className="auth-board-footer">
+            <span><span className="auth-live-dot" /> Shared team view</span>
+            <span>Sample data · Not a live board</span>
+          </footer>
+        </section>
+
+        <div className="auth-preview-highlights">
+          <span><CalendarDays size={15} /> Deadlines & milestones</span>
+          <span><MessageCircle size={15} /> Team discussions</span>
+          <span><Users size={15} /> Shared progress</span>
+        </div>
+      </aside>
     </main>
   );
 }
