@@ -6,6 +6,7 @@ import App from "./App.jsx";
 import "./index.css";
 import "./styles/cal-theme.css";
 import "./styles/reference-ui.css";
+import "./styles/ui-polish.css";
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
