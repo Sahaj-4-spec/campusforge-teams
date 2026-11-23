@@ -189,6 +189,7 @@ function BoardColumn({
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [savingQuickAdd, setSavingQuickAdd] = useState(false);
+  const [quickAddError, setQuickAddError] = useState("");
   const quickAddRef = useRef(null);
 
   useEffect(() => {
@@ -199,10 +200,13 @@ function BoardColumn({
     event.preventDefault();
     if (!draftTitle.trim() || savingQuickAdd) return;
     setSavingQuickAdd(true);
+    setQuickAddError("");
     try {
       await onQuickAddTask(list.id, draftTitle.trim());
       setDraftTitle("");
       setQuickAddOpen(false);
+    } catch (error) {
+      setQuickAddError(error.message || "Could not add the card. Please try again.");
     } finally {
       setSavingQuickAdd(false);
     }
@@ -210,6 +214,7 @@ function BoardColumn({
 
   function cancelQuickAdd() {
     setDraftTitle("");
+    setQuickAddError("");
     setQuickAddOpen(false);
   }
 
@@ -271,12 +276,13 @@ function BoardColumn({
             ref={quickAddRef}
             id={"quick-add-" + list.id}
             value={draftTitle}
-            onChange={(event) => setDraftTitle(event.target.value)}
+            onChange={(event) => { setDraftTitle(event.target.value); setQuickAddError(""); }}
             onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); cancelQuickAdd(); } }}
             placeholder="Write a card title…"
             maxLength={180}
             disabled={savingQuickAdd}
           />
+          {quickAddError && <p className="column-quick-add-error" role="alert">{quickAddError}</p>}
           <div className="column-quick-add-actions">
             <button className="primary-button" type="submit" disabled={!draftTitle.trim() || savingQuickAdd}>{savingQuickAdd ? "Adding…" : "Add card"}</button>
             <button className="secondary-button" type="button" onClick={cancelQuickAdd} disabled={savingQuickAdd}>Cancel</button>
