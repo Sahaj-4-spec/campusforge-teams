@@ -14,22 +14,23 @@ function formatCommentDate(value) {
 }
 
 function inlineMarkdown(value) {
-  return value.split(/(\\*\\*[^*]+\\*\\*|\\`[^\\`]+\\`)/g).map((part, index) => {
-    if (part.startsWith("**") && part.endsWith("**")) return <strong key={index}>{part.slice(2, -2)}</strong>;
-    if (part.startsWith("\`") && part.endsWith("\`")) return <code key={index}>{part.slice(1, -1)}</code>;
-    return part;
+  return value.split("**").map((part, index) => {
+    const formatted = part.split("\`").map((segment, childIndex) =>
+      childIndex % 2 === 1 ? <code key={childIndex}>{segment}</code> : segment
+    );
+    return index % 2 === 1 ? <strong key={index}>{formatted}</strong> : <span key={index}>{formatted}</span>;
   });
 }
 
 function MarkdownDescription({ value }) {
-  const lines = value.split(/\\r?\\n/);
+  const lines = value.split("\n");
   return (
     <div className="task-markdown-content">
       {lines.map((line, index) => {
         if (!line.trim()) return <div className="task-markdown-spacer" key={index} />;
         if (line.startsWith("## ")) return <h4 key={index}>{inlineMarkdown(line.slice(3))}</h4>;
         if (line.startsWith("# ")) return <h3 key={index}>{inlineMarkdown(line.slice(2))}</h3>;
-        if (/^[-*] /.test(line)) return <p className="task-markdown-list-item" key={index}>• {inlineMarkdown(line.slice(2))}</p>;
+        if (line.startsWith("- ") || line.startsWith("* ")) return <p className="task-markdown-list-item" key={index}>• {inlineMarkdown(line.slice(2))}</p>;
         return <p key={index}>{inlineMarkdown(line)}</p>;
       })}
     </div>
