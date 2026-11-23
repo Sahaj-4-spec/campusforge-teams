@@ -19,6 +19,7 @@ import {
   FolderKanban,
   LayoutDashboard,
   ListTodo,
+  LockKeyhole,
   FileText,
   MessageSquare,
   LogOut,
@@ -39,7 +40,7 @@ import AuthScreen from "./components/AuthScreen.jsx";
 import HelpPage from "./components/HelpPage.jsx";
 import ProjectDialog from "./components/ProjectDialog.jsx";
 import { DashboardOverview, WorkspaceTimeline, WorkspaceReports } from "./components/WorkspaceViews.jsx";
-import { CalendarPage, NotificationsPage, FilesPage, ChatAndMeetingsPage } from "./components/WorkspaceFeatures.jsx";
+import { CalendarPage, NotificationsPage, FilesPage, SaveLockerPage, ChatAndMeetingsPage } from "./components/WorkspaceFeatures.jsx";
 import {
   authApi, boardApi, clearStoredWorkspaceId, createWorkspaceSocket,
   getStoredWorkspaceId, setStoredWorkspaceId, setWorkspaceSocketBoard,
@@ -53,6 +54,7 @@ const navigation = [
   { id: "Calendar", label: "Calendar", icon: CalendarDays },
   { id: "Notifications", label: "Notifications", icon: Bell },
   { id: "Files", label: "Files & docs", icon: FileText },
+  { id: "Save Locker", label: "Save Locker", icon: LockKeyhole },
   { id: "Chat", label: "Chat & notes", icon: MessageSquare },
   { id: "Team", label: "Team", icon: Users },
   { id: "Activity", label: "Timeline", icon: Activity },
@@ -1212,6 +1214,8 @@ export default function App() {
         return <NotificationsPage realtimeVersion={realtimeVersion} onChanged={() => notificationApi.list().then((result) => setUnreadNotifications(result.unread_count || 0)).catch(() => {})} />;
       case "Files":
         return <FilesPage data={data} realtimeVersion={realtimeVersion} />;
+      case "Save Locker":
+        return <SaveLockerPage data={data} />;
       case "Chat":
         return <ChatAndMeetingsPage data={data} realtimeVersion={realtimeVersion} />;
       case "Activity":

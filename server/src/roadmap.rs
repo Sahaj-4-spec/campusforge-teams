@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::{header, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, patch, post, put},
@@ -1098,9 +1098,320 @@ async fn workspace_presence(
     Ok(Json(rows))
 }
 
+const SAVE_LOCKER_MAX_ITEM_BYTES: usize = 9 * 1024 * 1024;
+const SAVE_LOCKER_MAX_TOTAL_BYTES: i64 = 50 * 1024 * 1024;
+const SAVE_LOCKER_MAX_ITEMS: i64 = 100;
+const SAVE_LOCKER_KDF_ITERATIONS: i32 = 600_000;
+
+fn valid_locker_base64(value: &str, min_len: usize, max_len: usize) -> bool {
+    if value.len() < min_len || value.len() > max_len || value.len() % 4 != 0 {
+        return false;
+    }
+    let padding_start = value.find('=').unwrap_or(value.len());
+    let data = &value.as_bytes()[..padding_start];
+    let padding = &value.as_bytes()[padding_start..];
+    data.iter().all(|byte| byte.is_ascii_alphanumeric() || *byte == b'+' || *byte == b'/')
+        && padding.len() <= 2
+        && padding.iter().all(|byte| *byte == b'=')
+}
+
+fn validate_locker_item(iv: &str, ciphertext: &str) -> ApiResult<i64> {
+    if !valid_locker_base64(iv, 16, 16) || iv.contains('=') {
+        return Err(fail(StatusCode::BAD_REQUEST, "Save Locker item IV is invalid"));
+    }
+    if !valid_locker_base64(ciphertext, 24, SAVE_LOCKER_MAX_ITEM_BYTES) {
+        return Err(fail(StatusCode::BAD_REQUEST, "Encrypted Save Locker item is invalid or exceeds the per-item limit"));
+    }
+    Ok(ciphertext.len() as i64)
+}
+
+#[derive(Debug, Serialize, FromRow)]
+struct SaveLockerVaultRow {
+    salt: String,
+    kdf_iterations: i32,
+    key_check_iv: String,
+    key_check_ciphertext: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct SaveLockerVaultState {
+    exists: bool,
+    vault: Option<SaveLockerVaultRow>,
+    item_count: i64,
+    used_bytes: i64,
+}
+
+async fn save_locker_vault_get(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+) -> ApiResult<Json<SaveLockerVaultState>> {
+    let vault = sqlx::query_as::<_, SaveLockerVaultRow>(
+        "SELECT salt,kdf_iterations,key_check_iv,key_check_ciphertext,created_at,updated_at
+           FROM save_locker_vaults WHERE user_id=$1",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not load Save Locker metadata"))?;
+
+    let (item_count, used_bytes) = if vault.is_some() {
+        sqlx::query_as::<_, (i64, i64)>(
+            "SELECT COUNT(*)::bigint,COALESCE(SUM(size_bytes),0)::bigint
+               FROM save_locker_items WHERE user_id=$1",
+        )
+        .bind(user_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|error| internal(error, "Could not load Save Locker usage"))?
+    } else {
+        (0, 0)
+    };
+
+    Ok(Json(SaveLockerVaultState {
+        exists: vault.is_some(),
+        vault,
+        item_count,
+        used_bytes,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct SaveLockerVaultCreateInput {
+    salt: String,
+    kdf_iterations: i32,
+    key_check_iv: String,
+    key_check_ciphertext: String,
+}
+
+async fn save_locker_vault_create(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+    Json(input): Json<SaveLockerVaultCreateInput>,
+) -> ApiResult<Json<SaveLockerVaultState>> {
+    if input.kdf_iterations != SAVE_LOCKER_KDF_ITERATIONS
+        || !valid_locker_base64(&input.salt, 24, 24)
+        || !input.salt.ends_with("==")
+        || !valid_locker_base64(&input.key_check_iv, 16, 16)
+        || input.key_check_iv.contains('=')
+        || !valid_locker_base64(&input.key_check_ciphertext, 24, 512)
+    {
+        return Err(fail(StatusCode::BAD_REQUEST, "Save Locker encryption parameters are invalid"));
+    }
+
+    let inserted = sqlx::query(
+        "INSERT INTO save_locker_vaults(user_id,salt,kdf_iterations,key_check_iv,key_check_ciphertext)
+         VALUES($1,$2,$3,$4,$5) ON CONFLICT(user_id) DO NOTHING",
+    )
+    .bind(user_id)
+    .bind(&input.salt)
+    .bind(input.kdf_iterations)
+    .bind(&input.key_check_iv)
+    .bind(&input.key_check_ciphertext)
+    .execute(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not create Save Locker"))?;
+
+    if inserted.rows_affected() == 0 {
+        return Err(fail(StatusCode::CONFLICT, "A Save Locker already exists for this account"));
+    }
+    save_locker_vault_get(State(state), AuthUser(user_id)).await
+}
+
+async fn save_locker_vault_delete(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+) -> ApiResult<StatusCode> {
+    sqlx::query("DELETE FROM save_locker_vaults WHERE user_id=$1")
+        .bind(user_id)
+        .execute(&state.db)
+        .await
+        .map_err(|error| internal(error, "Could not delete Save Locker"))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Serialize, FromRow)]
+struct SaveLockerItemRow {
+    id: Uuid,
+    iv: String,
+    ciphertext: String,
+    size_bytes: i64,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+async fn save_locker_items_list(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+) -> ApiResult<Json<Vec<SaveLockerItemRow>>> {
+    let rows = sqlx::query_as::<_, SaveLockerItemRow>(
+        "SELECT id,iv,ciphertext,size_bytes,created_at,updated_at
+           FROM save_locker_items WHERE user_id=$1 ORDER BY updated_at DESC LIMIT 100",
+    )
+    .bind(user_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|error| internal(error, "Could not load encrypted Save Locker items"))?;
+    Ok(Json(rows))
+}
+
+#[derive(Debug, Deserialize)]
+struct SaveLockerItemInput {
+    iv: String,
+    ciphertext: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SaveLockerItemCreateInput {
+    id: Uuid,
+    iv: String,
+    ciphertext: String,
+}
+
+async fn save_locker_item_create(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+    Json(input): Json<SaveLockerItemCreateInput>,
+) -> ApiResult<Json<SaveLockerItemRow>> {
+    let size_bytes = validate_locker_item(&input.iv, &input.ciphertext)?;
+    let mut tx = state.db.begin().await
+        .map_err(|error| internal(error, "Could not begin Save Locker item creation"))?;
+
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+        .bind(user_id.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| internal(error, "Could not lock Save Locker quota"))?;
+
+    let vault_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM save_locker_vaults WHERE user_id=$1)",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|error| internal(error, "Could not verify Save Locker"))?;
+    if !vault_exists {
+        return Err(fail(StatusCode::CONFLICT, "Create your Save Locker before saving an item"));
+    }
+
+    let (item_count, used_bytes): (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*)::bigint,COALESCE(SUM(size_bytes),0)::bigint
+           FROM save_locker_items WHERE user_id=$1",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|error| internal(error, "Could not check Save Locker quota"))?;
+    if item_count >= SAVE_LOCKER_MAX_ITEMS || used_bytes.saturating_add(size_bytes) > SAVE_LOCKER_MAX_TOTAL_BYTES {
+        return Err(fail(StatusCode::PAYLOAD_TOO_LARGE, "Save Locker is full. Remove an item before saving more."));
+    }
+
+    let item_id = input.id;
+    let row = sqlx::query_as::<_, SaveLockerItemRow>(
+        "INSERT INTO save_locker_items(id,user_id,iv,ciphertext,size_bytes)
+         VALUES($1,$2,$3,$4,$5)
+         RETURNING id,iv,ciphertext,size_bytes,created_at,updated_at",
+    )
+    .bind(item_id)
+    .bind(user_id)
+    .bind(&input.iv)
+    .bind(&input.ciphertext)
+    .bind(size_bytes)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|error| internal(error, "Could not save encrypted Save Locker item"))?;
+
+    tx.commit().await
+        .map_err(|error| internal(error, "Could not commit Save Locker item"))?;
+    Ok(Json(row))
+}
+
+async fn save_locker_item_update(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+    Path(item_id): Path<Uuid>,
+    Json(input): Json<SaveLockerItemInput>,
+) -> ApiResult<Json<SaveLockerItemRow>> {
+    let size_bytes = validate_locker_item(&input.iv, &input.ciphertext)?;
+    let mut tx = state.db.begin().await
+        .map_err(|error| internal(error, "Could not begin Save Locker item update"))?;
+
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+        .bind(user_id.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| internal(error, "Could not lock Save Locker quota"))?;
+
+    let current: Option<i64> = sqlx::query_scalar(
+        "SELECT size_bytes FROM save_locker_items WHERE id=$1 AND user_id=$2 FOR UPDATE",
+    )
+    .bind(item_id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|error| internal(error, "Could not find Save Locker item"))?;
+    if current.is_none() {
+        return Err(fail(StatusCode::NOT_FOUND, "Save Locker item not found"));
+    }
+
+    let used_bytes: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(size_bytes),0)::bigint FROM save_locker_items
+          WHERE user_id=$1 AND id<>$2",
+    )
+    .bind(user_id)
+    .bind(item_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|error| internal(error, "Could not check Save Locker quota"))?;
+    if used_bytes.saturating_add(size_bytes) > SAVE_LOCKER_MAX_TOTAL_BYTES {
+        return Err(fail(StatusCode::PAYLOAD_TOO_LARGE, "Save Locker is full. Remove an item before updating this one."));
+    }
+
+    let row = sqlx::query_as::<_, SaveLockerItemRow>(
+        "UPDATE save_locker_items SET iv=$3,ciphertext=$4,size_bytes=$5,updated_at=NOW()
+          WHERE id=$1 AND user_id=$2
+          RETURNING id,iv,ciphertext,size_bytes,created_at,updated_at",
+    )
+    .bind(item_id)
+    .bind(user_id)
+    .bind(&input.iv)
+    .bind(&input.ciphertext)
+    .bind(size_bytes)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|error| internal(error, "Could not update encrypted Save Locker item"))?;
+
+    tx.commit().await
+        .map_err(|error| internal(error, "Could not commit Save Locker item update"))?;
+    Ok(Json(row))
+}
+
+async fn save_locker_item_delete(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+    Path(item_id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    let result = sqlx::query("DELETE FROM save_locker_items WHERE id=$1 AND user_id=$2")
+        .bind(item_id)
+        .bind(user_id)
+        .execute(&state.db)
+        .await
+        .map_err(|error| internal(error, "Could not delete Save Locker item"))?;
+    if result.rows_affected() == 0 {
+        return Err(fail(StatusCode::NOT_FOUND, "Save Locker item not found"));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/presence",get(workspace_presence))
+        .merge(Router::new()
+            .route("/locker/vault",get(save_locker_vault_get).post(save_locker_vault_create).delete(save_locker_vault_delete))
+            .route("/locker/items",get(save_locker_items_list).post(save_locker_item_create))
+            .route("/locker/items/{item_id}",put(save_locker_item_update).delete(save_locker_item_delete))
+            .layer(DefaultBodyLimit::max(10 * 1024 * 1024)))
         .route("/tasks/search",get(search_tasks))
         .route("/analytics/history",get(analytics_history))
         .route("/analytics/export.csv",get(analytics_export))

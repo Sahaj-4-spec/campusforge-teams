@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bell, CalendarDays, Check, CheckCheck, ChevronDown, ChevronLeft, ChevronRight, Clock3, Download,
-  Eye, FileText, Folder, ListChecks, MessageCircle, Pencil, Pin, Plus, Send, ShieldCheck, Trash2, Upload, Users, X
+  Code2, Eye, FileText, Folder, KeyRound, Link2, Lock, LockKeyhole, ListChecks, MessageCircle, Pencil, Pin, Plus, Search, Send, ShieldCheck, Trash2, Upload, Users, X
 } from "lucide-react";
 import {
-  calendarApi, chatApi, filesApi, meetingNotesApi, notificationApi, presenceApi,
+  calendarApi, chatApi, filesApi, lockerApi, meetingNotesApi, notificationApi, presenceApi,
   sendWorkspaceSocketMessage, subscribeWorkspaceSocket
 } from "../lib/api.js";
+import { base64ToBytes, bytesToBase64, createLockerKeyCheck, decryptLockerPayload, deriveLockerKey, encryptLockerPayload, LOCKER_KDF_ITERATIONS, randomBytes, randomUuid, verifyLockerKey } from "../lib/lockerCrypto.js";
 
 const dateKey = (date) => {
   const value = new Date(date);
@@ -1076,6 +1077,422 @@ export function ChatAndMeetingsPage({ data, realtimeVersion = 0 }) {
           </div>
         )}
       </section>
+    </div>
+  );
+}
+
+
+const LOCKER_FILE_LIMIT_BYTES = 4 * 1024 * 1024;
+
+function lockerTypeIcon(type) {
+  if (type === "file") return FileText;
+  if (type === "link") return Link2;
+  if (type === "code") return Code2;
+  return FileText;
+}
+
+export function SaveLockerPage({ data }) {
+  const [vaultState, setVaultState] = useState(null);
+  const [unlockedKey, setUnlockedKey] = useState(null);
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [passphrase, setPassphrase] = useState("");
+  const [confirmPassphrase, setConfirmPassphrase] = useState("");
+  const [showPassphrase, setShowPassphrase] = useState(false);
+  const [search, setSearch] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [selectedItem, setSelectedItem] = useState(null);
+  const [form, setForm] = useState({
+    title: "", type: "note", projectId: "", url: "", content: "", language: "text"
+  });
+
+  useEffect(() => {
+    let active = true;
+    lockerApi.getVault()
+      .then((result) => { if (active) setVaultState(result); })
+      .catch((requestError) => { if (active) setError(requestError.message || "Could not load your Save Locker."); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, []);
+
+  async function decryptItemRows(key, rows) {
+    return Promise.all((rows || []).map(async (row) => {
+      try {
+        const payload = await decryptLockerPayload(key, row, "item:" + data.current_user_id + ":" + row.id);
+        return { ...row, payload, corrupt: false };
+      } catch {
+        return { ...row, payload: null, corrupt: true };
+      }
+    }));
+  }
+
+  async function refreshItems(key = unlockedKey) {
+    const rows = await lockerApi.listItems();
+    const decrypted = await decryptItemRows(key, rows);
+    setItems(decrypted);
+    setVaultState((current) => current ? {
+      ...current,
+      item_count: rows.length,
+      used_bytes: rows.reduce((total, row) => total + Number(row.size_bytes || 0), 0)
+    } : current);
+  }
+
+  async function createLocker(event) {
+    event.preventDefault();
+    setError("");
+    setNotice("");
+    if (passphrase.length < 12) {
+      setError("Choose a unique locker passphrase with at least 12 characters.");
+      return;
+    }
+    if (passphrase !== confirmPassphrase) {
+      setError("The passphrases do not match.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const salt = randomBytes(16);
+      const key = await deriveLockerKey(passphrase, salt);
+      const verifier = await createLockerKeyCheck(key, data.current_user_id);
+      const result = await lockerApi.createVault({
+        salt: bytesToBase64(salt),
+        kdf_iterations: LOCKER_KDF_ITERATIONS,
+        key_check_iv: verifier.iv,
+        key_check_ciphertext: verifier.ciphertext
+      });
+      setVaultState(result);
+      setUnlockedKey(key);
+      setPassphrase("");
+      setConfirmPassphrase("");
+      setNotice("Your encrypted Save Locker is ready.");
+      setItems([]);
+    } catch (requestError) {
+      setError(requestError.message || "Could not create your Save Locker.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function unlockLocker(event) {
+    event.preventDefault();
+    setError("");
+    setNotice("");
+    if (!vaultState?.vault) return;
+    setBusy(true);
+    try {
+      const salt = base64ToBytes(vaultState.vault.salt);
+      const key = await deriveLockerKey(passphrase, salt);
+      const valid = await verifyLockerKey(key, {
+        iv: vaultState.vault.key_check_iv,
+        ciphertext: vaultState.vault.key_check_ciphertext
+      }, data.current_user_id);
+      setPassphrase("");
+      if (!valid) throw new Error("That locker passphrase is incorrect.");
+      setUnlockedKey(key);
+      await refreshItems(key);
+      setNotice("Save Locker unlocked on this device.");
+    } catch (requestError) {
+      setError(requestError.message || "Could not unlock your Save Locker.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function lockLocker() {
+    setUnlockedKey(null);
+    setItems([]);
+    setPassphrase("");
+    setConfirmPassphrase("");
+    setSearch("");
+    setSelectedItem(null);
+    setShowForm(false);
+    setNotice("Save Locker locked. Its key has been cleared from this page.");
+  }
+
+  async function resetLocker() {
+    const confirmed = window.confirm(
+      "Permanently delete this Save Locker and every encrypted item in it? This cannot be undone."
+    );
+    if (!confirmed) return;
+    setBusy(true);
+    setError("");
+    try {
+      await lockerApi.deleteVault();
+      setUnlockedKey(null);
+      setItems([]);
+      setSelectedItem(null);
+      setVaultState({ exists: false, vault: null, item_count: 0, used_bytes: 0 });
+      setNotice("Save Locker deleted. You can create a new one with a new passphrase.");
+    } catch (requestError) {
+      setError(requestError.message || "Could not delete Save Locker.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveItem(event) {
+    event.preventDefault();
+    if (!unlockedKey) return;
+    setError("");
+    setNotice("");
+    if (!form.title.trim()) {
+      setError("Add a title for this item.");
+      return;
+    }
+    if ((form.type === "note" || form.type === "code") && !form.content.trim()) {
+      setError("Add some content before saving.");
+      return;
+    }
+    if (form.type === "link") {
+      try {
+        const parsed = new URL(form.url);
+        if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("invalid protocol");
+      } catch {
+        setError("Enter a valid HTTP or HTTPS link.");
+        return;
+      }
+    }
+    if (form.type === "file" && !selectedFile) {
+      setError("Choose a file to save.");
+      return;
+    }
+    if (selectedFile && selectedFile.size > LOCKER_FILE_LIMIT_BYTES) {
+      setError("Locker files are limited to 4 MB each.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const project = data.boards.find((board) => board.id === form.projectId);
+      const payload = {
+        version: 1,
+        title: form.title.trim(),
+        type: form.type,
+        project: project ? { id: project.id, name: project.name } : null,
+        content: form.content,
+        url: form.type === "link" ? form.url.trim() : "",
+        language: form.type === "code" ? form.language : "",
+        file: form.type === "file" && selectedFile ? {
+          name: selectedFile.name,
+          media_type: selectedFile.type || "application/octet-stream",
+          data: bytesToBase64(await selectedFile.arrayBuffer())
+        } : null
+      };
+      const itemId = randomUuid();
+      const encrypted = await encryptLockerPayload(unlockedKey, payload, "item:" + data.current_user_id + ":" + itemId);
+      const saved = await lockerApi.createItem({ id: itemId, ...encrypted });
+      setItems((current) => [{ ...saved, payload, corrupt: false }, ...current]);
+      setVaultState((current) => current ? {
+        ...current,
+        item_count: Number(current.item_count || 0) + 1,
+        used_bytes: Number(current.used_bytes || 0) + Number(saved.size_bytes || encrypted.ciphertext.length)
+      } : current);
+      setForm({ title: "", type: "note", projectId: "", url: "", content: "", language: "text" });
+      setSelectedFile(null);
+      setShowForm(false);
+      setNotice("Item encrypted and saved to your locker.");
+    } catch (requestError) {
+      setError(requestError.message || "Could not save this item.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteItem(item) {
+    const title = item.payload?.title || "this encrypted item";
+    if (!window.confirm("Delete " + title + " permanently?")) return;
+    setError("");
+    try {
+      await lockerApi.removeItem(item.id);
+      setItems((current) => current.filter((row) => row.id !== item.id));
+      if (selectedItem?.id === item.id) setSelectedItem(null);
+      setVaultState((current) => current ? {
+        ...current,
+        item_count: Math.max(0, Number(current.item_count || 0) - 1),
+        used_bytes: Math.max(0, Number(current.used_bytes || 0) - Number(item.size_bytes || 0))
+      } : current);
+      setNotice("Encrypted item deleted.");
+    } catch (requestError) {
+      setError(requestError.message || "Could not delete this item.");
+    }
+  }
+
+  function downloadItem(item) {
+    if (!item.payload?.file?.data) return;
+    try {
+      const bytes = base64ToBytes(item.payload.file.data);
+      const blob = new Blob([bytes], { type: item.payload.file.media_type || "application/octet-stream" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = item.payload.file.name || item.payload.title || "locker-file";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch {
+      setError("This encrypted file could not be prepared for download.");
+    }
+  }
+
+  const filteredItems = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return items;
+    return items.filter((item) => {
+      if (item.corrupt || !item.payload) return false;
+      const payload = item.payload;
+      return [payload.title, payload.project?.name, payload.content, payload.url]
+        .filter(Boolean).join(" ").toLowerCase().includes(query);
+    });
+  }, [items, search]);
+
+  if (loading) {
+    return <div className="feature-page"><PageHeading eyebrow="PRIVATE STORAGE" title="Save Locker" subtitle="Loading your encrypted personal locker…" /><section className="ref-panel"><p className="feature-muted">Checking your locker status…</p></section></div>;
+  }
+
+  if (!vaultState?.exists) {
+    return (
+      <div className="feature-page">
+        <PageHeading eyebrow="PRIVATE STORAGE" title="Save Locker" subtitle="A personal vault for important project notes, links, code snippets and files." />
+        <section className="ref-panel locker-access-panel">
+          <div className="locker-access-icon"><LockKeyhole size={25} /></div>
+          <h2>Create your private locker</h2>
+          <p>Choose a separate passphrase. CampusForge encrypts your items in this browser before anything is sent to the server.</p>
+          <form className="locker-access-form" onSubmit={createLocker}>
+            <label>Locker passphrase
+              <input type="password" value={passphrase} onChange={(event) => setPassphrase(event.target.value)} autoComplete="new-password" minLength={12} required />
+            </label>
+            <label>Confirm locker passphrase
+              <input type="password" value={confirmPassphrase} onChange={(event) => setConfirmPassphrase(event.target.value)} autoComplete="new-password" minLength={12} required />
+            </label>
+            {error && <p className="auth-error" role="alert">{error}</p>}
+            <button className="ref-primary-button" type="submit" disabled={busy || passphrase.length < 12 || !confirmPassphrase}>
+              <KeyRound size={15} /> {busy ? "Creating encrypted locker…" : "Create Save Locker"}
+            </button>
+          </form>
+          <div className="locker-warning"><ShieldCheck size={16} /><span>Use a unique, long passphrase that you can remember. It is not your CampusForge login password.</span></div>
+          <p className="locker-recovery-warning">There is no password reset or recovery key. If you forget this passphrase, your saved items cannot be decrypted. Keep a safe copy of the passphrase.</p>
+        </section>
+        {error && <p className="auth-error" role="alert">{error}</p>}
+      </div>
+    );
+  }
+
+  if (!unlockedKey) {
+    return (
+      <div className="feature-page">
+        <PageHeading eyebrow="PRIVATE STORAGE" title="Save Locker" subtitle="Your items are encrypted. Unlock the locker to view them on this device." />
+        <section className="ref-panel locker-access-panel">
+          <div className="locker-access-icon"><Lock size={25} /></div>
+          <h2>Unlock your locker</h2>
+          <p>Enter the separate passphrase you used when this locker was created.</p>
+          <form className="locker-access-form" onSubmit={unlockLocker}>
+            <label>Locker passphrase
+              <input type="password" value={passphrase} onChange={(event) => setPassphrase(event.target.value)} autoComplete="current-password" required />
+            </label>
+            {error && <p className="auth-error" role="alert">{error}</p>}
+            <button className="ref-primary-button" type="submit" disabled={busy || !passphrase}>
+              <LockKeyhole size={15} /> {busy ? "Unlocking…" : "Unlock Save Locker"}
+            </button>
+          </form>
+          <div className="locker-warning"><ShieldCheck size={16} /><span>The decryption key stays in this page's memory and is not saved to your account or browser storage.</span></div>
+          <button className="locker-reset-button" type="button" onClick={resetLocker} disabled={busy}>Forgot passphrase? Delete this locker and start again</button>
+        </section>
+      </div>
+    );
+  }
+
+  return (
+    <div className="feature-page">
+      <PageHeading
+        eyebrow="PRIVATE STORAGE"
+        title="Save Locker"
+        subtitle="Your personal project vault. Items are decrypted locally only while this locker is unlocked."
+        action={<button className="secondary-button" type="button" onClick={lockLocker}><Lock size={15} /> Lock locker</button>}
+      />
+      <section className="locker-security-banner">
+        <ShieldCheck size={19} />
+        <div><strong>End-to-end encrypted</strong><span>Only this browser session holds the key. Server storage contains encrypted item data, not readable project content.</span></div>
+        <span className="locker-encryption-label">AES-256-GCM</span>
+      </section>
+      <div className="locker-summary-row">
+        <div className="ref-panel locker-summary"><strong>{items.length}</strong><span>Encrypted items</span></div>
+        <div className="ref-panel locker-summary"><strong>{formatBytes(items.reduce((sum, item) => sum + Number(item.size_bytes || 0), 0))}</strong><span>Encrypted storage used</span></div>
+        <div className="ref-panel locker-summary"><strong>100</strong><span>Item limit</span></div>
+      </div>
+      <div className="locker-toolbar">
+        <label className="locker-search"><Search size={16} /><input aria-label="Search decrypted locker items" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search your saved items…" /></label>
+        <button className="ref-primary-button" type="button" onClick={() => { setShowForm((value) => !value); setError(""); }}>
+          <Plus size={15} /> {showForm ? "Close form" : "Save an item"}
+        </button>
+      </div>
+      {notice && <p className="locker-notice" role="status">{notice}</p>}
+      {error && <p className="auth-error" role="alert">{error}</p>}
+      {showForm && (
+        <section className="ref-panel locker-compose-panel">
+          <div className="ref-panel-title"><h2><Plus size={16} /> Save a project item</h2><span className="feature-file-limit">Encrypted before upload</span></div>
+          <form className="locker-compose-form" onSubmit={saveItem}>
+            <div className="locker-form-grid">
+              <label>Item title<input value={form.title} onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))} maxLength={160} required /></label>
+              <label>Item type<select value={form.type} onChange={(event) => { setForm((current) => ({ ...current, type: event.target.value })); setSelectedFile(null); }}><option value="note">Note</option><option value="link">Link</option><option value="code">Code snippet</option><option value="file">File</option></select></label>
+              <label className="locker-project-field">Related project (optional)<select value={form.projectId} onChange={(event) => setForm((current) => ({ ...current, projectId: event.target.value }))}><option value="">Personal / unassigned</option>{(data.boards || []).map((board) => <option value={board.id} key={board.id}>{board.name}</option>)}</select></label>
+              {form.type === "link" && <label className="locker-project-field">URL<input type="url" value={form.url} onChange={(event) => setForm((current) => ({ ...current, url: event.target.value }))} placeholder="https://…" required /></label>}
+              {form.type === "code" && <label>Language<input value={form.language} onChange={(event) => setForm((current) => ({ ...current, language: event.target.value }))} placeholder="Rust, JavaScript, SQL…" maxLength={40} /></label>}
+            </div>
+            {form.type === "file" ? (
+              <label className="locker-file-picker"><Upload size={20} /><strong>{selectedFile?.name || "Choose a file to encrypt"}</strong><small>Files up to 4 MB. File name and contents are encrypted together.</small><input type="file" onChange={(event) => setSelectedFile(event.target.files?.[0] || null)} required /></label>
+            ) : (
+              <label className="locker-content-field">{form.type === "link" ? "Description (optional)" : form.type === "code" ? "Code" : "Note content"}
+                <textarea rows={form.type === "code" ? 9 : 6} value={form.content} onChange={(event) => setForm((current) => ({ ...current, content: event.target.value }))} maxLength={200000} required={form.type !== "link"} placeholder={form.type === "code" ? "Paste your code snippet…" : form.type === "link" ? "Why did you save this link?" : "Write your private project note…"} />
+              </label>
+            )}
+            <div className="dialog-actions">
+              <span className="muted-copy">Titles, project names, links and file details are encrypted.</span>
+              <button className="ref-primary-button" type="submit" disabled={busy || !form.title.trim()}><LockKeyhole size={15} /> {busy ? "Encrypting and saving…" : "Encrypt & save"}</button>
+            </div>
+          </form>
+        </section>
+      )}
+      {filteredItems.length ? (
+        <div className="locker-grid">
+          {filteredItems.map((item) => {
+            const Icon = lockerTypeIcon(item.payload?.type);
+            return (
+              <article className={"locker-item-card" + (item.corrupt ? " locker-item-corrupt" : "")} key={item.id}>
+                <div className="locker-card-top"><span className="locker-card-icon"><Icon size={17} /></span><span className="locker-type">{item.corrupt ? "Unreadable" : item.payload?.type || "Item"}</span><button className="feature-icon-button" type="button" onClick={() => deleteItem(item)} aria-label="Delete encrypted item"><Trash2 size={15} /></button></div>
+                <h3>{item.corrupt ? "Encrypted item could not be opened" : item.payload?.title || "Untitled item"}</h3>
+                <p>{item.corrupt ? "This item may be damaged or encrypted with another key." : item.payload?.project?.name || "Personal item"}</p>
+                <div className="locker-card-bottom"><small>{displayDate(item.updated_at, { month: "short", day: "numeric", year: "numeric" })}</small><button type="button" className="text-button" onClick={() => setSelectedItem(item)} disabled={item.corrupt}>Open <Eye size={14} /></button></div>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="locker-empty"><LockKeyhole size={25} /><strong>{search ? "No matching saved items" : "Your locker is empty"}</strong><span>{search ? "Try a different search." : "Save a note, link, code snippet or project file. It is encrypted before it leaves your browser."}</span></div>
+      )}
+      <div className="locker-footer-actions">
+        <span>Encrypted storage: {formatBytes(items.reduce((sum, item) => sum + Number(item.size_bytes || 0), 0))} of 50 MB</span>
+        <button type="button" className="locker-reset-button" onClick={resetLocker} disabled={busy}>Delete locker and all items</button>
+      </div>
+      {selectedItem && !selectedItem.corrupt && (
+        <div className="locker-modal-backdrop" role="presentation" onClick={() => setSelectedItem(null)}>
+          <section className="locker-modal" role="dialog" aria-modal="true" aria-label={selectedItem.payload.title} onClick={(event) => event.stopPropagation()}>
+            <div className="feature-modal-heading"><div><p className="ref-eyebrow">DECRYPTED LOCALLY</p><strong>{selectedItem.payload.title}</strong></div><button className="feature-icon-button" type="button" onClick={() => setSelectedItem(null)} aria-label="Close item"><X size={17} /></button></div>
+            <div className="locker-modal-meta"><span>{selectedItem.payload.type}</span><span>{selectedItem.payload.project?.name || "Personal item"}</span></div>
+            {selectedItem.payload.type === "link" && <p><a href={selectedItem.payload.url} target="_blank" rel="noopener noreferrer">{selectedItem.payload.url}</a></p>}
+            {selectedItem.payload.type === "file" && (
+              <div className="locker-file-download"><FileText size={22} /><strong>{selectedItem.payload.file?.name || selectedItem.payload.title}</strong><button className="ref-primary-button" type="button" onClick={() => downloadItem(selectedItem)}><Download size={15} /> Decrypt & download</button></div>
+            )}
+            {selectedItem.payload.content && <pre className={"locker-modal-content" + (selectedItem.payload.type === "code" ? " locker-code-content" : "")}>{selectedItem.payload.content}</pre>}
+            {selectedItem.payload.type === "code" && selectedItem.payload.language && <small className="locker-language">Language: {selectedItem.payload.language}</small>}
+            <div className="dialog-actions"><span className="muted-copy">This content is decrypted only in this browser session.</span><button className="secondary-button" type="button" onClick={() => deleteItem(selectedItem)}><Trash2 size={14} /> Delete item</button></div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
