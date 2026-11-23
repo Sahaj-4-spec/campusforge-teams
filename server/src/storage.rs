@@ -59,7 +59,7 @@ fn object_url(backend: &S3Backend, key: &str) -> Result<Url, String> {
         if url.scheme() != "https" && !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1")) {
             return Err("S3-compatible endpoints must use HTTPS outside localhost".to_string());
         }
-        let base = url.path().trim_end_matches('/');
+        let base = url.path().trim_end_matches('/').to_owned();
         if backend.virtual_host_style {
             let host = url.host_str().ok_or_else(|| "The S3-compatible endpoint host is missing".to_string())?;
             url.set_host(Some(&format!("{}.{}", backend.bucket, host)))
