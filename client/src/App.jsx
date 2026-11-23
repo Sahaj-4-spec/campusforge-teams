@@ -269,7 +269,7 @@ function MyTasksPage({ data, onOpenTask, search }) {
   const [dueAfter, setDueAfter] = useState("");
   const [dueBefore, setDueBefore] = useState("");
   const [tasks, setTasks] = useState([]);
-  const [loading, setLoading] = useState(() => !hasOAuthError);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -682,7 +682,7 @@ export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(() => !hasOAuthError);
   const [data, setData] = useState(null);
   const [invitations, setInvitations] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !hasOAuthError);
   const [loadError, setLoadError] = useState("");
   const [activeView, setActiveView] = useState("Overview");
   const [activeBoardId, setActiveBoardId] = useState("");
