@@ -1,16 +1,26 @@
-use serde::Serialize;
-use sqlx::PgPool;
+use serde::{Deserialize, Serialize};
+use sqlx::{postgres::PgListener, PgPool};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
 /// An update emitted after a workspace change has been committed to PostgreSQL.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkspaceEvent {
     pub workspace_id: Uuid,
     pub board_id: Option<Uuid>,
+    #[serde(default)]
+    pub actor_user_id: Option<Uuid>,
+    #[serde(default)]
+    pub recipient_user_id: Option<Uuid>,
     pub event_type: String,
     pub description: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Deserialize)]
+struct WorkspaceEventEnvelope {
+    origin_instance_id: Uuid,
+    event: WorkspaceEvent,
 }
 
 /// Shared application state injected into Axum handlers.
@@ -20,6 +30,7 @@ pub struct AppState {
     pub jwt_secret: String,
     pub storage: crate::storage::StorageService,
     pub workspace_events: broadcast::Sender<WorkspaceEvent>,
+    pub instance_id: Uuid,
 }
 
 impl AppState {
@@ -30,6 +41,7 @@ impl AppState {
             jwt_secret,
             storage,
             workspace_events,
+            instance_id: Uuid::new_v4(),
         }
     }
 
@@ -40,12 +52,125 @@ impl AppState {
         event_type: impl Into<String>,
         description: impl Into<String>,
     ) {
-        let _ = self.workspace_events.send(WorkspaceEvent {
+        self.publish_event(workspace_id,board_id,None,None,event_type,description);
+    }
+
+    pub fn publish_user_workspace_event(
+        &self,
+        workspace_id: Uuid,
+        board_id: Option<Uuid>,
+        actor_user_id: Option<Uuid>,
+        event_type: impl Into<String>,
+        description: impl Into<String>,
+    ) {
+        self.publish_event(workspace_id,board_id,actor_user_id,None,event_type,description);
+    }
+
+    /// Publish an event that is delivered only to one workspace member.
+    /// Used for private direct-message notifications so other workspace
+    /// members cannot infer private conversation activity.
+    pub fn publish_private_workspace_event(
+        &self,
+        workspace_id: Uuid,
+        recipient_user_id: Uuid,
+        actor_user_id: Option<Uuid>,
+        event_type: impl Into<String>,
+        description: impl Into<String>,
+    ) {
+        self.publish_event(workspace_id,None,actor_user_id,Some(recipient_user_id),event_type,description);
+    }
+
+    fn publish_event(
+        &self,
+        workspace_id: Uuid,
+        board_id: Option<Uuid>,
+        actor_user_id: Option<Uuid>,
+        recipient_user_id: Option<Uuid>,
+        event_type: impl Into<String>,
+        description: impl Into<String>,
+    ) {
+        let event = WorkspaceEvent {
             workspace_id,
             board_id,
+            actor_user_id,
+            recipient_user_id,
             event_type: event_type.into(),
             description: description.into(),
             created_at: chrono::Utc::now(),
+        };
+        let _ = self.workspace_events.send(event.clone());
+
+        let db = self.db.clone();
+        let envelope = WorkspaceEventEnvelopeOwned {
+            origin_instance_id: self.instance_id,
+            event,
+        };
+        let Ok(payload) = serde_json::to_string(&envelope) else { return; };
+        tokio::spawn(async move {
+            if let Err(error) = sqlx::query("SELECT pg_notify('campusforge_workspace_events',$1)")
+                .bind(payload)
+                .execute(&db)
+                .await
+            {
+                tracing::warn!(%error, "Could not publish workspace event through PostgreSQL");
+            }
         });
+    }
+}
+
+#[derive(Serialize)]
+struct WorkspaceEventEnvelopeOwned {
+    origin_instance_id: Uuid,
+    event: WorkspaceEvent,
+}
+
+/// Relay cross-instance workspace notifications into the local WebSocket
+/// broadcast channel. PostgreSQL NOTIFY is a signal only; persistent data
+/// remains in PostgreSQL and clients reload through the authorized REST API.
+pub async fn run_postgres_workspace_listener(state: AppState) {
+    let mut listener = loop {
+        match PgListener::connect_with(&state.db).await {
+            Ok(mut listener) => {
+                match listener.listen("campusforge_workspace_events").await {
+                    Ok(()) => break listener,
+                    Err(error) => {
+                        tracing::error!(%error, "Could not subscribe to workspace events");
+                    }
+                }
+            }
+            Err(error) => tracing::error!(%error, "Could not connect workspace event listener"),
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    };
+
+    loop {
+        match listener.recv().await {
+            Ok(message) => {
+                let envelope = match serde_json::from_str::<WorkspaceEventEnvelope>(message.payload()) {
+                    Ok(envelope) => envelope,
+                    Err(error) => {
+                        tracing::warn!(%error, "Ignoring malformed workspace event notification");
+                        continue;
+                    }
+                };
+                if envelope.origin_instance_id != state.instance_id {
+                    let _ = state.workspace_events.send(envelope.event);
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "Workspace event listener disconnected; reconnecting");
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                loop {
+                    match PgListener::connect_with(&state.db).await {
+                        Ok(mut next) => match next.listen("campusforge_workspace_events").await {
+                            Ok(()) => { listener = next; break; }
+                            Err(error) => tracing::error!(%error, "Could not restore workspace event subscription"),
+                        },
+                        Err(error) => tracing::error!(%error, "Could not reconnect workspace event listener"),
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                }
+            }
+        }
     }
 }
