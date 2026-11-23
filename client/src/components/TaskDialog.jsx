@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Activity, AtSign, CalendarDays, CornerDownRight, MessageCircle, Reply, Trash2, X } from "lucide-react";
 import TaskAdvancedPanel from "./TaskAdvancedPanel.jsx";
 import { sendWorkspaceSocketMessage } from "../lib/api.js";
+import { createId } from "../data/demoData.js";
 
 function formatCommentDate(value) {
   if (!value) return "";
@@ -54,7 +55,8 @@ export default function TaskDialog({
   onAdvancedChanged,
   refreshKey = 0,
   activityEvents = [],
-  demoMode = false
+  demoMode = false,
+  onDemoTaskUpdate
 }) {
   const [mounted, setMounted] = useState(open);
   const [form, setForm] = useState({
@@ -69,6 +71,8 @@ export default function TaskDialog({
   const [commentDraft, setCommentDraft] = useState("");
   const [replyToCommentId, setReplyToCommentId] = useState("");
   const [mentionUserId, setMentionUserId] = useState("");
+  const [demoChecklistDraft, setDemoChecklistDraft] = useState("");
+  const [demoLabelDraft, setDemoLabelDraft] = useState("");
   const dialogWasOpen = useRef(false);
   const lastTaskIdentity = useRef(null);
 
@@ -148,6 +152,28 @@ export default function TaskDialog({
   }, [open, onClose]);
 
   if (!mounted) return null;
+
+  function updateDemoTask(updates) {
+    if (task?.id && demoMode) onDemoTaskUpdate?.(task.id, updates);
+  }
+
+  function addDemoChecklistItem(event) {
+    event.preventDefault();
+    if (!demoChecklistDraft.trim() || !task) return;
+    updateDemoTask({
+      checklist: [...(task.checklist || []), { id: createId(), title: demoChecklistDraft.trim(), is_done: false }]
+    });
+    setDemoChecklistDraft("");
+  }
+
+  function addDemoLabel(event) {
+    event.preventDefault();
+    if (!demoLabelDraft.trim() || !task) return;
+    updateDemoTask({
+      labels: [...(task.labels || []), { id: createId(), name: demoLabelDraft.trim(), color: "#8A78D6" }]
+    });
+    setDemoLabelDraft("");
+  }
 
   function updateField(event) {
     const { name, value } = event.target;
@@ -331,6 +357,50 @@ export default function TaskDialog({
         </form>
 
         {task && !demoMode && <TaskAdvancedPanel task={task} lists={lists} tasks={allTasks} onChanged={onAdvancedChanged} refreshKey={refreshKey} />}
+
+        {task && demoMode && (
+          <section className="demo-task-metadata" aria-label="Demo labels and checklist">
+            <div className="comments-heading"><h3>Labels</h3><span>{(task.labels || []).length}</span></div>
+            <div className="demo-task-labels">
+              {(task.labels || []).map((label) => (
+                <button
+                  type="button"
+                  key={label.id}
+                  className="demo-task-label"
+                  style={{ "--label-color": label.color || "#8A78D6" }}
+                  onClick={() => updateDemoTask({ labels: (task.labels || []).filter((item) => item.id !== label.id) })}
+                  aria-label={"Remove label " + label.name}
+                >{label.name}<X size={11} /></button>
+              ))}
+              {!(task.labels || []).length && <span className="feature-muted">No labels yet.</span>}
+            </div>
+            <form className="demo-task-inline-add" onSubmit={addDemoLabel}>
+              <input value={demoLabelDraft} onChange={(event) => setDemoLabelDraft(event.target.value)} placeholder="Add a label…" maxLength={40} aria-label="New label name" />
+              <button className="secondary-button" type="submit" disabled={!demoLabelDraft.trim()}>Add label</button>
+            </form>
+
+            <div className="comments-heading demo-task-checklist-heading"><h3>Checklist</h3><span className="tabular-nums">{(task.checklist || []).filter((item) => item.is_done || item.completed).length}/{(task.checklist || []).length}</span></div>
+            <div className="demo-task-checklist">
+              {(task.checklist || []).map((item) => (
+                <label className="demo-task-checklist-item" key={item.id}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(item.is_done || item.completed)}
+                    onChange={(event) => updateDemoTask({
+                      checklist: (task.checklist || []).map((row) => row.id === item.id ? { ...row, is_done: event.target.checked } : row)
+                    })}
+                  />
+                  <span className={item.is_done || item.completed ? "completed" : ""}>{item.title}</span>
+                </label>
+              ))}
+              {!(task.checklist || []).length && <span className="feature-muted">No checklist items yet.</span>}
+            </div>
+            <form className="demo-task-inline-add" onSubmit={addDemoChecklistItem}>
+              <input value={demoChecklistDraft} onChange={(event) => setDemoChecklistDraft(event.target.value)} placeholder="Add a checklist item…" maxLength={180} aria-label="New checklist item" />
+              <button className="secondary-button" type="submit" disabled={!demoChecklistDraft.trim()}>Add item</button>
+            </form>
+          </section>
+        )}
 
         {task && activityEvents.length > 0 && (
           <section className="task-activity-section" aria-label="Card activity">
