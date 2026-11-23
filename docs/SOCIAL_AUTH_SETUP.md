@@ -1,6 +1,6 @@
 # CampusForge Teams — Social Sign-in Setup
 
-CampusForge keeps email/password sign-in and adds server-side OAuth sign-in with Google, GitHub, and Discord. Provider client secrets stay on the Rust API server; they must never be placed in frontend environment variables or committed to Git.
+CampusForge creates new accounts only through server-side OAuth sign-in with Google, GitHub, or Discord. The API requires the provider to confirm that the account email is verified before it creates a CampusForge user. Existing email/password accounts can still sign in, but password-only registration is disabled. Provider client secrets stay on the Rust API server; they must never be placed in frontend environment variables or committed to Git.
 
 ## 1. Configure the local environment
 
@@ -36,8 +36,10 @@ Create an application in the Discord Developer Portal and configure the OAuth2 r
 
 ## 5. Account behavior and security
 
-- Existing email/password accounts are not automatically linked to a provider, even when the verified email matches. Users must sign in through the existing account method first.
-- New provider-only accounts are created with a NULL password hash; email/password login remains unchanged for password accounts.
+- New self-service accounts can be created only by completing Google, GitHub, or Discord OAuth with a provider-verified email address. `POST /api/auth/register` is retained for compatibility but rejects new registrations.
+- The API records `users.email_verified_at` when a verified provider identity creates the account. Existing provider accounts are backfilled from their OAuth account creation timestamp.
+- Existing email/password accounts can continue to sign in, but they are not automatically linked to a provider, even when the verified email matches. Users must sign in through the existing account method first.
+- New provider-only accounts have a NULL password hash; email/password login remains available for existing password accounts.
 - OAuth state is a high-entropy random value. Only its SHA-256 hash is stored, and it is deleted when used or allowed to expire after ten minutes.
 - Provider access tokens are used only to fetch the user's verified identity and are not saved.
 - The API issues the same 24-hour CampusForge session JWT for email/password and OAuth sign-in, but sends it only in an HttpOnly `campusforge_session` cookie. The token is not returned in the JSON body or placed in the redirect URL.
@@ -50,15 +52,16 @@ Create an application in the Discord Developer Portal and configure the OAuth2 r
 
 ## 6. Test checklist
 
-1. Register and sign in using email/password.
-2. Sign in with each configured provider using a previously unseen email.
-3. Attempt sign-in with a second provider whose verified email belongs to an existing CampusForge user; confirm automatic linking is rejected and the user is instructed to sign in through the existing method.
+1. Try `POST /api/auth/register`; confirm it rejects password-only account creation.
+2. Create a new account with each configured provider using a previously unseen email; confirm the account is created only after the provider reports the email as verified.
+3. Sign out and sign in again with each provider.
+4. Attempt sign-in with a second provider whose verified email belongs to an existing CampusForge user; confirm automatic linking is rejected and the user is instructed to sign in through the existing method.
 4. Try a provider account with no verified email; confirm sign-in is rejected.
 5. Replay an OAuth callback state value; confirm it is rejected.
 6. Start OAuth in one browser and attempt to complete the callback in a different browser; confirm the browser-bound HttpOnly cookie check rejects it.
 7. Try signing in with a provider whose verified email already belongs to a local CampusForge account that is not linked to that provider; confirm the server asks the user to authenticate with their existing method instead of silently linking accounts.
-6. Confirm a successful first sign-in creates a default workspace when the workspace endpoint is opened.
-7. Confirm missing provider secrets show a friendly message instead of a raw API error.
+8. Confirm a successful first sign-in creates a default workspace when the workspace endpoint is opened.
+9. Confirm missing provider secrets show a friendly message instead of a raw API error.
 
 
 ## Account-linking safety
