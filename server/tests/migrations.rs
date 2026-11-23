@@ -96,6 +96,99 @@ async fn applies_all_postgres_migrations_and_creates_collaboration_tables() {
     .expect("first provider attempt timestamp should be readable");
     assert!(first_attempt_timestamp_exists);
 
+    // Database-level policy must block password-only inserts even when an old API
+    // instance still exposes the legacy registration handler.
+    let rejected_user_id = uuid::Uuid::new_v4();
+    let rejected_email = format!("{}@example.test", uuid::Uuid::new_v4());
+    let password_insert_error = sqlx::query(
+        "INSERT INTO users(id,email,password_hash,full_name)
+         VALUES($1,$2,'legacy-password-hash','Rejected Password User')",
+    )
+    .bind(rejected_user_id)
+    .bind(rejected_email)
+    .execute(&pool)
+    .await
+    .expect_err("password-only user inserts must be rejected by the database");
+    assert_eq!(
+        password_insert_error
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("23514"),
+        "password-only user insert should fail with a check-constraint SQLSTATE"
+    );
+
+    // A passwordless row is not enough by itself: require an OAuth identity in
+    // the same transaction before it can commit.
+    let unlinked_user_id = uuid::Uuid::new_v4();
+    let unlinked_email = format!("{}@example.test", uuid::Uuid::new_v4());
+    let mut unlinked_tx = pool.begin().await.expect("unlinked user transaction should start");
+    sqlx::query(
+        "INSERT INTO users(id,email,password_hash,full_name)
+         VALUES($1,$2,NULL,'Unlinked Test User')",
+    )
+    .bind(unlinked_user_id)
+    .bind(unlinked_email)
+    .execute(&mut *unlinked_tx)
+    .await
+    .expect("passwordless insert should be deferred until transaction commit");
+    let unlinked_commit_error = unlinked_tx
+        .commit()
+        .await
+        .expect_err("passwordless users without OAuth identities must not commit");
+    assert_eq!(
+        unlinked_commit_error
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("23514"),
+        "missing OAuth identity should fail with a check-constraint SQLSTATE"
+    );
+
+    // A verified OAuth identity may be inserted after its user in the same
+    // transaction, matching the existing server flow and older OAuth binaries.
+    let verified_user_id = uuid::Uuid::new_v4();
+    let verified_email = format!("{}@example.test", uuid::Uuid::new_v4());
+    let provider_user_id = format!("migration-test-{}", uuid::Uuid::new_v4());
+    let mut verified_tx = pool.begin().await.expect("verified OAuth transaction should start");
+    sqlx::query(
+        "INSERT INTO users(id,email,password_hash,full_name)
+         VALUES($1,$2,NULL,'Verified Provider Test User')",
+    )
+    .bind(verified_user_id)
+    .bind(&verified_email)
+    .execute(&mut *verified_tx)
+    .await
+    .expect("provider account user should be inserted");
+    sqlx::query(
+        "INSERT INTO oauth_accounts(provider,provider_user_id,user_id,email)
+         VALUES('google',$1,$2,$3)",
+    )
+    .bind(&provider_user_id)
+    .bind(verified_user_id)
+    .bind(&verified_email)
+    .execute(&mut *verified_tx)
+    .await
+    .expect("provider identity should be attached in the same transaction");
+    verified_tx
+        .commit()
+        .await
+        .expect("verified OAuth user should commit");
+
+    let verified_at: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT email_verified_at FROM users WHERE id=$1")
+            .bind(verified_user_id)
+            .fetch_one(&pool)
+            .await
+            .expect("verified timestamp should be readable");
+    assert!(verified_at.is_some(), "database guard should timestamp verified provider users");
+
+    sqlx::query("DELETE FROM users WHERE id=$1")
+        .bind(verified_user_id)
+        .execute(&pool)
+        .await
+        .expect("verified OAuth migration fixture should be removed");
+
     // Deleting a board cascades its workspace_files metadata. The trigger must
     // preserve the object key in a table that is not part of the workspace cascade.
     let user_id = uuid::Uuid::new_v4();
