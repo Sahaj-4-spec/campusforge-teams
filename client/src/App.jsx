@@ -24,6 +24,7 @@ import {
   LogOut,
   MoreHorizontal,
   Plus,
+  Pencil,
   Search,
   Settings,
   SlidersHorizontal,
@@ -343,13 +344,17 @@ function MyTasksPage({ data, onOpenTask, search }) {
   );
 }
 
-function TeamPage({ data, invitations, canManageInvites, onInvite, onRevoke }) {
+function TeamPage({ data, invitations, canManageInvites, canManageRoles, onInvite, onRevoke, onRoleChange }) {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("member");
   const [inviteLink, setInviteLink] = useState("");
   const [inviteError, setInviteError] = useState("");
   const [sending, setSending] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [editingRoleFor, setEditingRoleFor] = useState("");
+  const [draftRole, setDraftRole] = useState("member");
+  const [savingRoleFor, setSavingRoleFor] = useState("");
+  const [roleError, setRoleError] = useState("");
 
   async function submitInvite(event) {
     event.preventDefault();
@@ -375,6 +380,29 @@ function TeamPage({ data, invitations, canManageInvites, onInvite, onRevoke }) {
       setCopied(true);
     } catch {
       setInviteError("Clipboard access is unavailable. Copy the invitation link from the field below.");
+    }
+  }
+
+  function beginRoleEdit(user, membership) {
+    setRoleError("");
+    setEditingRoleFor(user.id);
+    setDraftRole(membership?.role === "admin" ? "admin" : "member");
+  }
+
+  async function saveMemberRole(userId, currentRole) {
+    if (draftRole === currentRole) {
+      setEditingRoleFor("");
+      return;
+    }
+    setSavingRoleFor(userId);
+    setRoleError("");
+    try {
+      await onRoleChange(userId, draftRole);
+      setEditingRoleFor("");
+    } catch (error) {
+      setRoleError(error.message || "Could not update the teammate's role.");
+    } finally {
+      setSavingRoleFor("");
     }
   }
 
@@ -447,12 +475,61 @@ function TeamPage({ data, invitations, canManageInvites, onInvite, onRevoke }) {
               <article className="team-member-row" key={user.id}>
                 <Avatar name={user.full_name} />
                 <div className="team-member-copy"><strong>{user.full_name}</strong><span>{user.email}</span></div>
-                <span className={"member-role " + (membership?.role === "owner" ? "role-owner" : "")}>{membership?.role || "member"}</span>
+                <div className="member-role-control">
+                  {editingRoleFor === user.id ? (
+                    <>
+                      <select
+                        className="member-role-select"
+                        value={draftRole}
+                        onChange={(event) => setDraftRole(event.target.value)}
+                        aria-label={"Choose a role for " + user.full_name}
+                        disabled={savingRoleFor === user.id}
+                      >
+                        <option value="member">Member</option>
+                        <option value="admin">Admin</option>
+                      </select>
+                      <button
+                        className="secondary-button member-role-save"
+                        type="button"
+                        onClick={() => saveMemberRole(user.id, membership?.role || "member")}
+                        disabled={savingRoleFor === user.id}
+                        aria-label={"Save role for " + user.full_name}
+                      >
+                        <Check size={14} /> {savingRoleFor === user.id ? "Saving…" : "Save"}
+                      </button>
+                      <button
+                        className="icon-button member-role-cancel"
+                        type="button"
+                        onClick={() => setEditingRoleFor("")}
+                        disabled={savingRoleFor === user.id}
+                        aria-label={"Cancel role edit for " + user.full_name}
+                      >
+                        <X size={14} />
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span className={"member-role " + (membership?.role === "owner" ? "role-owner" : "")}>{membership?.role || "member"}</span>
+                      {canManageRoles && membership?.role !== "owner" && (
+                        <button
+                          className="icon-button member-role-edit"
+                          type="button"
+                          onClick={() => beginRoleEdit(user, membership)}
+                          title={"Edit " + user.full_name + "'s role"}
+                          aria-label={"Edit role for " + user.full_name}
+                        >
+                          <Pencil size={14} />
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
                 <span className="member-status"><i /> Active</span>
               </article>
             );
           })}
         </div>
+        {roleError && <p className="auth-error" role="alert">{roleError}</p>}
         <p className="demo-note">Workspace members and roles are loaded from the shared database.</p>
       </section>
     </div>
@@ -1112,7 +1189,22 @@ export default function App() {
       case "Team": {
         const memberRole = data.workspace_members.find((member) => member.user_id === data.current_user_id)?.role;
         const canManageInvites = memberRole === "owner" || memberRole === "admin";
-        return <TeamPage data={data} invitations={invitations} canManageInvites={canManageInvites} onInvite={createInvitation} onRevoke={revokeInvitation} />;
+        const canManageRoles = memberRole === "owner";
+        return (
+          <TeamPage
+            data={data}
+            invitations={invitations}
+            canManageInvites={canManageInvites}
+            canManageRoles={canManageRoles}
+            onInvite={createInvitation}
+            onRevoke={revokeInvitation}
+            onRoleChange={async (userId, role) => {
+              await invitationApi.updateMemberRole(userId, role);
+              await refreshWorkspace();
+              setNotice("Teammate role updated");
+            }}
+          />
+        );
       }
       case "Calendar":
         return <CalendarPage data={data} onOpenTask={openTask} realtimeVersion={realtimeVersion} />;
