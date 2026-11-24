@@ -13,35 +13,41 @@ The default is local mode:
 
 The directory is ignored by Git. Local mode is for localhost development only; local container disks are not assumed to survive restarts, replacement, or multiple instances.
 
-### Production S3-compatible storage
+### Production Neon Object Storage
 
-The backend signs S3-compatible REST requests using AWS Signature Version 4 over the existing Reqwest HTTP client. Configure a dedicated, least-privilege S3 access key and secret as encrypted backend environment variables; an optional AWS_SESSION_TOKEN supports temporary credentials. The current adapter does not discover IAM roles or platform workload identities automatically.
+The backend uses the S3-compatible API, so Neon Object Storage can provide durable private file storage alongside the Neon PostgreSQL project. Neon Object Storage is branch-aware: use the production project's main branch for the live Render API, and keep development/test branches separate.
 
-Set the following only on the backend service:
+Provision a private bucket named `uploads` on the production branch. Create a Neon storage credential with the `storage:write` scope (which includes the read operations required by this adapter). Neon Object Storage access and bucket visibility are managed through Neon; do not try to manage bucket ACLs or public access through S3 ACL APIs.
+
+Set these values only on the Render API service:
 
 | Variable | Required | Purpose |
 |---|---|---|
-| CAMPUSFORGE_STORAGE_MODE | Yes | Set to s3 to select object storage |
-| CAMPUSFORGE_S3_BUCKET | Yes | Private bucket name |
-| CAMPUSFORGE_S3_REGION | Yes | Bucket region (defaults to us-east-1) |
-| CAMPUSFORGE_S3_ENDPOINT_URL | No | Endpoint URL for compatible services such as Railway Buckets or R2 |
-| CAMPUSFORGE_S3_URL_STYLE | No | Set to `virtual-host` when the provider requires bucket-prefixed hostnames; defaults to path-style |
-| AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY | Yes | Dedicated least-privilege S3 credentials, supplied as backend secrets |
-| AWS_SESSION_TOKEN | No | Session token when using temporary S3 credentials |
+| CAMPUSFORGE_STORAGE_MODE | Yes | Set to `s3` to select object storage |
+| CAMPUSFORGE_REQUIRE_REMOTE_STORAGE | Yes | Set to `true` so the API refuses to start if it falls back to local disk |
+| CAMPUSFORGE_S3_BUCKET | Yes | Set to the private bucket name, for example `uploads` |
+| AWS_ENDPOINT_URL_S3 | Yes | Neon branch's S3 endpoint from the Neon console or `neon env pull` |
+| AWS_REGION | Yes | Region supplied by Neon for the storage endpoint |
+| AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY | Yes | Neon storage credential; add as encrypted Render backend secrets |
+| AWS_SESSION_TOKEN | No | Session token if the selected provider issues temporary credentials |
+| CAMPUSFORGE_S3_URL_STYLE | No | Set to `virtual-host` only when the selected provider requires bucket-prefixed hostnames |
 
-Bucket configuration requirements:
+The adapter also supports `CAMPUSFORGE_S3_ENDPOINT_URL` and `CAMPUSFORGE_S3_REGION` as explicit overrides for non-Neon S3-compatible providers. Never put these credentials into Vite variables, browser code, the repository, or logs.
 
-1. Keep the bucket private; disable public access and public ACLs.
-2. Enable server-side encryption and versioning where supported.
-3. Grant the API only the minimum object permissions needed for the configured bucket/prefix: PutObject, GetObject, and DeleteObject.
-4. Do not configure browser CORS access to the bucket. Browser uploads/downloads go through the authenticated CampusForge API, which checks workspace membership.
-5. If bucket versioning is enabled, configure an S3 lifecycle rule that expires noncurrent object versions (for example, after 30 days) and expires delete markers when no noncurrent versions remain. The adapter uses key-only DELETE, which creates a delete marker in a versioned bucket; without noncurrent-version expiry, deleted file bytes remain stored. If the provider cannot enforce this lifecycle policy, use an unversioned bucket for this adapter.
+Bucket and access requirements:
+
+1. Keep the `uploads` bucket private. Files must be read through the authenticated CampusForge API, which checks workspace membership.
+2. Use a storage credential scoped to the production branch and the minimum scope required. Rotate it if it is exposed.
+3. Use the endpoint/region generated for the same production branch as `DATABASE_URL`; do not mix a Neon database branch with another branch's object-store endpoint.
+4. Do not configure public bucket access or browser-direct uploads. The app streams uploads and downloads through the API.
+5. Neon Object Storage manages its own object version lineage with the database branch; the S3 adapter does not configure S3 lifecycle/versioning policies. For a different S3 provider, configure provider-supported retention and deletion policies explicitly.
 6. Configure retention, backup, and restore policies appropriate to team documents.
-7. Verify the service identity, bucket policy, lifecycle rule, and region before switching the application to S3 mode.
+
+On API startup, the adapter runs a short-lived private-object PUT/GET/DELETE check and fails startup if the operation cannot complete. In production, `CAMPUSFORGE_REQUIRE_REMOTE_STORAGE=true` prevents an accidental fallback to local ephemeral storage.
 
 The application creates opaque object keys and stores file metadata/checksums in PostgreSQL. The download route checks workspace membership and streams the object through the API. It returns attachment disposition and X-Content-Type-Options: nosniff. Uploads are capped at 10 MB and currently limited by filename extension to common documents, images, compressed archives, and source/text files.
 
-**Still required before public release:** malware scanning, per-workspace storage quotas, retention/deletion policy approval, object/database reconciliation, backup/restore exercises, and an S3-compatible integration test against the chosen provider.
+**Still required before public release:** malware scanning, retention/deletion policy approval, object/database reconciliation, backup/restore exercises, and a provider integration test using the production Neon branch.
 
 ## 2. Email notifications
 
