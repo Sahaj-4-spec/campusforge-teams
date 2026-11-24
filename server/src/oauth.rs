@@ -215,7 +215,21 @@ fn browser_binding_from_headers(headers: &HeaderMap, cookie_name: &str) -> Optio
 async fn start(
     Path(provider_name): Path<String>,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Response {
+    let ip = headers.get("x-real-ip").or_else(|| headers.get("x-forwarded-for"))
+        .and_then(|value| value.to_str().ok()).and_then(|value| value.split(',').next())
+        .map(str::trim).filter(|value| !value.is_empty() && value.len() <= 64).unwrap_or("unknown");
+    let digest = Sha256::digest(format!("oauth-start:{ip}").as_bytes());
+    let rate_key = digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    match state.check_rate_limit(&rate_key, 30, 600).await {
+        Ok(true) => {},
+        Ok(false) => return frontend_redirect(Some("Too many sign-in attempts. Please wait before trying again.")).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "Could not enforce OAuth start rate limit");
+            return frontend_redirect(Some("Sign-in is temporarily unavailable.")).into_response();
+        }
+    }
     let Some(provider) = Provider::parse(&provider_name) else {
         return frontend_redirect(Some("That sign-in provider is not supported.")).into_response();
     };
