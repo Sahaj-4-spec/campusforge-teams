@@ -61,6 +61,21 @@ async fn health(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
 
+    // Explicit production mode fails closed unless durable private storage and
+    // mandatory malware scanning are configured. Keep previews/local development usable.
+    if std::env::var("CAMPUSFORGE_ENV").is_ok_and(|value| value.eq_ignore_ascii_case("production")) {
+        let storage_mode = std::env::var("CAMPUSFORGE_STORAGE_MODE").unwrap_or_default();
+        let require_remote = std::env::var("CAMPUSFORGE_REQUIRE_REMOTE_STORAGE")
+            .is_ok_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes"));
+        let require_scan = std::env::var("CAMPUSFORGE_REQUIRE_MALWARE_SCAN")
+            .is_ok_and(|value| value.eq_ignore_ascii_case("true"));
+        let scanner_configured = std::env::var("CAMPUSFORGE_CLAMAV_ADDR")
+            .ok().is_some_and(|value| !value.trim().is_empty());
+        if storage_mode != "s3" || !require_remote || !require_scan || !scanner_configured {
+            return Err("Production startup blocked: configure S3 storage, CAMPUSFORGE_REQUIRE_REMOTE_STORAGE=true, CAMPUSFORGE_REQUIRE_MALWARE_SCAN=true, and CAMPUSFORGE_CLAMAV_ADDR before setting CAMPUSFORGE_ENV=production".into());
+        }
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

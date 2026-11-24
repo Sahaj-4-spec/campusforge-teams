@@ -102,6 +102,19 @@ The GitHub Actions backend job includes a PostgreSQL service and a migration smo
 
 ## 6. Malware scanning and file governance
 
+### Production startup gate
+
+Set `CAMPUSFORGE_ENV=production` only after all production dependencies below are ready. In this mode the API now refuses to start unless all of these are true:
+
+- `CAMPUSFORGE_STORAGE_MODE=s3`
+- `CAMPUSFORGE_REQUIRE_REMOTE_STORAGE=true`
+- `CAMPUSFORGE_REQUIRE_MALWARE_SCAN=true`
+- `CAMPUSFORGE_CLAMAV_ADDR` points to a reachable private ClamAV TCP service
+
+This is intentionally fail-closed: do not enable production mode on the current preview service until the S3 bucket/credentials and scanner are provisioned and tested. Configure the production API and a staging API separately.
+
+Before public traffic, also configure an ingress/WAF rate limit for login, OAuth start/callback, and invitation endpoints. The application currently does not provide a shared distributed per-IP rate limiter; do not rely on a process-local limiter when running multiple instances. Ensure the ingress overwrites client-IP forwarding headers and never trusts user-supplied values.
+
 ### ClamAV scanner configuration
 
 The upload API performs file signature checks before storage. It can stream uploaded bytes to a ClamAV daemon using the INSTREAM protocol. Configure the following only on the Rust API service:
