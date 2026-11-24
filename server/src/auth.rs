@@ -308,11 +308,24 @@ async fn register() -> (StatusCode, Json<ApiError>) {
 
 async fn login(
     axum::extract::State(state): axum::extract::State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<LoginRequest>,
 ) -> Result<Response, (StatusCode, Json<ApiError>)> {
     request.validate().map_err(|_| invalid_request())?;
 
     let email = request.email.trim().to_lowercase();
+    let ip_key = rate_limit_digest("login-ip", &client_ip(&headers));
+    let email_key = rate_limit_digest("login-email", &email);
+    let ip_allowed = state.check_rate_limit(&ip_key, 30, 900).await.map_err(|error| {
+        tracing::error!(%error, "Could not enforce login IP rate limit");
+        (StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: "Sign-in is temporarily unavailable" }))
+    })?;
+    let email_allowed = state.check_rate_limit(&email_key, 10, 900).await.map_err(|error| {
+        tracing::error!(%error, "Could not enforce login account rate limit");
+        (StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: "Sign-in is temporarily unavailable" }))
+    })?;
+    if !ip_allowed || !email_allowed { return Err(rate_limited()); }
+
     let user = sqlx::query_as::<_, UserWithPassword>(
         "SELECT id, email, full_name, avatar_url, password_hash, created_at
          FROM users WHERE email = $1",
