@@ -2735,3 +2735,108 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   transform: none !important;
   visibility: visible;
 }
+
+
+/* Mobile-only navigation drawer refinements. Desktop/tablet layouts remain unchanged. */
+@media (max-width: 640px) {
+  .mobile-nav-overlay {
+    align-items: center;
+    justify-content: center;
+    padding:
+      max(12px, env(safe-area-inset-top))
+      max(12px, env(safe-area-inset-right))
+      max(12px, env(safe-area-inset-bottom))
+      max(12px, env(safe-area-inset-left));
+    overflow: hidden;
+  }
+
+  .mobile-nav-card {
+    width: min(420px, 100%);
+    max-width: 100%;
+    max-height: calc(100vh - max(24px, env(safe-area-inset-top) + env(safe-area-inset-bottom) + 24px));
+    max-height: calc(100dvh - max(24px, env(safe-area-inset-top) + env(safe-area-inset-bottom) + 24px));
+    flex: 0 1 auto;
+    gap: 14px;
+    padding: clamp(16px, 4vw, 22px);
+    border-radius: 20px;
+  }
+
+  .mobile-nav-heading {
+    min-height: 48px;
+    padding: 0 1px 4px;
+    font-size: 16px;
+  }
+
+  .mobile-nav-heading button {
+    width: 42px;
+    height: 42px;
+  }
+
+  .mobile-workspace-select {
+    gap: 8px;
+    font-size: 11px;
+  }
+
+  .mobile-workspace-select select {
+    min-height: 52px;
+    padding-inline: 14px;
+    font-size: 14px;
+  }
+
+  .mobile-nav-list {
+    width: 100%;
+    gap: 7px;
+    padding: 3px 2px 12px;
+    scrollbar-gutter: stable;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .mobile-nav-card .nav-item,
+  .mobile-nav-card .nav-item.active {
+    width: 100%;
+    min-height: 58px;
+    flex: 0 0 auto;
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 14px;
+    padding: 0 16px;
+    border-radius: 13px;
+    text-align: left;
+    font-size: 14px;
+  }
+
+  .mobile-nav-card .nav-item span {
+    display: inline;
+    font-size: 14px;
+    text-align: left;
+  }
+
+  .mobile-nav-card .nav-item svg {
+    width: 21px;
+    height: 21px;
+  }
+}
+
+@media (max-width: 380px) {
+  .mobile-nav-overlay {
+    padding: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom));
+  }
+
+  .mobile-nav-card {
+    width: 100%;
+    padding: 14px;
+    border-radius: 16px;
+  }
+
+  .mobile-nav-card .nav-item,
+  .mobile-nav-card .nav-item.active {
+    min-height: 52px;
+    gap: 11px;
+    padding-inline: 13px;
+    font-size: 13px;
+  }
+
+  .mobile-nav-card .nav-item span {
+    font-size: 13px;
+  }
+}
