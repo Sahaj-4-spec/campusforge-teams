@@ -119,6 +119,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!("S3-compatible object storage PUT/GET/DELETE verification passed");
     }
     let state = AppState::new(pool, jwt_secret, storage);
+    let rate_limit_db = state.db.clone();
+    tokio::spawn(async move { state::run_rate_limit_cleanup(rate_limit_db).await; });
     let background_state = state.clone();
     tokio::spawn(async move {
         advanced_tasks::run_background_jobs(background_state).await;
