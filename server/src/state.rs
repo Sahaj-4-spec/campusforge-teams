@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
 use sqlx::{postgres::PgListener, PgPool};
 use tokio::sync::broadcast;
 use uuid::Uuid;
@@ -45,6 +46,27 @@ impl AppState {
             workspace_events,
             instance_id: Uuid::new_v4(),
         }
+    }
+
+    /// Atomically enforce a fixed-window limit shared by every application instance.
+    pub async fn check_rate_limit(&self, key: &str, limit: i32, window_seconds: i32) -> Result<bool, sqlx::Error> {
+        sqlx::query_scalar::<_, bool>(
+            "INSERT INTO api_rate_limits (bucket_key, window_started_at, request_count)
+             VALUES ($1, NOW(), 1)
+             ON CONFLICT (bucket_key) DO UPDATE SET
+               window_started_at = CASE
+                 WHEN api_rate_limits.window_started_at + make_interval(secs => $3) <= NOW() THEN NOW()
+                 ELSE api_rate_limits.window_started_at END,
+               request_count = CASE
+                 WHEN api_rate_limits.window_started_at + make_interval(secs => $3) <= NOW() THEN 1
+                 ELSE api_rate_limits.request_count + 1 END
+             RETURNING request_count <= $2"
+        )
+        .bind(key)
+        .bind(limit)
+        .bind(window_seconds)
+        .fetch_one(&self.db)
+        .await
     }
 
     pub fn publish_workspace_event(
@@ -188,6 +210,17 @@ pub async fn run_postgres_workspace_listener(state: AppState) {
                     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                 }
             }
+        }
+    }
+}
+
+/// Remove expired rate-limit keys periodically so the shared table remains bounded.
+pub async fn run_rate_limit_cleanup(db: PgPool) {
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(900)).await;
+        if let Err(error) = sqlx::query("DELETE FROM api_rate_limits WHERE window_started_at < NOW() - INTERVAL '1 day'")
+            .execute(&db).await {
+            tracing::warn!(%error, "Could not clean expired authentication rate-limit keys");
         }
     }
 }
