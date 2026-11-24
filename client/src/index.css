@@ -2840,3 +2840,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
     font-size: 13px;
   }
 }
+
+
+/* Slightly shift the mobile navigation icon/label group to the left. */
+@media (max-width: 640px) {
+  .mobile-nav-card .nav-item,
+  .mobile-nav-card .nav-item.active {
+    justify-content: center !important;
+    padding-right: 40px;
+    padding-left: 16px;
+  }
+}
