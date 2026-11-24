@@ -196,6 +196,15 @@ async fn s3_error(response: reqwest::Response, operation: &str) -> String {
 impl StorageService {
     pub async fn from_env() -> Result<Self, std::io::Error> {
         let mode = env::var("CAMPUSFORGE_STORAGE_MODE").unwrap_or_else(|_| "local".to_string());
+        let require_remote = env::var("CAMPUSFORGE_REQUIRE_REMOTE_STORAGE")
+            .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes"))
+            .unwrap_or(false);
+        if require_remote && mode != "s3" {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "CAMPUSFORGE_REQUIRE_REMOTE_STORAGE is enabled but CAMPUSFORGE_STORAGE_MODE is not s3",
+            ));
+        }
         match mode.as_str() {
             "local" => {
                 let directory = env::var("CAMPUSFORGE_UPLOAD_DIR")
@@ -219,11 +228,16 @@ impl StorageService {
                         ))
                 };
                 let bucket = required("CAMPUSFORGE_S3_BUCKET")?;
-                let region = env::var("CAMPUSFORGE_S3_REGION").unwrap_or_else(|_| "us-east-1".to_string());
+                let region = env::var("CAMPUSFORGE_S3_REGION")
+                    .or_else(|_| env::var("AWS_REGION"))
+                    .unwrap_or_else(|_| "us-east-1".to_string());
                 let access_key_id = required("AWS_ACCESS_KEY_ID")?;
                 let secret_access_key = required("AWS_SECRET_ACCESS_KEY")?;
                 let session_token = env::var("AWS_SESSION_TOKEN").ok().filter(|value| !value.trim().is_empty());
-                let endpoint_url = env::var("CAMPUSFORGE_S3_ENDPOINT_URL").ok().filter(|value| !value.trim().is_empty());
+                let endpoint_url = env::var("CAMPUSFORGE_S3_ENDPOINT_URL")
+                    .or_else(|_| env::var("AWS_ENDPOINT_URL_S3"))
+                    .ok()
+                    .filter(|value| !value.trim().is_empty());
                 let virtual_host_style = env::var("CAMPUSFORGE_S3_URL_STYLE")
                     .map(|value| value.eq_ignore_ascii_case("virtual-host"))
                     .unwrap_or(false);
@@ -247,6 +261,51 @@ impl StorageService {
                 "CAMPUSFORGE_STORAGE_MODE must be local or s3",
             )),
         }
+    }
+
+    /// Verify the configured private object store with a short-lived PUT/GET/DELETE.
+    /// Local development storage is deliberately skipped.
+    pub async fn verify_remote(&self) -> Result<bool, String> {
+        if matches!(&self.backend, Backend::Local { .. }) {
+            return Ok(false);
+        }
+
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| format!("Could not create storage verification key: {error}"))?
+            .as_nanos();
+        let key = format!("_healthchecks/{}-{nonce}.txt", std::process::id());
+        let source = env::temp_dir().join(format!("campusforge-storage-check-{nonce}.txt"));
+        let payload = b"CampusForge private object storage verification";
+        tokio::fs::write(&source, payload)
+            .await
+            .map_err(|error| format!("Could not create storage verification file: {error}"))?;
+
+        let verification_result = async {
+            self.put_file(
+                &key,
+                &source,
+                "text/plain",
+                &sha256_hex(payload),
+                payload.len() as u64,
+            )
+            .await?;
+
+            let downloaded = self.get(&key).await?;
+            if downloaded.as_slice() != payload {
+                return Err("Object storage verification returned different bytes".to_string());
+            }
+            Ok(())
+        }
+        .await;
+
+        // Always attempt cleanup, including after a failed read or checksum check.
+        let delete_result = self.delete(&key).await;
+        let _ = tokio::fs::remove_file(&source).await;
+
+        verification_result?;
+        delete_result.map_err(|error| format!("Object storage verification passed but cleanup failed: {error}"))?;
+        Ok(true)
     }
 
     fn validate_key(key: &str) -> Result<(), String> {
