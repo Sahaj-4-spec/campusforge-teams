@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 use sqlx::{postgres::PgListener, PgPool};
 use tokio::sync::broadcast;
 use uuid::Uuid;
