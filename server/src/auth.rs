@@ -14,6 +14,7 @@ use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation}
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use validator::Validate;
+use sha2::{Digest, Sha256};
 
 use crate::state::AppState;
 
@@ -265,6 +266,26 @@ pub(crate) fn issue_token(user_id: uuid::Uuid, email: &str, secret: &str) -> Res
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok((token, expires_in))
+}
+
+
+fn rate_limit_digest(scope: &str, value: &str) -> String {
+    let digest = Sha256::digest(format!("{scope}:{value}").as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn client_ip(headers: &HeaderMap) -> String {
+    headers.get("x-real-ip").or_else(|| headers.get("x-forwarded-for"))
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && value.len() <= 64)
+        .unwrap_or("unknown")
+        .to_owned()
+}
+
+fn rate_limited() -> (StatusCode, Json<ApiError>) {
+    (StatusCode::TOO_MANY_REQUESTS, Json(ApiError { error: "Too many sign-in attempts. Please wait before trying again." }))
 }
 
 fn invalid_request() -> (StatusCode, Json<ApiError>) {
