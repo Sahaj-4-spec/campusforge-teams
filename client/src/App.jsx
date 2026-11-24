@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlertCircle,
@@ -35,13 +35,7 @@ import {
   X,
   Zap
 } from "lucide-react";
-import BoardView from "./components/BoardView.jsx";
-import TaskDialog from "./components/TaskDialog.jsx";
 import AuthScreen from "./components/AuthScreen.jsx";
-import HelpPage from "./components/HelpPage.jsx";
-import ProjectDialog from "./components/ProjectDialog.jsx";
-import { DashboardOverview, WorkspaceTimeline, WorkspaceReports } from "./components/WorkspaceViews.jsx";
-import { CalendarPage, NotificationsPage, FilesPage, SaveLockerPage, ChatAndMeetingsPage } from "./components/WorkspaceFeatures.jsx";
 import {
   authApi, boardApi, clearStoredWorkspaceId, createWorkspaceSocket,
   getStoredWorkspaceId, setStoredWorkspaceId, setWorkspaceSocketBoard,
@@ -49,6 +43,23 @@ import {
 } from "./lib/api.js";
 import { buildOptimisticTaskMove } from "./lib/taskMove.js";
 import { createDemoData, createId, loadDemoData, STORAGE_KEY } from "./data/demoData.js";
+
+const lazyNamed = (loader, exportName) => lazy(() =>
+  loader().then((module) => ({ default: module[exportName] }))
+);
+const BoardView = lazy(() => import("./components/BoardView.jsx"));
+const TaskDialog = lazy(() => import("./components/TaskDialog.jsx"));
+const ProjectDialog = lazy(() => import("./components/ProjectDialog.jsx"));
+const HelpPage = lazy(() => import("./components/HelpPage.jsx"));
+const CommandPalette = lazy(() => import("./components/CommandPalette.jsx"));
+const DashboardOverview = lazyNamed(() => import("./components/WorkspaceViews.jsx"), "DashboardOverview");
+const WorkspaceTimeline = lazyNamed(() => import("./components/WorkspaceViews.jsx"), "WorkspaceTimeline");
+const WorkspaceReports = lazyNamed(() => import("./components/WorkspaceViews.jsx"), "WorkspaceReports");
+const CalendarPage = lazyNamed(() => import("./components/WorkspaceFeatures.jsx"), "CalendarPage");
+const NotificationsPage = lazyNamed(() => import("./components/WorkspaceFeatures.jsx"), "NotificationsPage");
+const FilesPage = lazyNamed(() => import("./components/WorkspaceFeatures.jsx"), "FilesPage");
+const SaveLockerPage = lazyNamed(() => import("./components/WorkspaceFeatures.jsx"), "SaveLockerPage");
+const ChatAndMeetingsPage = lazyNamed(() => import("./components/WorkspaceFeatures.jsx"), "ChatAndMeetingsPage");
 
 const navigation = [
   { id: "Overview", label: "Dashboard", icon: LayoutDashboard },
@@ -691,7 +702,10 @@ export default function App() {
   const [activeBoardId, setActiveBoardId] = useState("");
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [taskDialogReady, setTaskDialogReady] = useState(false);
   const [boardDialogOpen, setBoardDialogOpen] = useState(false);
+  const [projectDialogReady, setProjectDialogReady] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState(null);
   const [defaultListId, setDefaultListId] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -704,6 +718,18 @@ export default function App() {
   const [demoMode, setDemoMode] = useState(false);
   const [showColdStartNotice, setShowColdStartNotice] = useState(false);
   const workspaceGeneration = useRef(0);
+
+  useEffect(() => {
+    function handleGlobalShortcut(event) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k" && isAuthenticated) {
+        event.preventDefault();
+        setCommandPaletteOpen((open) => !open);
+      }
+      if (event.key === "Escape") setCommandPaletteOpen(false);
+    }
+    window.addEventListener("keydown", handleGlobalShortcut);
+    return () => window.removeEventListener("keydown", handleGlobalShortcut);
+  }, [isAuthenticated]);
 
   useEffect(() => {
     if (!mobileMenuOpen) return undefined;
@@ -797,6 +823,7 @@ export default function App() {
 
     let stopped = false;
     let retryTimer = null;
+    let refreshTimer = null;
     let socket = null;
     let attempts = 0;
 
@@ -831,27 +858,34 @@ export default function App() {
             return;
           }
           if (payload.type === "workspace_event" || payload.type === "refresh_required") {
-            setRealtimeVersion((version) => version + 1);
-            notificationApi.list()
-              .then((result) => { if (!stopped) setUnreadNotifications(result.unread_count || 0); })
-              .catch(() => {});
-            const requestGeneration = workspaceGeneration.current;
-            const requestedWorkspaceId = data?.current_workspace_id;
-            workspaceApi.get(requestedWorkspaceId)
-              .then((snapshot) => {
-                if (!stopped && requestGeneration === workspaceGeneration.current && snapshot.current_workspace_id === requestedWorkspaceId) {
-                  setStoredWorkspaceId(snapshot.current_workspace_id);
-                  setData(snapshot);
-                  setActiveBoardId((current) => snapshot.boards.some((board) => board.id === current) ? current : (snapshot.boards[0]?.id || ""));
-                }
-              })
-              .catch((error) => {
-                if (error.status === 401 && !stopped) {
-                  clearStoredWorkspaceId();
-                  setIsAuthenticated(false);
-                  setData(null);
-                }
-              });
+            // Coalesce bursts of board/chat/presence events into one snapshot read.
+            if (refreshTimer) window.clearTimeout(refreshTimer);
+            refreshTimer = window.setTimeout(() => {
+              refreshTimer = null;
+              if (stopped) return;
+              setRealtimeVersion((version) => version + 1);
+              notificationApi.list()
+                .then((result) => { if (!stopped) setUnreadNotifications(result.unread_count || 0); })
+                .catch(() => {});
+              const requestGeneration = workspaceGeneration.current;
+              const requestedWorkspaceId = data?.current_workspace_id;
+              if (!requestedWorkspaceId) return;
+              workspaceApi.get(requestedWorkspaceId)
+                .then((snapshot) => {
+                  if (!stopped && requestGeneration === workspaceGeneration.current && snapshot.current_workspace_id === requestedWorkspaceId) {
+                    setStoredWorkspaceId(snapshot.current_workspace_id);
+                    setData(snapshot);
+                    setActiveBoardId((current) => snapshot.boards.some((board) => board.id === current) ? current : (snapshot.boards[0]?.id || ""));
+                  }
+                })
+                .catch((error) => {
+                  if (error.status === 401 && !stopped) {
+                    clearStoredWorkspaceId();
+                    setIsAuthenticated(false);
+                    setData(null);
+                  }
+                });
+            }, 180);
           }
         } catch {
           // Ignore malformed messages and keep the session alive.
@@ -876,6 +910,7 @@ export default function App() {
       stopped = true;
       setRealtimeConnected(false);
       if (retryTimer) window.clearTimeout(retryTimer);
+      if (refreshTimer) window.clearTimeout(refreshTimer);
       socket?.close();
     };
   }, [isAuthenticated, data?.current_workspace_id]);
@@ -937,14 +972,15 @@ export default function App() {
     }
   }, [demoMode, data]);
 
-  const activeLists = (data?.lists || [])
+  const activeLists = useMemo(() => (data?.lists || [])
     .filter((list) => list.board_id === activeBoard?.id)
-    .sort((a, b) => a.position - b.position);
-  const boardTasks = (data?.tasks || []).filter((task) => task.board_id === activeBoard?.id);
+    .sort((a, b) => a.position - b.position), [data?.lists, activeBoard?.id]);
+  const boardTasks = useMemo(() => (data?.tasks || [])
+    .filter((task) => task.board_id === activeBoard?.id), [data?.tasks, activeBoard?.id]);
   const editingTask = data?.tasks.find((task) => task.id === editingTaskId) || null;
-  const editingAssignees = editingTask
-    ? data.task_assignees.filter((item) => item.task_id === editingTask.id).map((item) => item.user_id)
-    : [];
+  const editingAssignees = useMemo(() => editingTask
+    ? (data?.task_assignees || []).filter((item) => item.task_id === editingTask.id).map((item) => item.user_id)
+    : [], [data?.task_assignees, editingTask?.id]);
 
   const filteredBoardTasks = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -1061,7 +1097,14 @@ export default function App() {
     setMobileMenuOpen(false);
   }
 
+  function searchWorkspaceTasks(query) {
+    setSearch(query);
+    setActiveView("My Tasks");
+    setMobileMenuOpen(false);
+  }
+
   function openNewBoard() {
+    setProjectDialogReady(true);
     setBoardDialogOpen(true);
     setMobileMenuOpen(false);
   }
@@ -1160,12 +1203,14 @@ export default function App() {
   }
 
   function openNewTask(listId = activeLists[0]?.id) {
+    setTaskDialogReady(true);
     setEditingTaskId(null);
     setDefaultListId(listId || activeLists[0]?.id || "");
     setDialogOpen(true);
   }
 
   function openTask(task) {
+    setTaskDialogReady(true);
     setEditingTaskId(task.id);
     setDefaultListId(task.list_id);
     setDialogOpen(true);
@@ -1490,9 +1535,6 @@ export default function App() {
   }
 
   const pageTitle = activeView === "Board" ? activeBoard?.name || "Project board" : activeView === "Overview" ? "Dashboard" : activeView === "Activity" ? "Timeline" : activeView;
-  const searchPlaceholder = activeView === "Board" ? "Search cards..." : "Search tasks...";
-  const showSearch = ["Board", "My Tasks"].includes(activeView);
-
   return (
     <div className="app-shell">
       <AppSidebar
@@ -1526,13 +1568,18 @@ export default function App() {
             <div className="breadcrumbs"><span>Workspace</span><span className="breadcrumb-divider">/</span><strong>{pageTitle}</strong></div>
           </div>
           <div className="topbar-actions">
-            {showSearch && (
-              <label className="search-box">
-                <Search size={16} />
-                <input aria-label="Search tasks" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={searchPlaceholder} />
-                <kbd>⌘ K</kbd>
-              </label>
-            )}
+            <button
+              className="command-search-trigger"
+              type="button"
+              onClick={() => setCommandPaletteOpen(true)}
+              aria-label="Open command palette"
+              aria-haspopup="dialog"
+              aria-expanded={commandPaletteOpen}
+            >
+              <Search size={16} />
+              <span>Search tasks, projects, and actions</span>
+              <kbd>⌘ K</kbd>
+            </button>
             <button className="icon-button notification-button" type="button" aria-label={"Notifications" + (unreadNotifications ? ", " + unreadNotifications + " unread" : "")} onClick={() => navigate("Notifications")}><Bell size={18} />{unreadNotifications > 0 && <span className="notification-count-badge">{Math.min(unreadNotifications, 99)}</span>}</button>
             <button
               className="topbar-profile-button"
@@ -1582,31 +1629,59 @@ export default function App() {
           </div>
         )}
 
-        <main className="page-content">{renderPage()}</main>
+        <main className="page-content">
+          <Suspense fallback={<div className="page-loading-state" role="status">Loading workspace section…</div>}>
+            {renderPage()}
+          </Suspense>
+        </main>
         <footer className="page-footer"><span>CampusForge Teams</span><span>Plan better. Collaborate smarter. Build together.</span></footer>
       </div>
 
-      <ProjectDialog open={boardDialogOpen} onClose={() => setBoardDialogOpen(false)} onSave={saveBoard} />
-      <TaskDialog
-        open={dialogOpen}
-        task={editingTask}
-        defaultListId={defaultListId}
-        lists={data.lists.filter((list) => list.board_id === (editingTask?.board_id || activeBoard?.id))}
-        users={data.users}
-        assigneeIds={editingAssignees}
-        comments={data.comments}
-        currentUser={currentUser}
-        onClose={closeDialog}
-        onSave={saveTask}
-        onDelete={deleteTask}
-        onAddComment={addComment}
-        allTasks={data.tasks}
-        onAdvancedChanged={refreshWorkspace}
-        refreshKey={realtimeVersion}
-        activityEvents={data.activity_events.filter((event) => !editingTask || event.task_id === editingTask.id)}
-        demoMode={demoMode}
-        onDemoTaskUpdate={updateDemoTask}
-      />
+      {projectDialogReady && (
+        <Suspense fallback={null}>
+          <ProjectDialog open={boardDialogOpen} onClose={() => setBoardDialogOpen(false)} onSave={saveBoard} />
+        </Suspense>
+      )}
+      {taskDialogReady && (
+        <Suspense fallback={dialogOpen ? <div className="task-dialog-loading" role="status">Opening task details…</div> : null}>
+          <TaskDialog
+            open={dialogOpen}
+            task={editingTask}
+            defaultListId={defaultListId}
+            lists={data.lists.filter((list) => list.board_id === (editingTask?.board_id || activeBoard?.id))}
+            users={data.users}
+            assigneeIds={editingAssignees}
+            comments={data.comments}
+            currentUser={currentUser}
+            onClose={closeDialog}
+            onSave={saveTask}
+            onDelete={deleteTask}
+            onAddComment={addComment}
+            allTasks={data.tasks}
+            onAdvancedChanged={refreshWorkspace}
+            refreshKey={realtimeVersion}
+            activityEvents={data.activity_events.filter((event) => !editingTask || event.task_id === editingTask.id)}
+            demoMode={demoMode}
+            onDemoTaskUpdate={updateDemoTask}
+          />
+        </Suspense>
+      )}
+      {commandPaletteOpen && (
+        <Suspense fallback={null}>
+          <CommandPalette
+            open={commandPaletteOpen}
+            onClose={() => setCommandPaletteOpen(false)}
+            onNavigate={navigate}
+            onOpenBoard={openBoard}
+            onOpenTask={openTask}
+            onCreateTask={() => openNewTask()}
+            onCreateProject={openNewBoard}
+            onSearchTasks={searchWorkspaceTasks}
+            boards={data.boards}
+            tasks={data.tasks}
+          />
+        </Suspense>
+      )}
       {notice && (
         <div
           className={"toast-message" + (notice.startsWith("Move failed") ? " toast-message-error" : "")}
