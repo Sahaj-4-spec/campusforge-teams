@@ -147,7 +147,6 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
   const [proposalListId, setProposalListId] = useState(
     lists.find((list) => list.board_id === initialTargetBoardId && /^(to do|todo)$/i.test(list.name))?.id
       || lists.find((list) => list.board_id === initialTargetBoardId)?.id
-      || lists[0]?.id
       || ""
   );
   const [messages, setMessages] = useState([]);
