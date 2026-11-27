@@ -2364,6 +2364,7 @@ mod authorization_integration_tests {
             .bind(workspace_id)
             .bind(user_id)
             .fetch_one(&pool)
+                .await
             }
         };
         assert_eq!(task_count(workspace_one, member_one).await?, 1);
@@ -2396,6 +2397,7 @@ mod authorization_integration_tests {
             .bind(board_id)
             .bind(user_id)
             .fetch_one(&pool)
+                .await
             }
         };
         let chat_count = |workspace_id: Uuid, board_id: Option<Uuid>, user_id: Uuid| {
@@ -2424,6 +2426,7 @@ mod authorization_integration_tests {
             .bind(board_id)
             .bind(user_id)
             .fetch_one(&pool)
+                .await
             }
         };
         assert_eq!(meeting_count(workspace_one, Some(board_one_a), member_one).await?, 2);
@@ -2459,6 +2462,7 @@ mod authorization_integration_tests {
                 .bind(note_id)
                 .bind(user_id)
                 .fetch_one(&pool)
+                .await
             }
         };
         assert_eq!(meeting_action_count(workspace_one, note_one_a, member_one).await?, 1);
@@ -2503,6 +2507,7 @@ mod authorization_integration_tests {
             .bind(workspace_id)
             .bind(user_id)
             .fetch_one(&pool)
+                .await
             }
         };
         assert!(file_access(file_one_a, workspace_one, member_one).await?);
