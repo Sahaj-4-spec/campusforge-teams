@@ -102,7 +102,8 @@ export const authApi = {
 
 export const aiApi = {
   status: () => request("/api/ai/status"),
-  ask: (values) => request("/api/ai/assistant", { method: "POST", body: values })
+  ask: (values) => request("/api/ai/assistant", { method: "POST", body: values }),
+  insights: (boardId = null) => request("/api/ai/insights" + (boardId ? "?board_id=" + encodeURIComponent(boardId) : ""))
 };
 
 export const workspaceApi = {
