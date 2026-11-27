@@ -177,6 +177,29 @@ async fn send_one(
         }
     };
 
+    // Calendar moves lock the event before updating its notification scope.
+    // Take the same lock first so a reminder is sent wholly before the move or
+    // re-authorized wholly after it, never against a stale board assignment.
+    let calendar_event_lock = sqlx::query(
+        "SELECT e.id
+           FROM notifications n
+           JOIN calendar_events e ON e.id=n.resource_id AND e.workspace_id=n.workspace_id
+          WHERE n.id=$1 AND n.recipient_user_id=$2
+            AND n.resource_type='calendar_event'
+            AND n.notification_type IN ('calendar_invitation','calendar_reminder')
+          FOR SHARE OF e"
+    )
+    .bind(job.notification_id)
+    .bind(job.recipient_user_id)
+    .fetch_optional(&mut *transaction)
+    .await;
+    if let Err(error) = calendar_event_lock {
+        drop(transaction);
+        tracing::error!(%error, notification_id=%job.notification_id, "Could not lock calendar event during email authorization");
+        update_email_job(state, job, false, Some("Could not verify current calendar event scope".to_string())).await;
+        return;
+    }
+
     let content = sqlx::query_as::<_, EmailContent>(
         "SELECT u.email AS recipient_email, n.title, n.body,
                 COALESCE(np.email_enabled,FALSE) AS email_enabled
