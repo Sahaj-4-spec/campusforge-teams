@@ -1714,7 +1714,12 @@ export default function App() {
           key={data.current_workspace_id}
           onClose={() => setAiAssistantOpen(false)}
           boards={data.boards}
+          lists={data.lists}
           activeBoardId={activeBoardId}
+          onTaskCreated={async () => {
+            try { await refreshWorkspace(); } catch {}
+            setNotice("AI task proposal created after your approval");
+          }}
         />
       )}
       {notice && (
