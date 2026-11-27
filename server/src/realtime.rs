@@ -126,6 +126,32 @@ async fn handle_socket(
         send_error(&mut socket, "You are not a member of the selected workspace").await;
         return;
     }
+    // The socket may wait up to ten seconds for its join message. Re-check
+    // revocation immediately before joining to close the logout-during-upgrade race.
+    let session_active: Result<bool, sqlx::Error> = sqlx::query_scalar(
+        "SELECT EXISTS(
+            SELECT 1 FROM auth_sessions
+             WHERE id=$1 AND user_id=$2
+               AND revoked_at IS NULL AND expires_at > NOW()
+        )",
+    )
+    .bind(session_id)
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await;
+    match session_active {
+        Ok(true) => {}
+        Ok(false) => {
+            send_error(&mut socket, "Authentication session expired or revoked").await;
+            return;
+        }
+        Err(error) => {
+            tracing::error!(%error, "Could not revalidate WebSocket session before joining");
+            send_error(&mut socket, "Unable to verify the authentication session").await;
+            return;
+        }
+    }
+
     let workspace_id = authentication.workspace_id;
     let connection_id = Uuid::new_v4();
     if let Err(error) = sqlx::query(
