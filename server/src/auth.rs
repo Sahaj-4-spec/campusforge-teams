@@ -196,6 +196,19 @@ impl FromRequestParts<AppState> for AuthUser {
 
 /// Board viewers may read board resources but cannot make changes.
 /// Workspace membership alone never grants board access.
+fn logout_request_allowed(
+    has_cookie: bool,
+    has_bearer: bool,
+    valid_bearer: bool,
+    trusted_origin: bool,
+) -> bool {
+    if has_cookie || !has_bearer {
+        trusted_origin
+    } else {
+        valid_bearer
+    }
+}
+
 pub(crate) fn board_role_allows(role: Option<&str>, write: bool) -> bool {
     match (role, write) {
         (Some("admin" | "member" | "viewer"), false) => true,
@@ -569,18 +582,17 @@ async fn logout(
     let valid_bearer = bearer_token
         .and_then(|token| verify_session_token(token, &state.jwt_secret).ok())
         .is_some();
-    if cookie_token.is_some() {
-        // Clearing a cookie is a browser state change: require the trusted
-        // frontend origin even when a different bearer token is also present.
-        if !frontend_origin_matches(&headers) {
-            return Err(StatusCode::FORBIDDEN);
-        }
-    } else if let Some(_bearer) = bearer_token {
-        if !valid_bearer {
-            return Err(StatusCode::UNAUTHORIZED);
-        }
-    } else if !frontend_origin_matches(&headers) {
-        return Err(StatusCode::FORBIDDEN);
+    if !logout_request_allowed(
+        cookie_token.is_some(),
+        bearer_token.is_some(),
+        valid_bearer,
+        frontend_origin_matches(&headers),
+    ) {
+        return Err(if cookie_token.is_some() || bearer_token.is_none() {
+            StatusCode::FORBIDDEN
+        } else {
+            StatusCode::UNAUTHORIZED
+        });
     }
 
     let mut tokens = Vec::new();
@@ -671,6 +683,18 @@ mod tests {
         sqlx::query("DELETE FROM users WHERE id=$1").bind(user_id).execute(&pool).await
             .expect("OAuth fixture user should be removed");
         pool.close().await;
+    }
+
+    #[test]
+    fn cookie_logout_requires_trusted_origin_even_with_a_bearer() {
+        assert!(!logout_request_allowed(true, true, true, false));
+        assert!(!logout_request_allowed(true, true, false, false));
+        assert!(logout_request_allowed(true, true, true, true));
+        assert!(logout_request_allowed(true, false, false, true));
+        assert!(logout_request_allowed(false, true, true, false));
+        assert!(!logout_request_allowed(false, true, false, true));
+        assert!(logout_request_allowed(false, false, false, true));
+        assert!(!logout_request_allowed(false, false, false, false));
     }
 
     #[test]
