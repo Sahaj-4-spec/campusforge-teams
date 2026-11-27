@@ -219,6 +219,12 @@ fn completion_url(base_url: &str) -> Option<Url> {
     if url.scheme() != "https" && !(url.scheme() == "http" && is_loopback) {
         return None;
     }
+    if is_loopback
+        && !(env::var("CAMPUSFORGE_ENV").ok().is_some_and(|value| value.eq_ignore_ascii_case("development"))
+            && env_enabled("CAMPUSFORGE_AI_ALLOW_LOOPBACK_PROVIDER"))
+    {
+        return None;
+    }
     if !url.username().is_empty() || url.password().is_some() || url.query().is_some() || url.fragment().is_some() {
         return None;
     }
