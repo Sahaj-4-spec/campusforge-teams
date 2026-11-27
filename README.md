@@ -80,7 +80,7 @@ The current non-AI completion branch adds:
 - PostgreSQL LISTEN/NOTIFY to relay workspace change signals across API instances, plus expiring presence leases.
 - An idempotency ledger for recurring task generation.
 
-These additional features are in draft PR #21 and are not in the deployed Render preview. The AI project assistant is intentionally excluded from this delivery. Production file storage still requires a private S3-compatible bucket and credentials. To require malware scanning, configure a reachable ClamAV TCP service and set `CAMPUSFORGE_REQUIRE_MALWARE_SCAN=true`; without that flag, uploads are marked unscanned and can be downloaded. Resend email and Google/GitHub/Discord login also require provider accounts, callback URLs, and backend secrets. See the [roadmap](docs/ROADMAP.md), [architecture](docs/ARCHITECTURE.md), [operations](docs/OPERATIONS.md), and [social sign-in setup](docs/SOCIAL_AUTH_SETUP.md).
+These additional features are in draft PR #21 and are not in the deployed Render preview. The AI project assistant is being developed separately in Track B PR #39; its read-only API and assistant panel are feature-flagged off by default and are not live until an administrator configures a compatible provider. Production file storage still requires a private S3-compatible bucket and credentials. To require malware scanning, configure a reachable ClamAV TCP service and set `CAMPUSFORGE_REQUIRE_MALWARE_SCAN=true`; without that flag, uploads are marked unscanned and can be downloaded. Resend email and Google/GitHub/Discord login also require provider accounts, callback URLs, and backend secrets. See the [roadmap](docs/ROADMAP.md), [architecture](docs/ARCHITECTURE.md), [operations](docs/OPERATIONS.md), and [social sign-in setup](docs/SOCIAL_AUTH_SETUP.md).
 
 ## 🛠️ Technology Stack
 
@@ -216,6 +216,9 @@ Edit `.env` and replace placeholder values with your local configuration. Never 
 | `CAMPUSFORGE_S3_ENDPOINT_URL` | Optional S3-compatible endpoint for R2/MinIO-style providers |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Optional server-side credentials; use a dedicated S3 access key and secret in backend secrets |
 | `RESEND_API_KEY` / `EMAIL_FROM` | Optional server-side email provider key and verified sender; leave blank to keep email delivery disabled |
+| `CAMPUSFORGE_AI_ENABLED` | Track B assistant kill switch; defaults to `false` |
+| `CAMPUSFORGE_AI_API_BASE_URL` / `CAMPUSFORGE_AI_MODEL` | Server-only OpenAI-compatible chat-completions endpoint and model |
+| `CAMPUSFORGE_AI_API_KEY` | Server-only provider credential; never use a `VITE_*` variable or commit a real key |
 
 > For Neon, use the pooled or direct PostgreSQL connection string supplied by your Neon project and retain `sslmode=require`. Keep secrets in environment files or the hosting provider's secret store; never commit them.
 
@@ -345,3 +348,10 @@ The product roadmap and the decisions for the target data model, API boundaries,
 - [Storage and email operations](docs/OPERATIONS.md)
 
 The non-AI completion work is in draft PR #21 and is not merged or deployed. The AI project assistant is intentionally excluded from this delivery. PR #20 is the SQLx rollback-compatibility prerequisite; PR #21 includes the provider-verified sign-up work from PR #19 and the remaining non-AI collaboration additions. The roadmap and operations guide record production configuration gates.
+
+
+## Track B — AI project assistant
+
+Track B is being developed on `track-b/ai-assistant-foundation` in [draft PR #39](https://github.com/Sahaj-4-spec/campusforge-teams/pull/39). The initial read-only assistant foundation includes workspace/board-scoped task context, four response modes (ask, summary, task breakdown, risk review), source references, prompt-injection boundaries, token/output caps, and per-user/workspace rate limits. Task plans are previews only; the assistant cannot create or modify records.
+
+The API uses an OpenAI-compatible `/chat/completions` endpoint configured only on the Rust server. `CAMPUSFORGE_AI_ENABLED=false` keeps the feature disabled until provider terms, privacy controls, and production settings are approved. See [Track B implementation notes](docs/track-b/README.md) and the root `.env.example`. Conversation history is held in the current browser panel only; it is not persisted to PostgreSQL.
