@@ -43,6 +43,8 @@ import {
   getStoredWorkspaceId, setStoredWorkspaceId, setWorkspaceSocketBoard,
   workspaceApi, taskApi, listApi, invitationApi, notificationApi
 } from "./lib/api.js";
+
+const projectPulseEnabled = import.meta.env.VITE_CAMPUSFORGE_PROJECT_PULSE_ENABLED === "true";
 import { buildOptimisticTaskMove } from "./lib/taskMove.js";
 import { createDemoData, createId, loadDemoData, STORAGE_KEY } from "./data/demoData.js";
 
@@ -1585,9 +1587,11 @@ export default function App() {
               <span>Search tasks, projects, and actions</span>
               <kbd>⌘ K</kbd>
             </button>
+            {projectPulseEnabled && (
             <button className="ai-assistant-trigger pulse-trigger" type="button" onClick={() => setProjectPulseOpen(true)} aria-haspopup="dialog" aria-expanded={projectPulseOpen} disabled={demoMode} title={demoMode ? "Project Pulse is available for connected workspaces" : "Open Project Pulse"}>
               <Activity size={15} /><span>Project Pulse</span>
             </button>
+            )}
             <button className="ai-assistant-trigger" type="button" onClick={() => setAiAssistantOpen(true)} aria-haspopup="dialog" aria-expanded={aiAssistantOpen} disabled={demoMode} title={demoMode ? "AI assistant is available for connected workspaces" : "Open AI project assistant"}>
               <Sparkles size={15} /><span>AI assistant</span>
             </button>
@@ -1693,7 +1697,7 @@ export default function App() {
           />
         </Suspense>
       )}
-      {projectPulseOpen && (
+      {projectPulseEnabled && projectPulseOpen && (
         <ProjectPulseDashboard
           key={data.current_workspace_id}
           onClose={() => setProjectPulseOpen(false)}
