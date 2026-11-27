@@ -210,14 +210,14 @@ async fn delete_list(
     // Preserve durable AI proposal history and its audit linkage even after
     // approved tasks are later removed from this column.
     let has_proposal_history: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM ai_action_proposals WHERE target_list_id=$1)",
+        "SELECT EXISTS(SELECT 1 FROM ai_action_proposals WHERE target_list_id=$1 AND status='pending' AND expires_at>NOW())",
     )
     .bind(list_id)
     .fetch_one(&mut *tx)
     .await
     .map_err(|cause| internal_error(cause, "Could not check proposal history before column deletion"))?;
     if has_proposal_history {
-        return Err(error(StatusCode::CONFLICT, "This column has AI proposal history and cannot be deleted"));
+        return Err(error(StatusCode::CONFLICT, "A pending AI proposal still targets this column"));
     }
 
     let ordered_ids: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM lists WHERE board_id = $1 AND id <> $2 ORDER BY position")
