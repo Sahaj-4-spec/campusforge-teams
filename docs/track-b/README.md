@@ -110,6 +110,7 @@ The existing application remains the system of record:
 - `GET /api/ai/status` — authenticated workspace status and supported modes.
 - `POST /api/ai/assistant` — authenticated read-only request.
 - `GET /api/ai/insights` — authenticated, provider-independent Project Pulse dashboard data. Accepts an optional `board_id` query parameter and applies the same board-member or workspace owner/admin scope as assistant context reads.
+- `GET /api/ai/files` — authenticated, permission-filtered list of clean, supported text files (max 128 KB) that are eligible for AI document summaries. Accepts an optional `board_id` and returns only file identifiers and display metadata, never storage keys or object URLs.
 
 Example request:
 
@@ -130,7 +131,7 @@ Mode-specific context is minimized:
 - Ask, Summary, Task Plan and Risk Review read only the bounded authorized board/task context.
 - Meeting Summary loads up to 10 meeting notes from workspace-level notes and boards the caller may access.
 - Team Chat loads up to 30 shared-channel messages from workspace-level channels and boards the caller may access. Direct messages are explicitly excluded.
-- Document requires `file_id` and loads only that file. The file must belong to the active workspace, be visible under the board/member policy, have `scan_status=clean`, use an allowed UTF-8 text media type, and be no larger than 128 KB. The stored byte length and SHA-256 checksum are verified, and the object read itself is byte-bounded. PDFs and images are not parsed or sent in this mode.
+- Document first uses the scoped `GET /api/ai/files` picker, then requires `file_id` and loads only that file. The file must belong to the active workspace, be visible under the board/member policy, have `scan_status=clean`, use an allowed UTF-8 text media type, and be no larger than 128 KB. The stored byte length and SHA-256 checksum are verified, and the object read itself is byte-bounded. PDFs and images are not parsed or sent in this mode.
 
 Changing the assistant mode, selected project, or selected document clears the in-memory conversation and requires a new acknowledgement. Each task-plan card has a separate Create task action; the model cannot call write tools, and the existing authenticated task API revalidates the target list and assignee at the time of creation.
 
