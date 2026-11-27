@@ -15,3 +15,12 @@ CREATE INDEX idx_auth_sessions_user_active
 
 CREATE INDEX idx_auth_sessions_expiry
     ON auth_sessions(expires_at);
+
+-- The FK cascade must also find revoked rows when a user account is deleted.
+CREATE INDEX idx_auth_sessions_user_id
+    ON auth_sessions(user_id);
+
+-- The cleanup worker also deletes rows whose revocation timestamp is old.
+CREATE INDEX idx_auth_sessions_revoked_cleanup
+    ON auth_sessions(revoked_at)
+    WHERE revoked_at IS NOT NULL;
