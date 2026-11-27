@@ -32,6 +32,22 @@ fn internal_error<E: std::fmt::Display>(
     fail(StatusCode::INTERNAL_SERVER_ERROR, "The proposal request could not be completed")
 }
 
+async fn check_proposal_rate_limit(
+    state: &AppState,
+    user_id: Uuid,
+    workspace_id: Uuid,
+    action: &'static str,
+    limit: i32,
+) -> ApiResult<()> {
+    let key = format!("ai-proposal:{action}:{workspace_id}:{user_id}");
+    let allowed = state.check_rate_limit(&key, limit, 60).await
+        .map_err(|cause| internal_error(cause, "Could not enforce AI proposal rate limit"))?;
+    if !allowed {
+        return Err(fail(StatusCode::TOO_MANY_REQUESTS, "Too many proposal requests. Please wait and try again."));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct ProposedTask {
     title: String,
@@ -360,6 +376,7 @@ async fn list_proposals(
     State(state): State<AppState>,
     WorkspaceUser(user_id, workspace_id): WorkspaceUser,
 ) -> ApiResult<Json<Vec<ProposalView>>> {
+    check_proposal_rate_limit(&state, user_id, workspace_id, "read", 60).await?;
     let rows = sqlx::query_as::<_, ProposalRow>(
         "SELECT p.id, p.board_id, p.target_list_id, p.created_by, p.status,
                 p.tasks::text AS tasks_json, p.source_fingerprint, p.expires_at,
@@ -396,6 +413,7 @@ async fn create_proposal(
     WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Json(mut request): Json<CreateProposalRequest>,
 ) -> ApiResult<(StatusCode, Json<ProposalView>)> {
+    check_proposal_rate_limit(&state, user_id, workspace_id, "write", 10).await?;
     validate_tasks(&mut request.tasks)?;
 
     let mut tx = state.db.begin().await
@@ -472,6 +490,7 @@ async fn apply_proposal(
     WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Path(proposal_id): Path<Uuid>,
 ) -> ApiResult<Json<ApplyResponse>> {
+    check_proposal_rate_limit(&state, user_id, workspace_id, "write", 10).await?;
     let mut tx = state.db.begin().await
         .map_err(|cause| internal_error(cause, "Could not begin proposal approval"))?;
 
@@ -543,7 +562,20 @@ async fn apply_proposal(
     if !validate_assignees(&mut tx, workspace_id, row.board_id, &tasks).await
         .map_err(|cause| internal_error(cause, "Could not recheck proposed assignees"))?
     {
-        return Err(fail(StatusCode::CONFLICT, "A proposed assignee is no longer a member of this project"));
+        sqlx::query(
+            "UPDATE ai_action_proposals SET status = 'stale', reviewed_by = $1, reviewed_at = NOW()
+              WHERE id = $2",
+        )
+        .bind(user_id)
+        .bind(proposal_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|cause| internal_error(cause, "Could not mark the proposal stale"))?;
+        insert_audit(&mut tx, workspace_id, row.board_id, proposal_id, user_id, "stale", json!({ "reason": "assignee_membership_changed" }))
+            .await
+            .map_err(|cause| internal_error(cause, "Could not record proposal drift"))?;
+        tx.commit().await.map_err(|cause| internal_error(cause, "Could not save proposal state"))?;
+        return Err(fail(StatusCode::CONFLICT, "A proposed assignee is no longer a member of this project. Generate a fresh proposal."));
     }
 
     let list_exists: bool = sqlx::query_scalar(
@@ -649,6 +681,7 @@ async fn reject_proposal(
     WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Path(proposal_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
+    check_proposal_rate_limit(&state, user_id, workspace_id, "write", 10).await?;
     let mut tx = state.db.begin().await
         .map_err(|cause| internal_error(cause, "Could not begin proposal rejection"))?;
     let row = sqlx::query_as::<_, ProposalRow>(
@@ -698,6 +731,7 @@ async fn list_audit(
     State(state): State<AppState>,
     WorkspaceUser(user_id, workspace_id): WorkspaceUser,
 ) -> ApiResult<Json<Vec<AuditResponse>>> {
+    check_proposal_rate_limit(&state, user_id, workspace_id, "read", 60).await?;
     let rows = sqlx::query_as::<_, AuditView>(
         "SELECT e.id, e.board_id, e.proposal_id, e.actor_id, e.event_type,
                 e.metadata::text AS metadata_json, e.created_at
@@ -741,4 +775,50 @@ pub fn router() -> Router<AppState> {
         .route("/ai/proposals/audit", get(list_audit))
         .route("/ai/proposals/{proposal_id}/apply", post(apply_proposal))
         .route("/ai/proposals/{proposal_id}/reject", post(reject_proposal))
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task() -> ProposedTask {
+        ProposedTask {
+            title: "  Implement proposal review  ".to_owned(),
+            description: Some(" Add explicit human approval ".to_owned()),
+            priority: "HIGH".to_owned(),
+            due_at: None,
+            estimated_minutes: Some(60),
+            assignee_ids: vec![Uuid::nil(), Uuid::nil()],
+            source_refs: vec!["T-12".to_owned()],
+        }
+    }
+
+    #[test]
+    fn validates_and_normalizes_proposed_task_fields() {
+        let mut tasks = vec![task()];
+        validate_tasks(&mut tasks).expect("task should be valid");
+        assert_eq!(tasks[0].title, "Implement proposal review");
+        assert_eq!(tasks[0].description.as_deref(), Some("Add explicit human approval"));
+        assert_eq!(tasks[0].priority, "high");
+        assert_eq!(tasks[0].assignee_ids.len(), 1);
+    }
+
+    #[test]
+    fn rejects_empty_and_oversized_proposals() {
+        assert!(validate_tasks(&mut []).is_err());
+        let mut tasks = vec![task(); 9];
+        assert!(validate_tasks(&mut tasks).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_task_priorities_and_estimates() {
+        let mut invalid_priority = vec![task()];
+        invalid_priority[0].priority = "critical-now".to_owned();
+        assert!(validate_tasks(&mut invalid_priority).is_err());
+
+        let mut invalid_estimate = vec![task()];
+        invalid_estimate[0].estimated_minutes = Some(0);
+        assert!(validate_tasks(&mut invalid_estimate).is_err());
+    }
 }
