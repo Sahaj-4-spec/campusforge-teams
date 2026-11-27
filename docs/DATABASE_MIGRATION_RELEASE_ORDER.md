@@ -2,7 +2,7 @@
 
 CampusForge applies SQLx migrations when the API starts. Keep database changes compatible with the application versions that may be live during a rolling deploy and with the last rollback target.
 
-> **Current status — 28 November 2026:** PR #20 (rollback-compatible SQLx runner) and PR #21 (verified-provider sign-up and the remaining non-AI roadmap) are already merged. The migration sequence below records the historical safe order; those PRs are not pending. Migrations 0001–0013 are present in the `main` source tree, but this does not prove that they have been applied to the currently hosted Render database. Verify the active API revision and `_sqlx_migrations` table before rollout. The integrated candidate preserves migration 0014 (`ai_action_proposals`, already applied to Neon `campusforge_app`) and adds migration 0015 (`auth_sessions`) for revocable sessions. The candidate is not merged or deployed; fresh combined-branch CI and runtime session checks remain required.
+> **Current status — 28 November 2026:** PR #20 (rollback-compatible SQLx runner) and PR #21 (verified-provider sign-up and the remaining non-AI roadmap) are already merged. The migration sequence below records the historical safe order; those PRs are not pending. Migrations 0001–0013 are present in the `main` source tree, but this does not prove that they have been applied to the currently hosted Render database. Verify the active API revision and `_sqlx_migrations` table before rollout. The integrated candidate preserves migration 0014 (`ai_action_proposals`, already applied to Neon `campusforge_app`), adds migration 0015 (`auth_sessions`) for revocable sessions, and adds migration 0016 (`notifications.board_id`) to enforce board-scoped notification delivery and reads. Migrations 0015 and 0016 are not yet applied. The candidate is not merged or deployed; fresh combined-branch CI and runtime checks remain required.
 
 ## SQLx rollback compatibility
 
@@ -45,7 +45,7 @@ The integrated candidate adds `0015_revocable_auth_sessions.sql` after the alrea
 - WebSocket handshakes validate the session and connected sockets re-check it every 30 seconds.
 - Expired/revoked rows are cleaned after a seven-day retention buffer.
 
-Apply migration 0015 only with the matching session-aware application binary after the integrated candidate passes fresh CI and review. All existing JWTs issued before this change lack `jti`; users must sign in again after release. This is an additive schema change, but rollout still requires a valid backup and a tested rollback plan. Do not infer that the Render database has migrations 0001–0013 merely because those files are present in GitHub.
+Apply migrations 0015 and 0016 in order only with the matching session-aware and board-notification-aware application release after the integrated candidate passes fresh CI and review. All existing JWTs issued before this change lack `jti`; users must sign in again after release. This is an additive schema change, but rollout still requires a valid backup and a tested rollback plan. Do not infer that the Render database has migrations 0001–0013 merely because those files are present in GitHub.
 
 ## Rollback
 
@@ -56,7 +56,12 @@ For migrations 0009–0013, roll back only to an application version that includ
 If a later change needs a destructive schema contraction, ship it only after the rollback window and older binary support have deliberately ended.
 
 
-The connected Neon `campusforge_app` database currently records successful SQLx migration versions 1–14. Version 14 is `ai_action_proposals`; it must not be renamed or replaced. Session revocation is version 15. Apply 0015 only with a matching application release after fresh integrated CI, database backup verification, and a restore/rollback plan. The existing legacy `neondb` database is separate and was preserved.
+The connected Neon `campusforge_app` database currently records successful SQLx migration versions 1–14. Version 14 is `ai_action_proposals`; it must not be renamed or replaced. Version 15 adds revocable sessions; version 16 adds `notifications.board_id` and its access index. Apply 0015 and 0016 only in order with the matching integrated application release after fresh CI, database backup verification, and a restore/rollback plan. The existing legacy `neondb` database is separate and was preserved.
 
 
-SQLx calculates migration checksums with SHA-384 (48 bytes). The Neon `campusforge_app` journal was initially populated with 32-byte SHA-256 digests, which caused the API's `MigrateError::VersionMismatch(1)` at startup. The journal entries 0001–0014 were corrected using the exact SQL source and SQLx descriptions; migration files and application data were not modified. Verify 48-byte checksums before applying migration 0015.
+SQLx calculates migration checksums with SHA-384 (48 bytes). The Neon `campusforge_app` journal was initially populated with 32-byte SHA-256 digests, which caused the API's `MigrateError::VersionMismatch(1)` at startup. The journal entries 0001–0014 were corrected using the exact SQL source and SQLx descriptions; migration files and application data were not modified. Verify 48-byte checksums before applying migrations 0015 and 0016.
+
+
+## Board-scoped notification security (migration 0016)
+
+Migration `0016_notification_board_scope.sql` adds `notifications.board_id`, backfills it for extant task notifications whose tasks still exist, and indexes recipient/board/created time. The application writes board scope for every board activity notification and restricts recipients, inbox list/unread/read actions, and email dispatch to explicit board members or workspace owners/admins. Workspace invitations remain a separate invitation-validated path. Legacy task notifications that cannot be mapped to a surviving board are hidden and suppressed rather than exposed without an authorization scope.
