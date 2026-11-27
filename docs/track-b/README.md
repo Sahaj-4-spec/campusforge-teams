@@ -72,7 +72,8 @@ This file establishes the initial product and engineering boundary. The first re
 - Rendered AI output as plain text; no generated HTML is injected into the page.
 - All requests remain read-only; the API returns `actions_applied: false`.
 - The task-plan JSON schema, task count, priority, estimate, field lengths, and source references are validated server-side; model-invented source IDs are removed.
-- A first-use data-sharing acknowledgement is required before the browser sends a prompt or authorized context to the configured provider.
+- A first-use data-sharing acknowledgement is required in the UI and is checked again by the API on every provider request. The notice covers the prompt, recent conversation, and authorized project context.
+- Changing the selected project clears the conversation; changing workspaces remounts the assistant so prior history and consent do not carry across tenants.
 
 **Not yet implemented:** meeting-note or file summarization, persistent conversations, streaming, and user preferences.
 
@@ -116,11 +117,12 @@ Example request:
   "prompt": "What is at risk this week?",
   "mode": "risk_review",
   "board_id": null,
+  "acknowledged_data_sharing": true,
   "history": []
 }
 ```
 
-Supported modes are `ask`, `summary`, `task_breakdown`, and `risk_review`. Prompt length is capped at 2,000 characters; up to eight user/assistant history messages are accepted, with each message capped at 1,800 characters. An optional `board_id` scopes retrieval to one authorized board. Without it, retrieval is limited to the caller's accessible boards within the selected workspace.
+Supported modes are `ask`, `summary`, `task_breakdown`, and `risk_review`. Prompt length is capped at 2,000 characters; up to eight user/assistant history messages are accepted, with each message capped at 1,800 characters. The request must include `acknowledged_data_sharing: true`; the API rejects requests without it. An optional `board_id` scopes retrieval to one authorized board. Without it, retrieval is limited to the caller's accessible boards within the selected workspace.
 
 The response contains `answer`, `mode`, `model`, `generated_at`, cited `sources`, prompt/completion token counts when supplied by the provider, and `actions_applied: false`. Only source references actually cited in the answer are returned in the `sources` list.
 
@@ -132,7 +134,7 @@ Project Pulse is available independently of the external AI provider and does no
 - Assigned workload estimates, with work split evenly for tasks that have multiple assignees and missing estimates shown separately.
 - Per-board health comparisons for the authorized boards in scope.
 
-The API reads up to 100 authorized boards and 5,000 tasks per response. When either cap is reached, `sample_capped` is true and the dashboard warns that the figures represent a bounded sample. Completion is inferred from Done/Complete/Completed/Closed/Resolved list names; blockers are inferred from Blocked/Stuck/On Hold list names. These are heuristics, not predictive analytics or AI-generated judgments. Users can narrow the dashboard to a single board for a more focused view.
+Project Pulse reads are limited to 30 requests per user per minute and 300 per workspace per hour. The API reads up to 100 authorized boards and 5,000 tasks per response. When either cap is reached, `sample_capped` is true and the dashboard warns that the figures represent a bounded sample. Completion is inferred from Done/Complete/Completed/Closed/Resolved list names; blockers are inferred from Blocked/Stuck/On Hold list names. These are heuristics, not predictive analytics or AI-generated judgments. Users can narrow the dashboard to a single board for a more focused view.
 
 ### Provider configuration
 
@@ -143,13 +145,14 @@ Configure these values only in the Rust API environment:
 - `CAMPUSFORGE_AI_API_KEY=...`
 - `CAMPUSFORGE_AI_MODEL=...`
 
-Hosted endpoints must use HTTPS. HTTP is accepted only for localhost development. Redirects are disabled. Keep the feature off until provider retention/training terms, disclosure, spend ceilings and privacy review are approved.
+Hosted endpoints must use HTTPS. HTTP loopback is accepted only when both `CAMPUSFORGE_ENV=development` and `CAMPUSFORGE_AI_ALLOW_LOOPBACK_PROVIDER=true` are set. Production must leave that opt-in disabled. Provider DNS is resolved, checked against private/metadata destinations, pinned to the validated addresses, and sent without ambient proxy settings. Redirects are disabled. Keep the feature off until provider retention/training terms, disclosure, spend ceilings and privacy review are approved.
 
 ### Existing safety controls
 
 - Fixed-window rate limits: 10 requests/user/minute and 120 requests/workspace/hour, shared through the existing PostgreSQL rate-limit table.
 - Provider call timeout: 45 seconds; output limit: 1,200 tokens and 12,000 characters.
 - Prompt size, history length/roles, context record counts and description lengths are bounded.
+- Common private-key, API-key, bearer-token, JWT-like, database-URL and email patterns are redacted recursively from provider-bound text and sanitized responses. This is defense in depth, not a guarantee that every sensitive value can be detected.
 - Project records and conversation history are identified as untrusted content; no tools, arbitrary SQL or autonomous writes are exposed.
 
 No AI-specific persistence migration has been created. Conversation/audit tables remain deferred until retention, deletion, indexing and migration ordering are approved.
