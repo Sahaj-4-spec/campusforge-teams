@@ -1,6 +1,6 @@
 # CampusForge Teams — Social Sign-in Setup
 
-CampusForge creates new accounts only through server-side OAuth sign-in with Google, GitHub, or Discord. The API requires the provider to confirm that the account email is verified before it creates a CampusForge user. Existing email/password accounts can still sign in, but password-only registration is disabled. Provider client secrets stay on the Rust API server; they must never be placed in frontend environment variables or committed to Git.
+CampusForge creates new accounts only through server-side OAuth sign-in with Google, GitHub, or Discord. The API requires the provider to confirm that the account email is verified before it creates a CampusForge user. Any valid email domain is accepted when that provider confirms it is verified; Gmail is not required. Existing email/password accounts can still sign in, but password-only registration is disabled. Provider client secrets stay on the Rust API server; they must never be placed in frontend environment variables or committed to Git.
 
 ## 1. Configure the local environment
 
@@ -44,6 +44,7 @@ Create an application in the Discord Developer Portal and configure the OAuth2 r
 - OAuth state is a high-entropy random value. Only its SHA-256 hash is stored, and it is deleted when used or allowed to expire after ten minutes.
 - Provider access tokens are used only to fetch the user's verified identity and are not saved.
 - The API issues the same 24-hour CampusForge session JWT for email/password and OAuth sign-in, but sends it only in an HttpOnly `campusforge_session` cookie. The token is not returned in the JSON body or placed in the redirect URL.
+- The Track A finalization branch adds a random session ID in the JWT `jti` claim and stores only that ID, user ID, and expiry in PostgreSQL. Protected requests require an active row; logout revokes it. WebSocket connections re-check the session during their heartbeat. After migration 0015 is released, pre-0014 JWTs without a `jti` must be replaced by signing in again.
 - The browser includes cookies on API requests. The API permits credentialed CORS only for the configured `FRONTEND_ORIGIN` and checks the Origin on state-changing cookie-authenticated requests.
 - HTTPS deployments set the session cookie as `Secure; SameSite=None` for separately hosted frontend/API origins; local HTTP development uses `SameSite=Lax`.
 - WebSocket upgrades authenticate from the HttpOnly session cookie; the frontend never sends the JWT in a WebSocket message.
@@ -65,16 +66,24 @@ Create an application in the Discord Developer Portal and configure the OAuth2 r
 10. Apply migration 0009 and attempt a direct insert with a non-NULL password hash; confirm PostgreSQL rejects it.
 11. Attempt a passwordless user insert without an `oauth_accounts` row; confirm transaction commit fails.
 12. Create a passwordless user and its OAuth identity in the same transaction without supplying `email_verified_at`; confirm the database trigger sets the timestamp and commit succeeds.
+13. After migration 0015 is applied, sign in and confirm a corresponding `auth_sessions` row is created; call logout and confirm the row is marked revoked and later protected API requests reject the old cookie/JWT.
+14. Keep a WebSocket open, revoke its session from another request, and confirm the socket closes on the next 30-second session heartbeat.
+15. Confirm session cleanup removes expired/revoked records only after the seven-day retention buffer.
 
 ## 7. Deployment order and rollback
 
-**Do not apply migrations 0009 or 0010 until every API instance is running the SQLx rollback-compatibility release in [PR #20](https://github.com/Sahaj-4-spec/campusforge-teams/pull/20).**
+The historical PR #20 then PR #21 release order has already been completed in GitHub: PR #20 merged the SQLx rollback-compatible migration runner, and PR #21 merged verified-provider sign-up plus the remaining non-AI roadmap implementation. PR #19 was not merged separately because its verified sign-up change was included in PR #21.
 
-1. Merge and deploy PR #20 first. It changes the API migration runner but does not change the database schema.
-2. Confirm every API instance runs that compatibility release.
-3. Then merge and deploy [PR #21](https://github.com/Sahaj-4-spec/campusforge-teams/pull/21). It includes the provider-verified sign-up change originally proposed in PR #19, plus the remaining non-AI collaboration features. Migrations 0009 and 0010 apply in sequence.
-4. Keep the PR #20 release (or a newer release with the same migration compatibility) as the rollback target. Do not roll back to a pre-PR #20 binary after migration 0009 has been applied.
-5. Verify all three OAuth callbacks, existing password login, direct registration rejection, the database account-insert guards, workspace file scanning/storage, and two-user rollout behavior before opening sign-up to the public.
+The source repository contains migrations 0001–0013 on `main`. This does **not** prove that the current Render database has applied those migrations; verify the actual deployed revision and SQLx migration history before planning a rollout. The Track A finalization branch adds migration `0015_revocable_auth_sessions.sql` and the matching application changes. It is not yet merged or deployed.
+
+For a future controlled release:
+1. Confirm the currently deployed API version and database migration history.
+2. Preserve SQLx rollback compatibility; do not roll back to a pre-PR #20 binary after migration 0009 has been applied.
+3. Apply migration 0015 only with the matching application code after its branch CI/review passes.
+4. Expect a one-time re-authentication for sessions issued before migration 0015, because old JWTs do not contain a server-recorded `jti`.
+5. Verify all three OAuth callbacks, existing password login, direct registration rejection, database account-insert guards, session revocation, WebSocket disconnect, private file scanning/storage, and two-user rollout behavior before opening sign-up to the public.
+
+The repository's Render Blueprint currently auto-deploys commits pushed to `main`. Do not merge to `main` or deploy until the user explicitly authorizes release and the production gates in [Track A Final Acceptance](TRACK_A_FINAL_ACCEPTANCE.md) are met.
 
 See [Database Migration Release Order](DATABASE_MIGRATION_RELEASE_ORDER.md) for the compatibility rationale and expand/contract policy.
  
