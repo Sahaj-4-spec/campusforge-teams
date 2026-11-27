@@ -14,7 +14,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    auth::{issue_token, session_cookie_header},
+    auth::{issue_token, persist_session, session_cookie_header},
     state::AppState,
 };
 
@@ -406,8 +406,15 @@ async fn complete_login(
     let profile = fetch_verified_profile(&client, provider, &access_token).await?;
     let user = find_or_create_user(state, provider, profile).await?;
 
-    let (token, expires_in) = issue_token(user.id, &user.email, &state.jwt_secret)
-        .map_err(|_| "CampusForge could not create your session.")?;
+    let (token, expires_in, session_id, expires_at) =
+        issue_token(user.id, &user.email, &state.jwt_secret)
+            .map_err(|_| "CampusForge could not create your session.")?;
+    persist_session(&state.db, user.id, session_id, expires_at)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "Could not persist OAuth authentication session");
+            "Sign-in is temporarily unavailable."
+        })?;
 
     Ok((token, expires_in))
 }
@@ -444,6 +451,60 @@ async fn consume_state(
     Ok(())
 }
 
+fn normalize_verified_email(email: &str) -> Result<String, &'static str> {
+    let email = email.trim();
+    let mut parts = email.split('@');
+    let (Some(local), Some(domain)) = (parts.next(), parts.next()) else {
+        return Err("The identity provider did not return a valid verified email address.");
+    };
+    let valid_domain = domain.contains('.')
+        && domain.split('.').all(|label| {
+            !label.is_empty() && !label.starts_with('-') && !label.ends_with('-')
+        });
+    if parts.next().is_some()
+        || local.is_empty()
+        || domain.is_empty()
+        || !valid_domain
+        || email.len() > 254
+        || email.chars().any(char::is_whitespace)
+        || local.starts_with('.')
+        || local.ends_with('.')
+        || local.contains("..")
+    {
+        return Err("The identity provider did not return a valid verified email address.");
+    }
+    Ok(email.to_ascii_lowercase())
+}
+
+fn verified_google_email(profile: &GoogleProfile) -> Result<String, &'static str> {
+    if !profile.email_verified || profile.sub.trim().is_empty() {
+        return Err("Use a Google account with a verified email address.");
+    }
+    normalize_verified_email(&profile.email)
+        .map_err(|_| "Use a Google account with a valid verified email address.")
+}
+
+fn verified_github_email(emails: &[GithubEmail]) -> Result<String, &'static str> {
+    let email = emails
+        .iter()
+        .find(|item| item.primary && item.verified)
+        .or_else(|| emails.iter().find(|item| item.verified))
+        .map(|item| item.email.as_str())
+        .ok_or("Your GitHub account needs a verified email address.")?;
+    normalize_verified_email(email)
+        .map_err(|_| "Your GitHub account needs a valid verified email address.")
+}
+
+fn verified_discord_email(profile: &DiscordProfile) -> Result<String, &'static str> {
+    if profile.verified != Some(true) || profile.id.trim().is_empty() {
+        return Err("Use a Discord account with a verified email address.");
+    }
+    let email = profile.email.as_deref()
+        .ok_or("Use a Discord account with a verified email address.")?;
+    normalize_verified_email(email)
+        .map_err(|_| "Use a Discord account with a valid verified email address.")
+}
+
 async fn fetch_verified_profile(
     client: &reqwest::Client,
     provider: Provider,
@@ -466,13 +527,11 @@ async fn fetch_verified_profile(
                 .await
                 .map_err(|_| "Google returned an unreadable account profile.")?;
 
-            if !profile.email_verified || profile.email.trim().is_empty() || profile.sub.trim().is_empty() {
-                return Err("Use a Google account with a verified email address.");
-            }
+            let email = verified_google_email(&profile)?;
 
             Ok(VerifiedProfile {
                 provider_user_id: profile.sub,
-                email: profile.email,
+                email,
                 full_name: profile.name.unwrap_or_default(),
                 avatar_url: profile.picture,
             })
@@ -510,12 +569,7 @@ async fn fetch_verified_profile(
                 .await
                 .map_err(|_| "GitHub returned an unreadable email list.")?;
 
-            let email = emails
-                .iter()
-                .find(|item| item.primary && item.verified)
-                .or_else(|| emails.iter().find(|item| item.verified))
-                .map(|item| item.email.clone())
-                .ok_or("Your GitHub account needs a verified email address.")?;
+            let email = verified_github_email(&emails)?;
 
             Ok(VerifiedProfile {
                 provider_user_id: profile.id.to_string(),
@@ -540,9 +594,7 @@ async fn fetch_verified_profile(
                 .await
                 .map_err(|_| "Discord returned an unreadable account profile.")?;
 
-            let email = profile.email
-                .filter(|value| profile.verified.unwrap_or(false) && !value.trim().is_empty())
-                .ok_or("Use a Discord account with a verified email address.")?;
+            let email = verified_discord_email(&profile)?;
 
             let avatar_url = profile.avatar.map(|hash| {
                 let extension = if hash.starts_with("a_") { "gif" } else { "png" };
@@ -691,6 +743,120 @@ mod tests {
         assert_eq!(Provider::parse("github"), Some(Provider::Github));
         assert_eq!(Provider::parse("discord"), Some(Provider::Discord));
         assert_eq!(Provider::parse("facebook"), None);
+    }
+
+    #[test]
+    fn google_sign_up_requires_a_verified_valid_email() {
+        let verified = GoogleProfile {
+            sub: "google-subject-123".to_owned(),
+            email: "  Student@University.edu  ".to_owned(),
+            email_verified: true,
+            name: None,
+            picture: None,
+        };
+        assert_eq!(verified_google_email(&verified).unwrap(), "student@university.edu");
+
+        let unverified = GoogleProfile {
+            email_verified: false,
+            ..verified
+        };
+        assert!(verified_google_email(&unverified).is_err());
+
+        let missing_subject = GoogleProfile {
+            sub: "  ".to_owned(),
+            email_verified: true,
+            email: "student@gmail.com".to_owned(),
+            name: None,
+            picture: None,
+        };
+        assert!(verified_google_email(&missing_subject).is_err());
+    }
+
+    #[test]
+    fn github_sign_up_uses_only_a_verified_email_and_prefers_primary() {
+        let emails = vec![
+            GithubEmail {
+                email: "other@gmail.com".to_owned(),
+                primary: false,
+                verified: true,
+            },
+            GithubEmail {
+                email: "unverified@example.com".to_owned(),
+                primary: true,
+                verified: false,
+            },
+            GithubEmail {
+                email: "  Primary@Campus.edu ".to_owned(),
+                primary: true,
+                verified: true,
+            },
+        ];
+        assert_eq!(verified_github_email(&emails).unwrap(), "primary@campus.edu");
+
+        let no_verified_email = vec![
+            GithubEmail {
+                email: "unverified@gmail.com".to_owned(),
+                primary: true,
+                verified: false,
+            },
+        ];
+        assert!(verified_github_email(&no_verified_email).is_err());
+        assert!(verified_github_email(&[]).is_err());
+    }
+
+    #[test]
+    fn discord_sign_up_requires_verified_flag_and_valid_email() {
+        let verified = DiscordProfile {
+            id: "discord-user-123".to_owned(),
+            username: "student".to_owned(),
+            global_name: None,
+            email: Some(" Student@Example.org ".to_owned()),
+            verified: Some(true),
+            avatar: None,
+        };
+        assert_eq!(verified_discord_email(&verified).unwrap(), "student@example.org");
+
+        let missing_subject = DiscordProfile {
+            id: "  ".to_owned(),
+            username: "student".to_owned(),
+            global_name: None,
+            email: Some("student@example.org".to_owned()),
+            verified: Some(true),
+            avatar: None,
+        };
+        assert!(verified_discord_email(&missing_subject).is_err());
+
+        let unverified = DiscordProfile {
+            verified: Some(false),
+            ..verified
+        };
+        assert!(verified_discord_email(&unverified).is_err());
+
+        let unknown_verification = DiscordProfile {
+            verified: None,
+            email: Some("student@gmail.com".to_owned()),
+            ..DiscordProfile {
+                id: "discord-user-123".to_owned(),
+                username: "student".to_owned(),
+                global_name: None,
+                email: None,
+                verified: None,
+                avatar: None,
+            }
+        };
+        assert!(verified_discord_email(&unknown_verification).is_err());
+    }
+
+    #[test]
+    fn provider_email_normalization_rejects_malformed_addresses() {
+        assert!(normalize_verified_email("student@gmail.com").is_ok());
+        assert!(normalize_verified_email("studentgmail.com").is_err());
+        assert!(normalize_verified_email("student@").is_err());
+        assert!(normalize_verified_email("@gmail.com").is_err());
+        assert!(normalize_verified_email(" student @gmail.com ").is_err());
+        assert!(normalize_verified_email("student@@gmail.com").is_err());
+        assert!(normalize_verified_email("student@gmail..com").is_err());
+        assert!(normalize_verified_email(".student@gmail.com").is_err());
     }
 
     #[test]
