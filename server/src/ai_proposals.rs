@@ -518,7 +518,13 @@ async fn apply_proposal(
     .bind(workspace_id)
     .fetch_optional(&mut *tx)
     .await
-    .map_err(|cause| internal_error(cause, "Could not load the task proposal"))?;
+    .map_err(|cause| {
+        if cause.as_database_error().and_then(|error| error.code()).as_deref() == Some("40001") {
+            fail(StatusCode::CONFLICT, "This proposal was reviewed concurrently. Refresh the proposal list and try again.")
+        } else {
+            internal_error(cause, "Could not load the task proposal")
+        }
+    })?;
     let Some(row) = row else {
         return Err(fail(StatusCode::NOT_FOUND, "Proposal not found"));
     };
@@ -608,6 +614,25 @@ async fn apply_proposal(
         .fetch_optional(&mut *tx)
         .await
         .map_err(|cause| internal_error(cause, "Could not lock the destination column"))?;
+
+    // The list lock can block long enough for a proposal to expire.
+    // Re-check the deadline immediately before the first task write.
+    if row.expires_at <= Utc::now() {
+        sqlx::query(
+            "UPDATE ai_action_proposals SET status = 'expired', reviewed_by = $1, reviewed_at = NOW()
+              WHERE id = $2 AND status = 'pending'",
+        )
+        .bind(user_id)
+        .bind(proposal_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|cause| internal_error(cause, "Could not expire the locked proposal"))?;
+        insert_audit(&mut tx, workspace_id, row.board_id, proposal_id, user_id, "expired", json!({}))
+            .await
+            .map_err(|cause| internal_error(cause, "Could not audit the expired proposal"))?;
+        tx.commit().await.map_err(|cause| internal_error(cause, "Could not save proposal expiry"))?;
+        return Err(fail(StatusCode::CONFLICT, "This proposal expired while it was being reviewed"));
+    }
 
     let mut next_position: i32 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(position), -1) + 1 FROM tasks WHERE list_id = $1",
@@ -719,6 +744,23 @@ async fn reject_proposal(
         .map_err(|cause| internal_error(cause, "Could not recheck project permissions"))?
     {
         return Err(fail(StatusCode::FORBIDDEN, "You no longer have permission to reject this proposal"));
+    }
+
+    if row.expires_at <= Utc::now() {
+        sqlx::query(
+            "UPDATE ai_action_proposals SET status = 'expired', reviewed_by = $1, reviewed_at = NOW()
+              WHERE id = $2 AND status = 'pending'",
+        )
+        .bind(user_id)
+        .bind(proposal_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|cause| internal_error(cause, "Could not expire the rejected proposal"))?;
+        insert_audit(&mut tx, workspace_id, row.board_id, proposal_id, user_id, "expired", json!({}))
+            .await
+            .map_err(|cause| internal_error(cause, "Could not audit the expired proposal"))?;
+        tx.commit().await.map_err(|cause| internal_error(cause, "Could not save proposal expiry"))?;
+        return Err(fail(StatusCode::CONFLICT, "This proposal has expired and cannot be rejected"));
     }
 
     sqlx::query(
