@@ -77,6 +77,8 @@ struct AssistantRequest {
     #[serde(default)]
     board_id: Option<Uuid>,
     #[serde(default)]
+    acknowledged_data_sharing: bool,
+    #[serde(default)]
     history: Vec<ConversationTurn>,
 }
 
@@ -262,10 +264,15 @@ async fn status(
 fn rate_limit_key(scope: &str, user_id: Option<Uuid>, workspace_id: Uuid) -> String {
     let identity = user_id.map(|value| value.to_string()).unwrap_or_else(|| "workspace".to_owned());
     let digest = Sha256::digest(format!("{scope}:{identity}:{workspace_id}").as_bytes());
-    format!("ai:{}", digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>())
+    // api_rate_limits.bucket_key has a CHECK(length(bucket_key) = 64).
+    // The scope and identity are already included in the SHA-256 preimage.
+    digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>()
 }
 
 fn validate_request(request: &AssistantRequest) -> Result<(), (StatusCode, Json<ApiError>)> {
+    if !request.acknowledged_data_sharing {
+        return Err(fail(StatusCode::BAD_REQUEST, "Acknowledge the data-sharing notice before sending prompts or workspace context to the AI provider"));
+    }
     let prompt = request.prompt.trim();
     if prompt.is_empty() || prompt.chars().count() > 2000 {
         return Err(fail(StatusCode::BAD_REQUEST, "Prompt must contain between 1 and 2,000 characters"));
@@ -966,6 +973,10 @@ async fn project_pulse(
                         FROM task_assignees ta
                         JOIN users u ON u.id = ta.user_id
                        WHERE ta.task_id = t.id
+                         AND EXISTS (
+                           SELECT 1 FROM workspace_members wm
+                            WHERE wm.user_id = u.id AND wm.workspace_id = b.workspace_id
+                         )
                     ), ARRAY[]::text[]) AS assignees
                FROM tasks t
                JOIN lists l ON l.id = t.list_id
@@ -1201,6 +1212,34 @@ mod tests {
         assert!(prompt.contains("read-only"));
         assert!(prompt.contains("untrusted data"));
         assert!(prompt.contains("Never claim an action was performed"));
+    }
+
+    #[test]
+    fn rate_limit_keys_match_database_schema_and_separate_scopes() {
+        let workspace_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let user_key = rate_limit_key("user", Some(user_id), workspace_id);
+        let workspace_key = rate_limit_key("workspace", None, workspace_id);
+        assert_eq!(user_key.len(), 64);
+        assert_eq!(workspace_key.len(), 64);
+        assert_ne!(user_key, workspace_key);
+    }
+
+    #[test]
+    fn request_requires_explicit_data_sharing_acknowledgement() {
+        let request = AssistantRequest {
+            prompt: "Summarize my board".to_string(),
+            mode: AssistantMode::Ask,
+            board_id: None,
+            acknowledged_data_sharing: false,
+            history: Vec::new(),
+        };
+        assert!(validate_request(&request).is_err());
+        let acknowledged = AssistantRequest {
+            acknowledged_data_sharing: true,
+            ..request
+        };
+        assert!(validate_request(&acknowledged).is_ok());
     }
 
     #[test]
