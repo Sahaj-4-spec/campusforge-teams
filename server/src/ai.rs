@@ -1497,6 +1497,10 @@ async fn project_pulse(
     WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Query(query): Query<PulseQuery>,
 ) -> ApiResult<(HeaderMap, Json<ProjectPulseResponse>)> {
+    if !env_enabled("CAMPUSFORGE_PROJECT_PULSE_ENABLED") {
+        return Err(fail(StatusCode::FORBIDDEN, "Project Pulse is disabled by the workspace administrator"));
+    }
+
     const MAX_BOARDS: usize = 100;
     const MAX_TASKS: usize = 5000;
 
