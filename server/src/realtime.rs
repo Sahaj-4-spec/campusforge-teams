@@ -15,7 +15,7 @@ use tokio::time::{interval, timeout, Instant};
 use uuid::Uuid;
 
 use crate::{
-    auth::{frontend_origin_matches, session_token_from_headers, verify_token},
+    auth::{frontend_origin_matches, session_token_from_headers, verify_session_token},
     state::AppState,
 };
 
@@ -49,12 +49,32 @@ async fn websocket_handler(
     let Some(token) = session_token_from_headers(&headers) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    let (user_id, expires_at) = match verify_token(&token, &state.jwt_secret) {
-        Ok(identity) => identity,
-        Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
-    };
+    let (user_id, expires_at, session_id) =
+        match verify_session_token(&token, &state.jwt_secret) {
+            Ok(identity) => identity,
+            Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
+        };
+    let session_active: Result<bool, sqlx::Error> = sqlx::query_scalar(
+        "SELECT EXISTS(
+            SELECT 1 FROM auth_sessions
+             WHERE id=$1 AND user_id=$2
+               AND revoked_at IS NULL AND expires_at > NOW()
+        )",
+    )
+    .bind(session_id)
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await;
+    match session_active {
+        Ok(true) => {}
+        Ok(false) => return StatusCode::UNAUTHORIZED.into_response(),
+        Err(error) => {
+            tracing::error!(%error, "Could not validate WebSocket authentication session");
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+    }
     websocket
-        .on_upgrade(move |socket| handle_socket(socket, state, user_id, expires_at))
+        .on_upgrade(move |socket| handle_socket(socket, state, user_id, expires_at, session_id))
         .into_response()
 }
 
@@ -64,7 +84,13 @@ async fn send_error(socket: &mut WebSocket, message: &'static str) {
     let _ = socket.send(Message::Close(None)).await;
 }
 
-async fn handle_socket(mut socket: WebSocket, state: AppState, user_id: Uuid, expires_at: usize) {
+async fn handle_socket(
+    mut socket: WebSocket,
+    state: AppState,
+    user_id: Uuid,
+    expires_at: usize,
+    session_id: Uuid,
+) {
     let first_message = timeout(Duration::from_secs(10), socket.recv()).await;
     let message = match first_message {
         Ok(Some(Ok(Message::Text(text)))) => text,
@@ -146,6 +172,29 @@ async fn handle_socket(mut socket: WebSocket, state: AppState, user_id: Uuid, ex
                 break;
             }
             _ = heartbeat.tick() => {
+                let session_active: Result<bool, sqlx::Error> = sqlx::query_scalar(
+                    "SELECT EXISTS(
+                        SELECT 1 FROM auth_sessions
+                         WHERE id=$1 AND user_id=$2
+                           AND revoked_at IS NULL AND expires_at > NOW()
+                    )",
+                )
+                .bind(session_id)
+                .bind(user_id)
+                .fetch_one(&state.db)
+                .await;
+                match session_active {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        send_error(&mut socket, "Your session was signed out; sign in again").await;
+                        break;
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "Could not validate WebSocket session");
+                        send_error(&mut socket, "Your session could not be verified; reconnect after signing in").await;
+                        break;
+                    }
+                }
                 if let Err(error) = sqlx::query("UPDATE workspace_presence SET last_seen_at=NOW() WHERE connection_id=$1")
                     .bind(connection_id).execute(&state.db).await
                 {
