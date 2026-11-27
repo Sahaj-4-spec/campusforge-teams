@@ -119,6 +119,7 @@ Example request:
   "mode": "risk_review",
   "board_id": null,
   "acknowledged_data_sharing": true,
+  "file_id": null,
   "history": []
 }
 ```
@@ -133,7 +134,7 @@ Mode-specific context is minimized:
 
 Changing the assistant mode, selected project, or selected document clears the in-memory conversation and requires a new acknowledgement. Each task-plan card has a separate Create task action; the model cannot call write tools, and the existing authenticated task API revalidates the target list and assignee at the time of creation.
 
-The response contains `answer`, `mode`, `model`, `generated_at`, cited `sources`, prompt/completion token counts when supplied by the provider, and `actions_applied: false`. Only source references actually cited in the answer are returned in the `sources` list. The endpoint remains read-only; approved task-plan cards call the normal task API only after a separate user click.
+The response contains `answer`, `mode`, `model`, `generated_at`, cited `sources`, prompt/completion token counts when supplied by the provider, and `actions_applied: false`. File-summary requests must set `file_id` to the selected file UUID; other modes must leave it null. Only source references actually cited in the answer are returned in the `sources` list. The endpoint remains read-only; approved task-plan cards call the normal task API only after a separate user click.
 
 ### Project Pulse
 
