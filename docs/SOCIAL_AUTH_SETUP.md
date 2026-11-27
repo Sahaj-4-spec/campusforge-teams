@@ -1,6 +1,6 @@
 # CampusForge Teams — Social Sign-in Setup
 
-CampusForge creates new accounts only through server-side OAuth sign-in with Google, GitHub, or Discord. The API requires the provider to confirm that the account email is verified before it creates a CampusForge user. Existing email/password accounts can still sign in, but password-only registration is disabled. Provider client secrets stay on the Rust API server; they must never be placed in frontend environment variables or committed to Git.
+CampusForge creates new accounts only through server-side OAuth sign-in with Google, GitHub, or Discord. The API requires the provider to confirm that the account email is verified before it creates a CampusForge user. Any valid email domain is accepted when that provider confirms it is verified; Gmail is not required. Existing email/password accounts can still sign in, but password-only registration is disabled. Provider client secrets stay on the Rust API server; they must never be placed in frontend environment variables or committed to Git.
 
 ## 1. Configure the local environment
 
