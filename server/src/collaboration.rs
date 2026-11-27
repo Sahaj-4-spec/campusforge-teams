@@ -480,11 +480,12 @@ async fn calendar_update(
         validate_calendar_attendees(&state,workspace_id,attendees).await?;
     }
     let mut tx=state.db.begin().await.map_err(|error|internal(error,"Could not begin calendar event update"))?;
-    let creator: Option<Uuid>=sqlx::query_scalar(
-        "SELECT created_by FROM calendar_events WHERE id=$1 AND workspace_id=$2 FOR UPDATE",
+    let event: Option<(Uuid,Option<Uuid>)>=sqlx::query_as(
+        "SELECT created_by,board_id FROM calendar_events WHERE id=$1 AND workspace_id=$2 FOR UPDATE",
     ).bind(event_id).bind(workspace_id).fetch_optional(&mut *tx).await
       .map_err(|error|internal(error,"Could not verify calendar event"))?;
-    let Some(creator)=creator else { return Err(fail(StatusCode::NOT_FOUND,"Calendar event not found")); };
+    let Some((creator,existing_board_id))=event else { return Err(fail(StatusCode::NOT_FOUND,"Calendar event not found")); };
+    if let Some(board_id)=existing_board_id { board_write_access(&state,user_id,board_id,workspace_id).await?; }
     if creator!=user_id && !crate::roadmap::workspace_admin(&state,user_id,workspace_id).await
         .map_err(|error|internal(error,"Could not verify calendar permissions"))? {
         return Err(fail(StatusCode::FORBIDDEN,"Only the event creator or a workspace admin can edit this event"));
@@ -1294,8 +1295,16 @@ async fn meeting_note_update(
     Json(input): Json<MeetingNoteInput>,
 ) -> ApiResult<StatusCode> {
     validate_meeting_note(&input)?;
-    if let Some(board_id) = input.board_id {
-        board_write_access(&state,user_id,board_id,workspace_id).await?;
+    let existing:Option<(Uuid,Option<Uuid>)>=sqlx::query_as(
+        "SELECT created_by,board_id FROM meeting_notes WHERE id=$1 AND workspace_id=$2",
+    ).bind(note_id).bind(workspace_id).fetch_optional(&state.db).await
+      .map_err(|error|internal(error,"Could not verify meeting note permissions"))?;
+    let Some((creator,existing_board_id))=existing else { return Err(fail(StatusCode::NOT_FOUND,"Meeting notes not found")); };
+    if let Some(board_id)=existing_board_id { board_write_access(&state,user_id,board_id,workspace_id).await?; }
+    if let Some(board_id)=input.board_id { board_write_access(&state,user_id,board_id,workspace_id).await?; }
+    if creator!=user_id && !crate::roadmap::workspace_admin(&state,user_id,workspace_id).await
+        .map_err(|error|internal(error,"Could not verify meeting note edit permission"))? {
+        return Err(fail(StatusCode::FORBIDDEN,"Only the meeting notes creator or a workspace admin can edit them"));
     }
     let result = sqlx::query(
         "UPDATE meeting_notes SET board_id=$1, title=$2, meeting_at=$3, attendees=$4,
