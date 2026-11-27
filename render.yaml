@@ -39,6 +39,31 @@ services:
         sync: false
       - key: EMAIL_FROM
         sync: false
+      # Preview defaults stay local/optional. Production must set
+      # CAMPUSFORGE_ENV=production, use S3, require remote storage and malware
+      # scanning, and provide a reachable private ClamAV service.
+      - key: CAMPUSFORGE_ENV
+        value: preview
+      - key: CAMPUSFORGE_STORAGE_MODE
+        value: local
+      - key: CAMPUSFORGE_REQUIRE_REMOTE_STORAGE
+        value: "false"
+      - key: CAMPUSFORGE_REQUIRE_MALWARE_SCAN
+        value: "false"
+      - key: CAMPUSFORGE_S3_BUCKET
+        sync: false
+      - key: CAMPUSFORGE_S3_REGION
+        sync: false
+      - key: CAMPUSFORGE_S3_ENDPOINT_URL
+        sync: false
+      - key: CAMPUSFORGE_S3_URL_STYLE
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: CAMPUSFORGE_CLAMAV_ADDR
+        sync: false
       - key: CAMPUSFORGE_AI_API_BASE_URL
         sync: false
       - key: CAMPUSFORGE_AI_API_KEY
