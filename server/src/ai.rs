@@ -446,6 +446,38 @@ async fn load_authorized_context(
     mode: AssistantMode,
     requested_file_id: Option<Uuid>,
 ) -> ApiResult<(Value, Vec<AssistantSource>)> {
+    // Revalidate workspace and board access even for modes that intentionally
+    // do not load project/task context.
+    if let Some(board_id) = requested_board_id {
+        let allowed = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (
+                SELECT 1 FROM boards b
+                 WHERE b.id = $1
+                   AND b.workspace_id = $2
+                   AND EXISTS (SELECT 1 FROM workspace_members wm
+                                WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $3)
+                   AND (
+                     EXISTS (SELECT 1 FROM board_members bm WHERE bm.board_id = b.id AND bm.user_id = $3)
+                     OR EXISTS (SELECT 1 FROM workspace_members wm
+                                 WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $3
+                                   AND wm.role IN ('owner', 'admin'))
+                   )
+            )",
+        )
+        .bind(board_id)
+        .bind(workspace_id)
+        .bind(user_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "AI selected board authorization lookup failed");
+            fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not verify selected project access")
+        })?;
+        if !allowed {
+            return Err(fail(StatusCode::NOT_FOUND, "The selected project was not found or is not accessible"));
+        }
+    }
+
     // WorkspaceUser authenticates workspace membership. Board reads are further
     // restricted to explicit board members or workspace owners/admins.
     let boards = sqlx::query_as::<_, BoardContext>(
@@ -476,10 +508,6 @@ async fn load_authorized_context(
         tracing::error!(%error, "AI context board lookup failed");
         fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not load authorized project context")
     })?;
-
-    if requested_board_id.is_some() && boards.is_empty() {
-        return Err(fail(StatusCode::NOT_FOUND, "The selected project was not found or is not accessible"));
-    }
 
     let tasks = sqlx::query_as::<_, TaskContext>(
         "SELECT t.id, b.id AS board_id, b.name AS board_name, l.name AS list_name,
@@ -593,7 +621,9 @@ async fn load_authorized_context(
                LEFT JOIN tasks ft ON ft.id = wf.task_id
                LEFT JOIN lists fl ON fl.id = ft.list_id
                LEFT JOIN boards b ON b.id = COALESCE(wf.board_id, fl.board_id)
+                                  AND b.workspace_id = wf.workspace_id
               WHERE wf.id = $1
+                AND (COALESCE(wf.board_id, fl.board_id) IS NULL OR b.id IS NOT NULL)
                 AND wf.workspace_id = $2
                 AND wf.is_deleting = FALSE
                 AND ($4::uuid IS NULL OR COALESCE(wf.board_id, fl.board_id) IS NULL
