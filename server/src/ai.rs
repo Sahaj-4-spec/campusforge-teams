@@ -633,7 +633,7 @@ async fn load_authorized_context(
         if file.scan_status != "clean" {
             return Err(fail(StatusCode::LOCKED, "The selected file must pass malware scanning before AI summarization"));
         }
-        let bytes = state.storage.get(&file.storage_key).await.map_err(|error| {
+        let bytes = state.storage.get_limited(&file.storage_key, 128 * 1024).await.map_err(|error| {
             tracing::error!(%error, file_id = %file.id, "AI file object read failed");
             fail(StatusCode::NOT_FOUND, "The selected file content is unavailable")
         })?;
