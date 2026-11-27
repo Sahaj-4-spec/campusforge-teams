@@ -371,7 +371,7 @@ impl StorageService {
         match &self.backend {
             Backend::Local { directory } => {
                 let path = directory.join(key);
-                let mut file = tokio::fs::File::open(path).await.map_err(|error| error.to_string())?;
+                let file = tokio::fs::File::open(path).await.map_err(|error| error.to_string())?;
                 let mut bytes = Vec::with_capacity(max_bytes.min(64 * 1024));
                 file.take(max_bytes as u64 + 1).read_to_end(&mut bytes).await.map_err(|error| error.to_string())?;
                 if bytes.len() > max_bytes {
