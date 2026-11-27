@@ -3230,3 +3230,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .ai-proposal-target { width:100%; margin-left:0; }
   .ai-proposal-target select { width:100%; }
 }
+
+.ai-file-target { margin-left:auto; }
+.ai-file-target select { width:min(250px, 34vw); }
+@media (max-width:760px) {
+  .ai-file-target { width:100%; margin-left:0; }
+  .ai-file-target select { width:min(68%, 280px); }
+}
