@@ -453,14 +453,23 @@ async fn consume_state(
 
 fn normalize_verified_email(email: &str) -> Result<String, &'static str> {
     let email = email.trim();
-    let Some((local, domain)) = email.split_once('@') else {
+    let mut parts = email.split('@');
+    let (Some(local), Some(domain)) = (parts.next(), parts.next()) else {
         return Err("The identity provider did not return a valid verified email address.");
     };
-    if local.is_empty()
+    let valid_domain = domain.contains('.')
+        && domain.split('.').all(|label| {
+            !label.is_empty() && !label.starts_with('-') && !label.ends_with('-')
+        });
+    if parts.next().is_some()
+        || local.is_empty()
         || domain.is_empty()
-        || !domain.contains('.')
+        || !valid_domain
         || email.len() > 254
         || email.chars().any(char::is_whitespace)
+        || local.starts_with('.')
+        || local.ends_with('.')
+        || local.contains("..")
     {
         return Err("The identity provider did not return a valid verified email address.");
     }
@@ -835,6 +844,9 @@ mod tests {
         assert!(normalize_verified_email("student@").is_err());
         assert!(normalize_verified_email("@gmail.com").is_err());
         assert!(normalize_verified_email(" student @gmail.com ").is_err());
+        assert!(normalize_verified_email("student@@gmail.com").is_err());
+        assert!(normalize_verified_email("student@gmail..com").is_err());
+        assert!(normalize_verified_email(".student@gmail.com").is_err());
     }
 
     #[test]
