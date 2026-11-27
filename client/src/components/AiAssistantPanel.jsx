@@ -131,6 +131,7 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [savedProposals, setSavedProposals] = useState([]);
+  const [proposalAudit, setProposalAudit] = useState([]);
   const [proposalReviewOpen, setProposalReviewOpen] = useState(false);
   const [selectedProposalId, setSelectedProposalId] = useState("");
   const [proposalSaving, setProposalSaving] = useState(false);
@@ -157,8 +158,12 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
 
   useEffect(() => {
     let cancelled = false;
-    aiApi.proposals()
-      .then((items) => { if (!cancelled && Array.isArray(items)) setSavedProposals(items); })
+    Promise.all([aiApi.proposals(), aiApi.proposalAudit()])
+      .then(([items, events]) => {
+        if (cancelled) return;
+        if (Array.isArray(items)) setSavedProposals(items);
+        if (Array.isArray(events)) setProposalAudit(events);
+      })
       .catch((requestError) => {
         if (!cancelled) setProposalActionError(requestError.message || "Saved proposals are unavailable.");
       });
@@ -306,9 +311,10 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
   }
 
   async function refreshProposals() {
-    const items = await aiApi.proposals();
+    const [items, events] = await Promise.all([aiApi.proposals(), aiApi.proposalAudit()]);
     const next = Array.isArray(items) ? items : [];
     setSavedProposals(next);
+    setProposalAudit(Array.isArray(events) ? events : []);
     return next;
   }
 
@@ -581,6 +587,7 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
       {proposalReviewOpen && (
         <ProposalReviewDrawer
           proposals={savedProposals}
+          auditEvents={proposalAudit}
           selectedProposalId={selectedProposalId}
           onSelect={setSelectedProposalId}
           onClose={() => setProposalReviewOpen(false)}
