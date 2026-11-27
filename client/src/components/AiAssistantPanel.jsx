@@ -9,6 +9,7 @@ import {
   CircleHelp,
   Clock3,
   FileText,
+  Files,
   Lightbulb,
   LoaderCircle,
   LockKeyhole,
@@ -20,7 +21,7 @@ import {
   Target,
   X
 } from "lucide-react";
-import { aiApi, taskApi } from "../lib/api.js";
+import { aiApi, filesApi, taskApi } from "../lib/api.js";
 
 const MODES = [
   { id: "ask", label: "Ask", icon: MessageSquare },
@@ -28,8 +29,24 @@ const MODES = [
   { id: "task_breakdown", label: "Task plan", icon: Target },
   { id: "risk_review", label: "Risk review", icon: ShieldCheck },
   { id: "meeting_summary", label: "Meeting notes", icon: CalendarDays },
-  { id: "chat_summary", label: "Team chat", icon: MessagesSquare }
+  { id: "chat_summary", label: "Team chat", icon: MessagesSquare },
+  { id: "file_summary", label: "Document", icon: Files }
 ];
+
+const SUMMARIZABLE_FILE_TYPES = new Set([
+  "text/plain", "text/markdown", "text/csv", "text/tab-separated-values",
+  "text/xml", "application/xml", "application/json", "application/yaml",
+  "text/yaml", "application/toml", "text/javascript", "application/javascript",
+  "text/typescript", "text/css", "text/x-python", "text/x-rust"
+]);
+
+function canSummarizeFile(file) {
+  return file
+    && file.scan_status === "clean"
+    && SUMMARIZABLE_FILE_TYPES.has(String(file.media_type || "").toLowerCase())
+    && Number(file.size_bytes) > 0
+    && Number(file.size_bytes) <= 128 * 1024;
+}
 
 const STARTERS = [
   { label: "What's blocking progress?", prompt: "Review the current project records and identify the most important blockers. Cite the tasks that support each finding." },
@@ -122,6 +139,10 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
   const [privacyAcknowledged, setPrivacyAcknowledged] = useState(false);
   const [mode, setMode] = useState("ask");
   const [boardId, setBoardId] = useState(activeBoardId || "");
+  const [availableFiles, setAvailableFiles] = useState([]);
+  const [selectedFileId, setSelectedFileId] = useState("");
+  const [filesLoading, setFilesLoading] = useState(false);
+  const [filesError, setFilesError] = useState("");
   const initialTargetBoardId = activeBoardId || boards[0]?.id;
   const [proposalListId, setProposalListId] = useState(
     lists.find((list) => list.board_id === initialTargetBoardId && /^(to do|todo)$/i.test(list.name))?.id
@@ -159,6 +180,26 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
       || lists[0];
     setProposalListId(nextList?.id || "");
   }, [boardId, activeBoardId, lists, boards]);
+
+  useEffect(() => {
+    if (mode !== "file_summary") return undefined;
+    let cancelled = false;
+    setFilesLoading(true);
+    setFilesError("");
+    filesApi.list()
+      .then((rows) => {
+        if (!cancelled) {
+          const usable = Array.isArray(rows) ? rows.filter(canSummarizeFile) : [];
+          setAvailableFiles(usable);
+          setSelectedFileId((current) => usable.some((file) => file.id === current) ? current : (usable[0]?.id || ""));
+        }
+      })
+      .catch((requestError) => {
+        if (!cancelled) setFilesError(requestError.message || "Could not load your accessible files.");
+      })
+      .finally(() => { if (!cancelled) setFilesLoading(false); });
+    return () => { cancelled = true; };
+  }, [mode]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -209,9 +250,22 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
     };
   }, []);
 
+  function resetScopedConversation() {
+    conversationGeneration.current += 1;
+    setMessages([]);
+    setPrompt("");
+    setError("");
+    setPrivacyAcknowledged(false);
+    setLoading(false);
+  }
+
   async function submitPrompt(value = prompt) {
     const content = value.trim();
     if (!content || loading || !status?.enabled || !privacyAcknowledged) return;
+    if (mode === "file_summary" && !selectedFileId) {
+      setError("Select a clean UTF-8 text file before asking for a document summary.");
+      return;
+    }
     const requestGeneration = conversationGeneration.current;
     const history = messages.slice(-8).map(({ role, content: messageContent }) => ({
       role,
@@ -227,6 +281,7 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
         mode,
         board_id: boardId || null,
         acknowledged_data_sharing: privacyAcknowledged,
+        file_id: mode === "file_summary" ? selectedFileId : null,
         history
       });
       if (requestGeneration !== conversationGeneration.current) return;
@@ -283,7 +338,12 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
         <div className="ai-panel-controls">
           <div className="ai-mode-tabs" role="group" aria-label="Assistant mode">
             {MODES.filter((item) => availableModes.has(item.id)).map(({ id, label, icon: Icon }) => (
-              <button key={id} className={"ai-mode-tab" + (mode === id ? " active" : "")} type="button" onClick={() => setMode(id)} aria-pressed={mode === id}>
+              <button key={id} className={"ai-mode-tab" + (mode === id ? " active" : "")} type="button" onClick={() => {
+                if (mode === id) return;
+                resetScopedConversation();
+                setMode(id);
+                setSelectedFileId("");
+              }} aria-pressed={mode === id}>
                 <Icon size={14} /><span>{label}</span>
               </button>
             ))}
@@ -296,19 +356,38 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
               onChange={(event) => {
                 const nextBoardId = event.target.value;
                 if (nextBoardId === boardId) return;
-                conversationGeneration.current += 1;
+                resetScopedConversation();
+                setSelectedFileId("");
                 setBoardId(nextBoardId);
-                setPrivacyAcknowledged(false);
-                setMessages([]);
-                setPrompt("");
-                setError("");
-                setLoading(false);
               }}
             >
               <option value="">All accessible projects</option>
               {boards.map((board) => <option key={board.id} value={board.id}>{board.name}</option>)}
             </select>
           </label>
+          {mode === "file_summary" && enabled && (
+            <label className="ai-scope-select ai-file-target">
+              <span>Document</span>
+              <select
+                value={selectedFileId}
+                onChange={(event) => {
+                  const nextFileId = event.target.value;
+                  if (nextFileId === selectedFileId) return;
+                  resetScopedConversation();
+                  setSelectedFileId(nextFileId);
+                }}
+                aria-label="Choose a clean text document to summarize"
+                disabled={filesLoading || availableFiles.length === 0}
+              >
+                <option value="">{filesLoading ? "Loading clean text files…" : "Choose a clean text file"}</option>
+                {availableFiles.map((file) => (
+                  <option key={file.id} value={file.id}>
+                    {file.original_name} · {(Number(file.size_bytes) / 1024).toFixed(0)} KB
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           {mode === "task_breakdown" && enabled && (
             <label className="ai-scope-select ai-proposal-target">
               <span>Create in</span>
@@ -327,6 +406,10 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
 
         <div className="ai-panel-content">
           {statusError && <div className="ai-inline-error" role="alert"><AlertCircle size={15} /> {statusError}</div>}
+          {mode === "file_summary" && filesError && <div className="ai-inline-error" role="alert"><AlertCircle size={15} /> {filesError}</div>}
+          {mode === "file_summary" && !filesLoading && !filesError && availableFiles.length === 0 && (
+            <div className="ai-setup-note"><LockKeyhole size={14} /> No eligible file is available. Only clean, UTF-8 text files up to 128 KB can be summarized; PDFs and images are not supported.</div>
+          )}
 
           {!enabled ? (
             <div className="ai-setup-state">
@@ -345,9 +428,15 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
             <div className="ai-welcome-state">
               <span className="ai-welcome-icon"><Lightbulb size={21} /></span>
               <h3>What should we work through?</h3>
-              <p>Ask about accessible project records, request a concise summary, or draft a task plan for your team.</p>
+              <p>{mode === "meeting_summary" ? "Review decisions and action items from authorized meeting notes." : mode === "chat_summary" ? "Review recent decisions and action items from authorized shared-channel messages." : mode === "file_summary" ? "Summarize one selected clean text document. The file is sent only after you acknowledge the data-sharing notice." : "Ask about accessible project records, request a concise summary, or draft a task plan for your team."}</p>
               <div className="ai-starter-list">
-                {STARTERS.map((starter) => (
+                {(mode === "file_summary"
+                  ? [{ label: "Summarize selected document", prompt: "Summarize the selected document. Identify its purpose, key facts, important dates, decisions, risks, and explicit action items. Cite the source [F1]." }]
+                  : mode === "meeting_summary"
+                    ? [{ label: "Summarize latest meetings", prompt: "Summarize the authorized meeting notes. Separate explicit decisions, action items, unresolved questions, owners, and dates. Cite meeting notes." }]
+                    : mode === "chat_summary"
+                      ? [{ label: "Summarize team decisions", prompt: "Summarize decisions and explicit action items from the authorized shared-channel messages. Separate proposals from approved decisions and cite message references." }]
+                      : STARTERS).map((starter) => (
                   <button type="button" className="ai-starter-button" key={starter.label} onClick={() => submitPrompt(starter.prompt)} disabled={loading}>
                     <span>{starter.label}</span><ArrowUpRight size={15} />
                   </button>
@@ -392,7 +481,7 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
           {enabled && (
             <label className="ai-data-consent">
               <input type="checkbox" checked={privacyAcknowledged} onChange={(event) => setPrivacyAcknowledged(event.target.checked)} />
-              <span>I understand that my prompt, recent conversation, and the records selected by the chosen mode (projects/tasks, meeting notes, or shared-channel messages) will be sent to the configured AI provider. Changing projects starts a fresh conversation and requires a new acknowledgement.</span>
+              <span>I understand that my prompt, recent conversation, and the records selected by the chosen mode (projects/tasks, meeting notes, shared-channel messages, or the selected clean text file) will be sent to the configured AI provider. Changing projects starts a fresh conversation and requires a new acknowledgement.</span>
             </label>
           )}
           <div className="ai-composer-wrap">
@@ -405,7 +494,7 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
                   submitPrompt();
                 }
               }}
-              placeholder={!enabled ? "AI is unavailable until server configuration is complete" : !privacyAcknowledged ? "Acknowledge the data-sharing notice to begin…" : mode === "meeting_summary" ? "Summarize the latest meeting notes and decisions…" : mode === "chat_summary" ? "Summarize recent shared-channel decisions and action items…" : "Ask about tasks, priorities, or project risks…"}
+              placeholder={!enabled ? "AI is unavailable until server configuration is complete" : !privacyAcknowledged ? "Acknowledge the data-sharing notice to begin…" : mode === "meeting_summary" ? "Summarize the latest meeting notes and decisions…" : mode === "chat_summary" ? "Summarize recent shared-channel decisions and action items…" : mode === "file_summary" ? "Ask a question about the selected document…" : "Ask about tasks, priorities, or project risks…"}
               rows={2}
               maxLength={2000}
               disabled={!enabled || !privacyAcknowledged || loading}
