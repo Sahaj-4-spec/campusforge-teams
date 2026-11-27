@@ -1,6 +1,6 @@
 # CampusForge Teams — Architecture and Project Decisions
 
-**Document status:** Architecture decisions for the merged Track A non-AI implementation plus the finalization branch.  
+**Document status:** Architecture decisions for the current Track A product and the integrated Track A/Track B release candidate.  
 **Status date:** 28 November 2026.  
 **Release status:** `release/campusforge-integrated-candidate` consolidates the current `main` source with Track A session hardening and Track B AI assistant/proposal work. It is a review candidate, not `main`; PRs #38–#40 remain separate draft PRs. The combined branch must pass fresh CI and runtime migration/session checks before review. Render currently hosts preview/test services; the API's latest environment update started a rollout that was still reported `update_in_progress` at the last check. No production deployment or merge is authorized.
 
@@ -27,7 +27,7 @@ AI project assistance is a separately scoped, optional Track B capability. The i
 | Backend | Rust + Axum | Typed asynchronous HTTP and WebSocket API |
 | Database | PostgreSQL | System of record for workspace/product data |
 | Database access | SQLx | Parameterized SQL, pooling, migrations |
-| Authentication | Argon2 verification for existing password accounts; provider-verified Google, GitHub, and Discord sign-up; HttpOnly JWT cookies | Provider secrets remain server-side; Track A finalization adds PostgreSQL-backed session revocation |
+| Authentication | Argon2 verification for existing password accounts; provider-verified Google, GitHub, and Discord sign-up; HttpOnly JWT cookies | Provider secrets remain server-side; the integrated candidate adds PostgreSQL-backed session revocation |
 | Real-time transport | Native Axum WebSockets | Not Socket.IO |
 | File bytes | Storage adapter with local-development and S3-compatible backends | Production S3 bucket, credentials/IAM role, backups and malware scanning still require setup |
 | Version control | GitHub | Branch-based work, draft PRs, CI |
@@ -185,9 +185,9 @@ PostgreSQL is the source of truth. Mutations use SQLx; recurrence, reminder, ana
 
 ## 7. Deployment decision
 
-The non-AI Track A implementation is merged into `main`. PR #20's SQLx rollback bridge was merged before PR #21 introduced migrations 0009 and 0010; subsequent migrations are also committed on main. PR #37 adds shared PostgreSQL-backed authentication request limits.
+Track A's baseline product and migrations 0001–0013 are on `main`. The integrated candidate combines those with Track B's migration 0014 for AI proposal persistence and Track A's migration 0015 for revocable sessions. The Neon `campusforge_app` database has successful migration journal entries through version 14. The integrated candidate still needs its own CI and runtime acceptance.
 
-The repository's Render Blueprint tracks `main` and uses commit-triggered auto-deploy. Therefore, do not merge this finalization branch to `main` or alter production infrastructure until the user explicitly authorizes release. The live preview is a test environment; verify its deployed source revision and database migration state before any rollout. A migration file in source control does not prove that a hosted database has applied it.
+The repository's Render Blueprint tracks `main` and uses commit-triggered auto-deploy. Therefore, do not merge the integrated candidate to `main` or alter production infrastructure until the user explicitly authorizes release. The live preview is a test environment; verify its deployed source revision and database migration state before any rollout. A migration file in source control does not prove that a hosted database has applied it.
 
 Before public release, configure provider OAuth applications and callbacks, durable Neon PostgreSQL, private Neon Object Storage, ClamAV with scan enforcement, Resend sender-domain credentials, trusted ingress/WAF controls, backups and restore procedures, privacy/retention policies, and two-account/browser/accessibility acceptance. See [Track A Final Acceptance](TRACK_A_FINAL_ACCEPTANCE.md) and [Operations](OPERATIONS.md).
 
@@ -213,7 +213,7 @@ Before public release, configure provider OAuth applications and callbacks, dura
 
 **Decision:** Keep browser authentication in an HttpOnly JWT cookie, but make each JWT reference a database-recorded session ID through its `jti` claim. Never store the raw JWT in PostgreSQL.
 
-- The finalization branch adds `auth_sessions` with a UUID session ID, owning user, expiry, and optional revocation timestamp.
+- The integrated candidate adds `auth_sessions` with a UUID session ID, owning user, expiry, and optional revocation timestamp.
 - Password and OAuth sign-in persist a session row before returning the session cookie.
 - Protected HTTP requests require a matching session row that is not revoked and has not expired.
 - Logout revokes the corresponding row before clearing the cookie.
