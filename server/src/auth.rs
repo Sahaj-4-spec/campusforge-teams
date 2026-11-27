@@ -194,6 +194,16 @@ impl FromRequestParts<AppState> for AuthUser {
     }
 }
 
+/// Board viewers may read board resources but cannot make changes.
+/// Workspace membership alone never grants board access.
+pub(crate) fn board_role_allows(role: Option<&str>, write: bool) -> bool {
+    match (role, write) {
+        (Some("admin" | "member" | "viewer"), false) => true,
+        (Some("admin" | "member"), true) => true,
+        _ => false,
+    }
+}
+
 /// Return the caller's role on a board in the selected workspace.
 /// Workspace membership alone is not sufficient for board-scoped reads or writes.
 pub(crate) async fn board_role(
@@ -587,6 +597,19 @@ pub fn router() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn board_roles_allow_viewers_to_read_but_not_write() {
+        assert!(board_role_allows(Some("viewer"), false));
+        assert!(!board_role_allows(Some("viewer"), true));
+        assert!(board_role_allows(Some("member"), false));
+        assert!(board_role_allows(Some("member"), true));
+        assert!(board_role_allows(Some("admin"), false));
+        assert!(board_role_allows(Some("admin"), true));
+        assert!(!board_role_allows(None, false));
+        assert!(!board_role_allows(None, true));
+        assert!(!board_role_allows(Some("unknown"), false));
+    }
 
     #[test]
     fn logout_resolves_bearer_tokens_and_cookie_sessions() {
