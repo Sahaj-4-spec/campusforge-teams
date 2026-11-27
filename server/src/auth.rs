@@ -307,7 +307,7 @@ pub(crate) async fn persist_session(
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO auth_sessions (id, user_id, expires_at)
-         VALUES ($1, $2, to_timestamp($3))",
+         VALUES ($1, $2, to_timestamp($3::bigint::double precision))",
     )
     .bind(session_id)
     .bind(user_id)
