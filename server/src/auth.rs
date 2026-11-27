@@ -513,24 +513,25 @@ async fn login(
     Ok(response)
 }
 
-fn session_or_bearer_token_from_headers(headers: &HeaderMap) -> Option<String> {
+fn session_or_bearer_token_from_headers(headers: &HeaderMap) -> Option<(String, bool)> {
     headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
-        .map(str::to_owned)
-        .or_else(|| session_token_from_headers(headers))
+        .map(|token| (token.to_owned(), false))
+        .or_else(|| session_token_from_headers(headers).map(|token| (token, true)))
 }
 
 async fn logout(
     axum::extract::State(state): axum::extract::State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
-    if !frontend_origin_matches(&headers) {
+    let token = session_or_bearer_token_from_headers(&headers);
+    if !matches!(token.as_ref(), Some((_, false))) && !frontend_origin_matches(&headers) {
         return Err(StatusCode::FORBIDDEN);
     }
 
-    if let Some(token) = session_or_bearer_token_from_headers(&headers) {
+    if let Some((token, _)) = token {
         if let Ok((user_id, _, session_id)) = verify_session_token(&token, &state.jwt_secret) {
             sqlx::query(
                 "UPDATE auth_sessions
@@ -571,15 +572,15 @@ mod tests {
         bearer_headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer bearer-token"));
         bearer_headers.insert(header::COOKIE, HeaderValue::from_static("campusforge_session=cookie-token"));
         assert_eq!(
-            session_or_bearer_token_from_headers(&bearer_headers).as_deref(),
-            Some("bearer-token")
+            session_or_bearer_token_from_headers(&bearer_headers),
+            Some(("bearer-token".to_owned(), false))
         );
 
         let mut cookie_headers = HeaderMap::new();
         cookie_headers.insert(header::COOKIE, HeaderValue::from_static("campusforge_session=cookie-token"));
         assert_eq!(
-            session_or_bearer_token_from_headers(&cookie_headers).as_deref(),
-            Some("cookie-token")
+            session_or_bearer_token_from_headers(&cookie_headers),
+            Some(("cookie-token".to_owned(), true))
         );
     }
 
