@@ -78,8 +78,8 @@ async fn create_list(
     let scope: Option<(Uuid, String)> = sqlx::query_as(
         "SELECT b.workspace_id, wm.role FROM boards b
          JOIN workspace_members wm ON wm.workspace_id = b.workspace_id
-         JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id AND bm.role='admin'
-         WHERE b.id = $1 AND wm.user_id = $2
+         LEFT JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id
+         WHERE b.id = $1 AND wm.user_id = $2 AND (bm.role='admin' OR wm.role IN ('owner','admin'))
          FOR UPDATE OF b",
     )
     .bind(board_id)
@@ -132,8 +132,8 @@ async fn update_list(
         "SELECT b.workspace_id, b.id, wm.role, l.name FROM lists l
          JOIN boards b ON b.id = l.board_id
          JOIN workspace_members wm ON wm.workspace_id = b.workspace_id
-         JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id AND bm.role='admin'
-         WHERE l.id = $1 AND wm.user_id = $2
+         LEFT JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id
+         WHERE l.id = $1 AND wm.user_id = $2 AND (bm.role='admin' OR wm.role IN ('owner','admin'))
          FOR UPDATE OF b, l",
     )
     .bind(list_id)
@@ -173,8 +173,8 @@ async fn delete_list(
         "SELECT b.workspace_id, b.id, wm.role, l.name FROM lists l
          JOIN boards b ON b.id = l.board_id
          JOIN workspace_members wm ON wm.workspace_id = b.workspace_id
-         JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id AND bm.role='admin'
-         WHERE l.id = $1 AND wm.user_id = $2
+         LEFT JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id
+         WHERE l.id = $1 AND wm.user_id = $2 AND (bm.role='admin' OR wm.role IN ('owner','admin'))
          FOR UPDATE OF b, l",
     )
     .bind(list_id)
