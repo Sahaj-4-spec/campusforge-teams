@@ -1708,6 +1708,7 @@ export default function App() {
       )}
       {aiAssistantOpen && (
         <AiAssistantPanel
+          key={data.current_workspace_id}
           onClose={() => setAiAssistantOpen(false)}
           boards={data.boards}
           activeBoardId={activeBoardId}
