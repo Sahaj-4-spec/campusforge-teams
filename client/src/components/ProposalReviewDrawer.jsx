@@ -11,6 +11,7 @@ function statusLabel(status) {
 
 export default function ProposalReviewDrawer({
   proposals = [],
+  auditEvents = [],
   selectedProposalId,
   onSelect,
   onClose,
@@ -104,6 +105,18 @@ export default function ProposalReviewDrawer({
                   <p className="ai-proposal-review-success"><CheckCircle2 size={15} /> This proposal has been applied. {selected.applied_task_ids?.length || 0} task records were created.</p>
                 )}
                 <p className="ai-proposal-review-safety"><FileCheck2 size={14} /> Approval rechecks your current permissions, project membership, destination column, assignees, and board state. All tasks are created in one database transaction.</p>
+                <section className="ai-proposal-audit" aria-label="AI proposal audit history">
+                  <h4>Recent approval history</h4>
+                  {auditEvents.filter((event) => event.proposal_id === selected.id).length === 0 ? (
+                    <p>No review events recorded yet.</p>
+                  ) : auditEvents.filter((event) => event.proposal_id === selected.id).slice(0, 8).map((event) => (
+                    <div className="ai-proposal-audit-event" key={event.id}>
+                      <strong>{statusLabel(event.event_type)}</strong>
+                      <span>{prettyDate(event.created_at)}</span>
+                      {event.metadata?.task_count != null && <small>{event.metadata.task_count} task(s)</small>}
+                    </div>
+                  ))}
+                </section>
               </>
             )}
             {error && <p className="ai-proposal-review-error" role="alert">{error}</p>}
