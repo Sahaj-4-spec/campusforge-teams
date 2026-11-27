@@ -1,6 +1,6 @@
 # Track B — AI Project Assistant and Intelligent Collaboration
 
-**Status:** Integrated candidate — read-only assistant and human-approved proposals implemented  
+**Status:** Integrated candidate — read-only assistant, Project Pulse, and human-approved proposals implemented  
 **Repository:** `Sahaj-4-spec/campusforge-teams`  
 **Working branch:** `track-b/ai-assistant-foundation`  
 **Base:** `main`  
@@ -112,7 +112,10 @@ The existing application remains the system of record:
 - `POST /api/ai/assistant` — authenticated read-only request.
 - `GET /api/ai/insights` — authenticated, provider-independent Project Pulse dashboard data. Accepts an optional `board_id` query parameter and applies the same board-member or workspace owner/admin scope as assistant context reads.
 - `GET /api/ai/files` — authenticated, permission-filtered list of clean, supported text files (max 128 KB) that are eligible for AI document summaries. Accepts an optional `board_id` and returns only file identifiers and display metadata, never storage keys or object URLs. It is limited to 30 requests per user per minute and 300 per workspace per hour.
-- `GET/POST /api/ai/proposals` — list or save validated workspace/board-scoped task proposals.\n- `GET /api/ai/proposals/audit` — list metadata-only proposal review events.\n- `POST /api/ai/proposals/{proposal_id}/apply` and `/reject` — perform explicit human review, rechecking permissions and source state.\n
+- `GET/POST /api/ai/proposals` — list or save validated workspace/board-scoped task proposals.
+- `GET /api/ai/proposals/audit` — list metadata-only proposal review events.
+- `POST /api/ai/proposals/{proposal_id}/apply` and `/reject` — perform explicit human review, rechecking permissions and source state.
+
 Example request:
 
 ```json
@@ -220,9 +223,9 @@ Track B is not ready for production until all applicable checks pass:
 
 
 
-## B4 — Durable human-approved proposals (implementation branch)
+## B4 — Durable human-approved proposals (integrated candidate)
 
-The `track-b/ai-proposal-persistence` branch adds a durable review workflow on top of the existing authenticated API and SQLx/PostgreSQL data model.
+The integrated candidate adds a durable review workflow on top of the existing authenticated API and SQLx/PostgreSQL data model.
 
 - The assistant still produces a read-only task plan. Saving the plan creates a structured proposal; it does not create tasks.
 - A proposal is scoped to the authenticated workspace, board, and destination list, and expires after 24 hours.
