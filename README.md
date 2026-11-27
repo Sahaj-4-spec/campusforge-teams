@@ -80,7 +80,7 @@ The current non-AI completion branch adds:
 - PostgreSQL LISTEN/NOTIFY to relay workspace change signals across API instances, plus expiring presence leases.
 - An idempotency ledger for recurring task generation.
 
-These additional features are in draft PR #21 and are not in the deployed Render preview. The AI project assistant is intentionally excluded from this delivery. Production file storage still requires a private S3-compatible bucket and credentials. To require malware scanning, configure a reachable ClamAV TCP service and set `CAMPUSFORGE_REQUIRE_MALWARE_SCAN=true`; without that flag, uploads are marked unscanned and can be downloaded. Resend email and Google/GitHub/Discord login also require provider accounts, callback URLs, and backend secrets. See the [roadmap](docs/ROADMAP.md), [architecture](docs/ARCHITECTURE.md), [operations](docs/OPERATIONS.md), and [social sign-in setup](docs/SOCIAL_AUTH_SETUP.md).
+The non-AI collaboration implementation from PR #21 and subsequent improvements in PRs #23, #24, #26, and #30–#37 are merged into `main`. The hosted Render preview may lag this source branch and is a test environment, not a production release. The AI project assistant is intentionally excluded from Track A. Public release still requires provider OAuth configuration, durable Neon PostgreSQL and private object storage, mandatory ClamAV scanning, verified email delivery, backup/restore drills, and full multi-user acceptance. The Track A finalization branch also adds database-backed session revocation; that hardening is awaiting its own CI/review before merge. See the [roadmap](docs/ROADMAP.md), [architecture](docs/ARCHITECTURE.md), [operations](docs/OPERATIONS.md), and [social sign-in setup](docs/SOCIAL_AUTH_SETUP.md).
 
 ## 🛠️ Technology Stack
 
@@ -285,15 +285,16 @@ The Cal.com reference is an independent visual analysis and is not affiliated wi
 
 ## 📖 What I Built and What I Understood
 
-This section will be updated as implementation is completed. The learning goals include:
+Track A implements a complete full-stack collaboration workflow around React, Rust/Axum, PostgreSQL, and SQLx:
 
-1. How React communicates with a Rust backend through HTTP APIs.
-2. How Axum routes requests and manages application state.
-3. How PostgreSQL models users, boards, lists, cards, comments, and activities.
-4. How SQLx performs asynchronous, parameterized database queries.
-5. How authentication and authorization protect application data.
-6. How drag-and-drop interactions update persistent card ordering.
-7. How native WebSockets synchronize changes between authorized team members.
+1. A responsive React application communicates with authenticated Axum REST and WebSocket endpoints.
+2. PostgreSQL stores workspace, membership, board, task, collaboration, calendar, notification, file, analytics, chat, and activity data.
+3. SQLx applies versioned, additive migrations and performs parameterized asynchronous database access.
+4. Authentication supports provider-verified OAuth account creation, Argon2 verification for existing password accounts, HttpOnly browser sessions, and workspace authorization.
+5. Kanban changes persist to PostgreSQL, with optimistic drag-and-drop rollback and real-time workspace updates.
+6. Collaboration features include task discussions, calendar events, mentions, notifications, files, chat, direct messages, meeting action items, analytics, and an encrypted personal Save Locker.
+
+The current delivery status, external integrations, known limitations, and final acceptance gates are maintained in [Track A Final Acceptance](docs/TRACK_A_FINAL_ACCEPTANCE.md).
 
 ## 🤖 AI Tools and Development Assistance
 
@@ -301,11 +302,27 @@ AI-assisted tools may be used to understand concepts, explore implementation app
 
 ## 🚧 Current Project Status
 
-**Status:** PR #12's six collaboration feature areas are merged into main. Provider-verified sign-up is in PR #19, and the remaining non-AI completion work is in draft PR #21 (which includes the PR #19 change). The existing Render preview is still an older deployment. PR #20 is the SQLx rollback-compatibility prerequisite. The release order is #20 first, then #21; do not deploy until CI, provider configuration, storage/scanning/email setup, and acceptance tests are complete and the user explicitly authorizes release.
+**Track:** ALTA BUILDER 30 — Track A (Full-Stack Product)  
+**Status date:** 27 November 2026  
+**AI scope:** Excluded from this delivery.
 
-The React client authenticates against the Rust API and loads workspace records from PostgreSQL. Task creation, editing, deletion, assignments, comments, project creation, column management, invitation workflows, and drag-and-drop ordering call protected Axum endpoints; they no longer rely on browser-local demo records. New accounts receive a starter workspace and project board when the workspace endpoint is first loaded. Authenticated WebSocket sessions receive workspace-scoped events after committed mutations, and the frontend reloads the snapshot when remote changes arrive.
+The planned non-AI product phases (core workspaces, authentication, calendar, advanced tasks, notifications, files, chat/meeting notes, analytics, and collaboration) are implemented in the repository. PR #20 (SQLx rollback compatibility), PR #21 (non-AI roadmap completion), and later UI, collaboration, storage, and authentication-hardening PRs #23–#37 are merged into `main`.
 
-**Known release limitations:** browser end-to-end tests and a two-account WebSocket acceptance test have not been completed; invitation links are created for manual sharing and are not emailed; the workspace selector is not yet a functional workspace switcher; fine-grained per-board roles are not implemented. WebSocket events use an in-process broadcast channel, so run one API instance until shared pub/sub is added. The current Render database is a temporary free test database and expires on December 22, 2026; migrate to durable database hosting and configure backups before production use.
+The latest recorded CI and security checks for `main` commit `2b0c5bf` passed on 24 November 2026: frontend production build and regression tests, Rust backend checks/tests, dependency vulnerability audit, and CodeQL. This does not replace browser-based, two-account, accessibility, backup/restore, or production-provider acceptance.
+
+The current Track A finalization branch, `track-a/final-session-hardening-docs`, adds server-side authentication-session records and revocation:
+- Login and OAuth create a random session ID recorded in PostgreSQL; the JWT contains only that ID, not a server-stored raw token.
+- Protected API calls require an active, unrevoked session.
+- Logout revokes the server-side session before clearing the HttpOnly cookie.
+- WebSocket connections validate the session at handshake and re-check it on their heartbeat.
+- Expired/revoked session rows are cleaned periodically.
+- Migration `0014_revocable_auth_sessions.sql` and a PostgreSQL migration smoke-test assertion are included.
+
+This finalization branch is not yet merged; its CI/review must pass before merge. **Do not merge to `main` until the release is explicitly authorized:** `render.yaml` currently configures both Render services to auto-deploy commits to `main`. No deployment is part of this Track A finalization.
+
+**Public-release blockers remain:** create and verify Google/GitHub/Discord OAuth applications and production callback URLs; migrate from the temporary Render test database to durable Neon PostgreSQL and verify backups/restores; provision private Neon Object Storage and credentials; configure and test mandatory ClamAV scanning; verify Resend sender-domain authentication and delivery; configure trusted ingress/WAF rate limiting; complete two-user/browser and accessibility acceptance; approve privacy, retention, export, and deletion policies; and close the documented per-board/channel authorization and account-recovery gaps.
+
+**Known product limitations:** password reset is not implemented; provider linking to an existing local account through account settings is not implemented; external Google/Outlook calendar synchronization is out of scope; per-board/channel permissions need a dedicated hardening pass; and the workspace navigation still needs verified multi-workspace switching before claiming that workflow as complete. See [Track A Final Acceptance](docs/TRACK_A_FINAL_ACCEPTANCE.md) for the release checklist.
 
 ## 🌐 Hosted Preview
 
