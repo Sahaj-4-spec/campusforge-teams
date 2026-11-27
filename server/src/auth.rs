@@ -226,11 +226,12 @@ pub(crate) async fn board_role(
     board_id: uuid::Uuid,
 ) -> Result<Option<String>, sqlx::Error> {
     sqlx::query_scalar(
-        "SELECT bm.role
-         FROM board_members bm
-         JOIN boards b ON b.id = bm.board_id
-         JOIN workspace_members wm ON wm.workspace_id = b.workspace_id AND wm.user_id = bm.user_id
-         WHERE bm.user_id = $1 AND b.workspace_id = $2 AND b.id = $3",
+        "SELECT CASE WHEN wm.role IN ('owner','admin') THEN 'admin' ELSE bm.role END
+         FROM boards b
+         JOIN workspace_members wm ON wm.workspace_id=b.workspace_id AND wm.user_id=$1
+         LEFT JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id
+         WHERE b.workspace_id=$2 AND b.id=$3
+           AND (wm.role IN ('owner','admin') OR bm.user_id IS NOT NULL)",
     )
     .bind(user_id)
     .bind(workspace_id)
