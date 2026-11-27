@@ -1694,9 +1694,9 @@ export default function App() {
       )}
       {projectPulseOpen && (
         <ProjectPulseDashboard
+          key={data.current_workspace_id}
           onClose={() => setProjectPulseOpen(false)}
           boards={data.boards}
-          refreshKey={realtimeVersion}
           onOpenTask={(taskId) => {
             const task = data.tasks.find((item) => item.id === taskId);
             if (task) {
