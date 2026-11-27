@@ -2129,6 +2129,10 @@ mod authorization_integration_tests {
         let file_one_workspace = Uuid::new_v4();
         let file_two = Uuid::new_v4();
 
+        // New users must be created through a provider-verified identity.
+        // Seed each test user and its OAuth account in one transaction so the
+        // deferred database trigger validates the same invariant as production.
+        let mut users_tx = pool.begin().await?;
         for (id, email, name) in [
             (owner_one, "owner-one@example.test", "Owner One"),
             (member_one, "member-one@example.test", "Member One"),
@@ -2136,14 +2140,25 @@ mod authorization_integration_tests {
         ] {
             sqlx::query(
                 "INSERT INTO users (id, email, password_hash, full_name)
-                 VALUES ($1, $2, 'test-hash', $3)",
+                 VALUES ($1, $2, NULL, $3)",
             )
             .bind(id)
             .bind(email)
             .bind(name)
-            .execute(&pool)
+            .execute(&mut *users_tx)
+            .await?;
+
+            sqlx::query(
+                "INSERT INTO oauth_accounts (provider, provider_user_id, user_id, email)
+                 VALUES ('google', $1, $2, $3)",
+            )
+            .bind(format!("campusforge-ai-test-{id}"))
+            .bind(id)
+            .bind(email)
+            .execute(&mut *users_tx)
             .await?;
         }
+        users_tx.commit().await?;
 
         for (id, name, owner) in [
             (workspace_one, "Workspace One", owner_one),
