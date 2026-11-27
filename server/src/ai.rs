@@ -134,7 +134,7 @@ struct AssistantResponse {
 
 struct ProviderConfig {
     endpoint: Url,
-    api_key: String,
+    api_key: Option<String>,
     model: String,
 }
 
@@ -144,8 +144,23 @@ fn env_enabled(name: &str) -> bool {
         .is_some_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes"))
 }
 
-/// Restrict provider URLs to HTTPS. Plain HTTP is allowed only for loopback
-/// development endpoints. Redirects are disabled on the HTTP client as well.
+/// A loopback provider is permitted only in explicit local-development mode.
+fn local_loopback_enabled() -> bool {
+    env::var("CAMPUSFORGE_ENV")
+        .ok()
+        .is_some_and(|value| value.eq_ignore_ascii_case("development"))
+        && env_enabled("CAMPUSFORGE_AI_ALLOW_LOOPBACK_PROVIDER")
+}
+
+fn url_host_is_loopback(url: &Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    }
+}
+
 fn is_forbidden_provider_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
@@ -172,7 +187,32 @@ fn is_forbidden_provider_ip(ip: IpAddr) -> bool {
     }
 }
 
-async fn resolve_provider_addresses(host: &str, port: u16) -> Result<Vec<SocketAddr>, ()> {
+/// Strip URL-only IPv6 brackets before passing a host to IpAddr/lookup_host.
+fn normalized_provider_host(host: &str) -> &str {
+    host.trim_start_matches('[').trim_end_matches(']')
+}
+
+async fn resolve_provider_addresses(
+    host: &str,
+    port: u16,
+    allow_loopback: bool,
+) -> Result<Vec<SocketAddr>, ()> {
+    let host = normalized_provider_host(host);
+    let normalized_name = host.trim_end_matches('.').to_ascii_lowercase();
+    if normalized_name == "metadata.google.internal"
+        || normalized_name.ends_with(".internal")
+        || normalized_name.ends_with(".local")
+        || normalized_name.ends_with(".localhost")
+    {
+        return Err(());
+    }
+
+    let parsed_ip = host.parse::<IpAddr>().ok();
+    let is_loopback = parsed_ip.map(|ip| ip.is_loopback()).unwrap_or_else(|| normalized_name == "localhost");
+    if is_loopback && !allow_loopback {
+        return Err(());
+    }
+
     let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
         .await
         .map_err(|_| ())?
@@ -181,48 +221,28 @@ async fn resolve_provider_addresses(host: &str, port: u16) -> Result<Vec<SocketA
         return Err(());
     }
 
-    let normalized_host = host.trim_end_matches('.').to_ascii_lowercase();
-    if normalized_host == "metadata.google.internal"
-        || normalized_host.ends_with(".internal")
-        || normalized_host.ends_with(".local")
-        || normalized_host.ends_with(".localhost")
-    {
-        return Err(());
-    }
-    let is_loopback_name = normalized_host == "localhost";
-    let is_loopback_literal = host.parse::<IpAddr>().map(|ip| ip.is_loopback()).unwrap_or(false);
-    let allow_loopback = is_loopback_name || is_loopback_literal;
-    let local_development_enabled = env::var("CAMPUSFORGE_ENV")
-        .ok()
-        .is_some_and(|value| value.eq_ignore_ascii_case("development"))
-        && env_enabled("CAMPUSFORGE_AI_ALLOW_LOOPBACK_PROVIDER");
-
-    if (allow_loopback && !local_development_enabled)
-        || addresses.iter().any(|address| {
-            if allow_loopback {
-                !address.ip().is_loopback()
-            } else {
-                is_forbidden_provider_ip(address.ip())
-            }
-        })
-    {
+    if addresses.iter().any(|address| {
+        if is_loopback {
+            !address.ip().is_loopback()
+        } else {
+            is_forbidden_provider_ip(address.ip())
+        }
+    }) {
         return Err(());
     }
     Ok(addresses)
 }
 
-fn completion_url(base_url: &str) -> Option<Url> {
+fn completion_url(base_url: &str, allow_loopback: bool) -> Option<Url> {
     let mut url = Url::parse(base_url.trim()).ok()?;
-    let host = url.host_str()?;
-    let is_loopback = matches!(host, "localhost" | "127.0.0.1" | "::1");
+    let is_loopback = url_host_is_loopback(&url);
 
-    if url.scheme() != "https" && !(url.scheme() == "http" && is_loopback) {
+    if url.scheme() != "https"
+        && !(url.scheme() == "http" && is_loopback && allow_loopback)
+    {
         return None;
     }
-    if is_loopback
-        && !(env::var("CAMPUSFORGE_ENV").ok().is_some_and(|value| value.eq_ignore_ascii_case("development"))
-            && env_enabled("CAMPUSFORGE_AI_ALLOW_LOOPBACK_PROVIDER"))
-    {
+    if is_loopback && !allow_loopback {
         return None;
     }
     if !url.username().is_empty() || url.password().is_some() || url.query().is_some() || url.fragment().is_some() {
@@ -239,12 +259,29 @@ fn provider_config() -> Option<ProviderConfig> {
         return None;
     }
 
-    let endpoint = completion_url(&env::var("CAMPUSFORGE_AI_API_BASE_URL").ok()?)?;
-    let api_key = env::var("CAMPUSFORGE_AI_API_KEY").ok()?;
+    let allow_loopback = local_loopback_enabled();
+    let endpoint = completion_url(&env::var("CAMPUSFORGE_AI_API_BASE_URL").ok()?, allow_loopback)?;
     let model = env::var("CAMPUSFORGE_AI_MODEL").ok()?;
-    if api_key.trim().is_empty() || model.trim().is_empty() || api_key.len() > 4096 || model.len() > 160 {
+    if model.trim().is_empty() || model.len() > 160 {
         return None;
     }
+
+    // Local HTTP providers may be used without authentication only. Never put a
+    // real bearer credential onto a cleartext loopback connection.
+    let configured_key = env::var("CAMPUSFORGE_AI_API_KEY").ok()
+        .filter(|value| !value.trim().is_empty());
+    let api_key = if endpoint.scheme() == "http" {
+        if configured_key.is_some() {
+            return None;
+        }
+        None
+    } else {
+        let key = configured_key?;
+        if key.len() > 4096 {
+            return None;
+        }
+        Some(key)
+    };
 
     Some(ProviderConfig {
         endpoint,
@@ -399,13 +436,13 @@ async fn load_authorized_context(
         sources.push(AssistantSource {
             reference: reference.clone(),
             kind: "board",
-            label: truncate_chars(&board.name, 120),
+            label: truncate_chars(&redact_sensitive_text(&board.name), 120),
             resource_id: board.id,
         });
         board_records.push(json!({
             "reference": reference,
-            "name": truncate_chars(&board.name, 120),
-            "description": truncate_chars(&board.description, 300),
+            "name": truncate_chars(&redact_sensitive_text(&board.name), 120),
+            "description": truncate_chars(&redact_sensitive_text(&board.description), 300),
         }));
     }
 
@@ -415,17 +452,17 @@ async fn load_authorized_context(
         sources.push(AssistantSource {
             reference: reference.clone(),
             kind: "task",
-            label: truncate_chars(&task.title, 140),
+            label: truncate_chars(&redact_sensitive_text(&task.title), 140),
             resource_id: task.id,
         });
         task_records.push(json!({
             "reference": reference,
             // Internal database identifiers are not needed by the model.
-            "board": truncate_chars(&task.board_name, 120),
-            "list": truncate_chars(&task.list_name, 80),
-            "title": truncate_chars(&task.title, 160),
-            "description": truncate_chars(&task.description, 320),
-            "priority": task.priority,
+            "board": truncate_chars(&redact_sensitive_text(&task.board_name), 120),
+            "list": truncate_chars(&redact_sensitive_text(&task.list_name), 80),
+            "title": truncate_chars(&redact_sensitive_text(&task.title), 160),
+            "description": truncate_chars(&redact_sensitive_text(&task.description), 320),
+            "priority": redact_sensitive_text(&task.priority),
             "due_at": task.due_at,
         }));
     }
@@ -444,7 +481,8 @@ fn validate_task_breakdown(
     raw_answer: &str,
     sources: &[AssistantSource],
 ) -> Option<(String, Vec<String>)> {
-    let value = serde_json::from_str::<Value>(raw_answer).ok()?;
+    let mut value = serde_json::from_str::<Value>(raw_answer).ok()?;
+    redact_json_strings(&mut value);
     let summary = value.get("summary")?.as_str()?.trim();
     let tasks = value.get("tasks")?.as_array()?;
     if summary.is_empty() || summary.chars().count() > 1200 || tasks.len() > 8 {
@@ -592,37 +630,51 @@ async fn assistant(
         ),
     }));
 
-    // Resolve once, reject private/metadata destinations, then pin the HTTP
-    // client to the validated addresses to prevent DNS rebinding between check and use.
+    // One absolute deadline covers name resolution, connection, response headers and body.
+    // Pin the validated addresses into reqwest to prevent a second DNS lookup/rebinding.
+    let started = std::time::Instant::now();
+    let deadline = tokio::time::Instant::now() + StdDuration::from_secs(45);
     let provider_host = config.endpoint.host_str()
         .ok_or_else(|| fail(StatusCode::SERVICE_UNAVAILABLE, "AI provider host is invalid"))?;
+    let normalized_host = normalized_provider_host(provider_host);
     let provider_port = config.endpoint.port_or_known_default().unwrap_or(443);
-    let resolved_addresses = resolve_provider_addresses(provider_host, provider_port).await
+    let allow_loopback = local_loopback_enabled() && url_host_is_loopback(&config.endpoint);
+    let resolved_addresses = tokio::time::timeout_at(
+        deadline,
+        resolve_provider_addresses(normalized_host, provider_port, allow_loopback),
+    ).await
+        .map_err(|_| fail(StatusCode::GATEWAY_TIMEOUT, "AI provider address resolution timed out"))?
         .map_err(|_| fail(StatusCode::SERVICE_UNAVAILABLE, "AI provider destination is not permitted"))?;
 
+    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+    if remaining.is_zero() {
+        return Err(fail(StatusCode::GATEWAY_TIMEOUT, "AI provider request timed out"));
+    }
     let client = Client::builder()
-        .timeout(StdDuration::from_secs(45))
+        .timeout(remaining)
         .redirect(Policy::none())
         .no_proxy()
-        .resolve_to_addrs(provider_host, &resolved_addresses)
+        .resolve_to_addrs(normalized_host, &resolved_addresses)
         .build()
         .map_err(|error| {
             tracing::error!(%error, "Could not initialize AI provider client");
             fail(StatusCode::SERVICE_UNAVAILABLE, "AI assistance is temporarily unavailable")
         })?;
 
-    let started = std::time::Instant::now();
-    let mut response = client
+    let mut provider_request = client
         .post(config.endpoint.clone())
-        .bearer_auth(&config.api_key)
         .json(&json!({
             "model": config.model.as_str(),
             "messages": messages,
             "temperature": 0.2,
             "max_tokens": 1200,
-        }))
-        .send()
+        }));
+    if let Some(api_key) = config.api_key.as_deref() {
+        provider_request = provider_request.bearer_auth(api_key);
+    }
+    let mut response = tokio::time::timeout_at(deadline, provider_request.send())
         .await
+        .map_err(|_| fail(StatusCode::GATEWAY_TIMEOUT, "AI provider request timed out"))?
         .map_err(|error| {
             tracing::warn!(%error, "AI provider request failed");
             fail(StatusCode::BAD_GATEWAY, "The AI provider could not complete this request")
@@ -1246,6 +1298,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn normalized_provider_host_accepts_bracketed_ipv6() {
+        assert_eq!(normalized_provider_host("[::1]"), "::1");
+        assert_eq!(normalized_provider_host("api.example.com"), "api.example.com");
+        assert!(url_host_is_loopback(&Url::parse("http://[::1]:1234/v1").unwrap()));
+        assert!(url_host_is_loopback(&Url::parse("http://127.0.0.1:1234/v1").unwrap()));
+        assert!(url_host_is_loopback(&Url::parse("http://localhost:1234/v1").unwrap()));
+        assert!(!url_host_is_loopback(&Url::parse("https://api.example.com/v1").unwrap()));
+    }
+
+    #[test]
+    fn blocked_column_detection_does_not_match_unblocked() {
+        assert!(is_blocked_column("Blocked"));
+        assert!(is_blocked_column("Blocked - waiting"));
+        assert!(is_blocked_column("Stuck"));
+        assert!(is_blocked_column("On Hold"));
+        assert!(!is_blocked_column("Unblocked"));
+        assert!(!is_blocked_column("In progress"));
+    }
+
+    #[test]
     fn provider_destination_filter_blocks_private_metadata_and_loopback() {
         assert!(is_forbidden_provider_ip("10.0.0.8".parse().unwrap()));
         assert!(is_forbidden_provider_ip("169.254.169.254".parse().unwrap()));
@@ -1277,19 +1349,23 @@ mod tests {
     }
 
     #[test]
-    fn provider_url_requires_https_except_loopback() {
-        assert!(completion_url("https://api.example.com/v1").is_some());
-        assert!(completion_url("http://localhost:1234/v1").is_some());
-        assert!(completion_url("http://127.0.0.1:1234/v1").is_some());
-        assert!(completion_url("http://api.example.com/v1").is_none());
-        assert!(completion_url("file:///tmp/model").is_none());
+    fn provider_url_requires_https_except_explicit_loopback_opt_in() {
+        assert!(completion_url("https://api.example.com/v1", false).is_some());
+        assert!(completion_url("http://localhost:1234/v1", false).is_none());
+        assert!(completion_url("http://127.0.0.1:1234/v1", false).is_none());
+        assert!(completion_url("http://[::1]:1234/v1", false).is_none());
+        assert!(completion_url("http://localhost:1234/v1", true).is_some());
+        assert!(completion_url("http://127.0.0.1:1234/v1", true).is_some());
+        assert!(completion_url("http://[::1]:1234/v1", true).is_some());
+        assert!(completion_url("http://api.example.com/v1", true).is_none());
+        assert!(completion_url("file:///tmp/model", true).is_none());
     }
 
     #[test]
     fn provider_url_rejects_embedded_credentials_and_query_strings() {
-        assert!(completion_url("https://user:pass@api.example.com/v1").is_none());
-        assert!(completion_url("https://api.example.com/v1?token=secret").is_none());
-        assert!(completion_url("https://api.example.com/v1#fragment").is_none());
+        assert!(completion_url("https://user:pass@api.example.com/v1", false).is_none());
+        assert!(completion_url("https://api.example.com/v1?token=secret", false).is_none());
+        assert!(completion_url("https://api.example.com/v1#fragment", false).is_none());
     }
 
     #[test]
