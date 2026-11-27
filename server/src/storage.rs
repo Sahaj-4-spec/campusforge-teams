@@ -457,3 +457,27 @@ impl StorageService {
         }
     }
 }
+
+
+#[cfg(test)]
+mod bounded_read_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn local_storage_reads_respect_the_requested_byte_ceiling() {
+        let directory = env::temp_dir().join(format!("campusforge-ai-read-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&directory).await.unwrap();
+        let key = "nested/document.md";
+        let source = directory.join(key);
+        tokio::fs::create_dir_all(source.parent().unwrap()).await.unwrap();
+        tokio::fs::write(&source, b"0123456789").await.unwrap();
+
+        let storage = StorageService {
+            backend: Backend::Local { directory: directory.clone() },
+        };
+        assert_eq!(storage.get_limited(key, 10).await.unwrap(), b"0123456789");
+        assert!(storage.get_limited(key, 9).await.is_err());
+
+        tokio::fs::remove_dir_all(directory).await.unwrap();
+    }
+}
