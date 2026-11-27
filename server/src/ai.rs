@@ -2145,6 +2145,7 @@ mod authorization_integration_tests {
                    FROM chat_messages cm
                    LEFT JOIN boards b ON b.id = cm.board_id AND b.workspace_id = cm.workspace_id
                   WHERE cm.workspace_id = $1
+                    AND cm.conversation_id IS NULL
                     AND EXISTS (SELECT 1 FROM workspace_members wm
                                  WHERE wm.workspace_id = cm.workspace_id AND wm.user_id = $3)
                     AND ($2::uuid IS NULL OR cm.board_id IS NULL OR cm.board_id = $2)
