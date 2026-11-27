@@ -141,11 +141,11 @@ export default function ProjectPulseDashboard({ onClose, boards = [], onOpenTask
               <section className="pulse-overview">
                 <div className={"pulse-score pulse-score-" + scoreTone(data.health_score)}>
                   <div className="pulse-score-ring"><strong>{data.health_score}</strong><span>/100</span></div>
-                  <div><span className="pulse-section-kicker">PROJECT HEALTH</span><h3>{humanize(data.health_label)}</h3><p>{data.open_tasks} open tasks · {data.completed_tasks} completed of {data.total_tasks}</p></div>
+                  <div><span className="pulse-section-kicker">PROJECT HEALTH</span><h3>{humanize(data.health_label)}</h3><p>{data.open_tasks} open tasks sampled · {data.completed_tasks} completed in sample · {data.total_tasks} total tasks</p></div>
                 </div>
                 <div className="pulse-overview-note">
                   <Gauge size={17} />
-                  <span>{data.sample_capped ? "Large workspace: the score uses a capped sample. Narrow to one project for a full project-level view." : "The score is a transparent heuristic based on overdue work, blockers, priority ownership, stale tasks, deadlines and missing estimates."}</span>
+                  <span>{data.sample_capped ? "Some workspace data is sampled. Board health is shown as Partial whenever that board's full task set was not analysed. Narrow to one project for the most complete view." : "The score is a transparent heuristic based on overdue work, blockers, priority ownership, stale tasks, deadlines and missing estimates."}</span>
                 </div>
               </section>
 
@@ -185,7 +185,7 @@ export default function ProjectPulseDashboard({ onClose, boards = [], onOpenTask
                   {data.workload.length ? (
                     <div className="pulse-workload-list">
                       {data.workload.map((member) => (
-                        <div className="pulse-workload-row" key={member.member}>
+                        <div className="pulse-workload-row" key={member.member_id}>
                           <div className="pulse-workload-person"><strong>{member.member}</strong><span>{member.open_tasks} open · {member.unestimated_tasks} unestimated</span></div>
                           <div className="pulse-workload-value"><strong>{formatHours(member.estimated_minutes)}</strong><span className={"pulse-workload-tag pulse-workload-" + member.workload}>{humanize(member.workload)}</span></div>
                         </div>
@@ -202,9 +202,9 @@ export default function ProjectPulseDashboard({ onClose, boards = [], onOpenTask
                     <div className="pulse-board-list">
                       {data.board_health.map((board) => (
                         <div className="pulse-board-row" key={board.board_id}>
-                          <div className="pulse-board-row-top"><strong>{board.name}</strong><span className={"pulse-board-score pulse-score-text-" + scoreTone(board.health_score)}>{board.health_score}</span></div>
-                          <div className="pulse-board-track"><i style={{ width: board.health_score + "%" }} /></div>
-                          <small>{humanize(board.health_label)} · {board.overdue_tasks} overdue · {board.blocked_tasks} blocked · {board.completed_tasks}/{board.total_tasks} done</small>
+                          <div className="pulse-board-row-top"><strong>{board.name}</strong><span className={"pulse-board-score " + (board.coverage_complete ? "pulse-score-text-" + scoreTone(board.health_score) : "pulse-partial")}>{board.health_score ?? "Partial"}</span></div>
+                          <div className="pulse-board-track"><i className={!board.coverage_complete ? "pulse-board-track-partial" : ""} style={{ width: (board.health_score ?? 0) + "%" }} /></div>
+                          <small>{humanize(board.health_label)} · {board.sampled_tasks}/{board.total_tasks} sampled · {board.overdue_tasks} overdue · {board.blocked_tasks} blocked · {board.completed_tasks} completed in sample</small>
                         </div>
                       ))}
                     </div>
