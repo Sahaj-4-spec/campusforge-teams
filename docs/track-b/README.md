@@ -217,3 +217,25 @@ Track B is not ready for production until all applicable checks pass:
 - Automated tests run in CI; separate two-account browser acceptance, accessibility testing, cost/load testing, provider egress testing and production backup/restore sign-off remain release gates.
 - No provider credentials are present in the repository; no production merge or deployment is performed by this branch.
 
+
+
+## B4 — Durable human-approved proposals (implementation branch)
+
+The `track-b/ai-proposal-persistence` branch adds a durable review workflow on top of the existing authenticated API and SQLx/PostgreSQL data model.
+
+- The assistant still produces a read-only task plan. Saving the plan creates a structured proposal; it does not create tasks.
+- A proposal is scoped to the authenticated workspace, board, and destination list, and expires after 24 hours.
+- Only workspace owners/admins and board members with a write role may create, approve, or reject a proposal. Viewer access is read-only.
+- Approval rechecks live workspace/board membership, destination-list scope, and all assignees. It also compares a SHA-256 fingerprint of the source board/list/task state captured when the proposal was created. A changed project causes the proposal to become stale rather than applying an outdated plan.
+- Approved tasks, assignees, the proposal status change, activity event, and audit metadata are written in one PostgreSQL transaction. The proposal row is locked, so a proposal cannot be applied twice.
+- Rejection, expiry, stale detection, creation, and application are recorded in `ai_action_audit_events`. The audit contains event metadata and task identifiers/counts only; prompts, model answers, secrets, and raw workspace content are not persisted.
+- Existing `WorkspaceUser` authentication and the existing session issuer are reused. No parallel JWT format or client-supplied identity is introduced.
+
+Migration: `server/migrations/0014_ai_action_proposals.sql`.
+
+Endpoints:
+- `GET /api/ai/proposals` and `POST /api/ai/proposals`
+- `POST /api/ai/proposals/{proposal_id}/apply` and `POST /api/ai/proposals/{proposal_id}/reject`
+- `GET /api/ai/proposals/audit`
+
+The migration is additive and is applied by the repository's existing SQLx migration runner. It must be run against a database initialized with the repository's Track A migrations (0001–0013), not against the legacy camelCase-only schema. Production release still requires the provider/legal/privacy gates, deployment configuration, CI, and multi-account browser acceptance checks described above.
