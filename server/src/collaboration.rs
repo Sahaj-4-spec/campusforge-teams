@@ -517,6 +517,26 @@ async fn calendar_update(
     if result.rows_affected() == 0 {
         return Err(fail(StatusCode::NOT_FOUND, "Calendar event not found"));
     }
+
+    // Keep existing calendar invitation/reminder scope in sync with the event.
+    // The email outbox references these notification rows, so dispatch rechecks
+    // the new board scope before sending. This update is atomic with the event move.
+    sqlx::query(
+        "UPDATE notifications
+            SET board_id=$1
+          WHERE workspace_id=$2
+            AND resource_type='calendar_event'
+            AND resource_id=$3
+            AND notification_type IN ('calendar_invitation','calendar_reminder')
+            AND board_id IS DISTINCT FROM $1"
+    )
+    .bind(input.board_id)
+    .bind(workspace_id)
+    .bind(event_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|error| internal(error, "Could not update calendar notification scope"))?;
+
     if let Some(attendees)=input.attendee_ids.as_deref() {
         replace_calendar_attendees(&mut tx,workspace_id,event_id,user_id,attendees)
             .await.map_err(|error|internal(error,"Could not update calendar attendees"))?;
