@@ -406,6 +406,7 @@ async fn load_authorized_context(
            FROM boards b
           WHERE b.workspace_id = $1
             AND ($2::uuid IS NULL OR b.id = $2)
+            AND $4::boolean
             AND (
               EXISTS (SELECT 1 FROM board_members bm WHERE bm.board_id = b.id AND bm.user_id = $3)
               OR EXISTS (SELECT 1 FROM workspace_members wm
@@ -418,6 +419,7 @@ async fn load_authorized_context(
     .bind(workspace_id)
     .bind(requested_board_id)
     .bind(user_id)
+    .bind(!matches!(mode, AssistantMode::MeetingSummary | AssistantMode::ChatSummary))
     .fetch_all(&state.db)
     .await
     .map_err(|error| {
@@ -437,6 +439,7 @@ async fn load_authorized_context(
            JOIN boards b ON b.id = l.board_id
           WHERE b.workspace_id = $1
             AND ($2::uuid IS NULL OR b.id = $2)
+            AND $4::boolean
             AND (
               EXISTS (SELECT 1 FROM board_members bm WHERE bm.board_id = b.id AND bm.user_id = $3)
               OR EXISTS (SELECT 1 FROM workspace_members wm
@@ -449,6 +452,7 @@ async fn load_authorized_context(
     .bind(workspace_id)
     .bind(requested_board_id)
     .bind(user_id)
+    .bind(!matches!(mode, AssistantMode::MeetingSummary | AssistantMode::ChatSummary))
     .fetch_all(&state.db)
     .await
     .map_err(|error| {
