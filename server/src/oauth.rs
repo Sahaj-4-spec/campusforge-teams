@@ -14,7 +14,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    auth::{issue_token, session_cookie_header},
+    auth::{issue_token, persist_session, session_cookie_header},
     state::AppState,
 };
 
@@ -406,8 +406,15 @@ async fn complete_login(
     let profile = fetch_verified_profile(&client, provider, &access_token).await?;
     let user = find_or_create_user(state, provider, profile).await?;
 
-    let (token, expires_in) = issue_token(user.id, &user.email, &state.jwt_secret)
-        .map_err(|_| "CampusForge could not create your session.")?;
+    let (token, expires_in, session_id, expires_at) =
+        issue_token(user.id, &user.email, &state.jwt_secret)
+            .map_err(|_| "CampusForge could not create your session.")?;
+    persist_session(&state.db, user.id, session_id, expires_at)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "Could not persist OAuth authentication session");
+            "Sign-in is temporarily unavailable."
+        })?;
 
     Ok((token, expires_in))
 }
