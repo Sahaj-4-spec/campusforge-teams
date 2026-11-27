@@ -1434,7 +1434,9 @@ async fn analytics(
          LEFT JOIN lists l ON l.id=t.list_id
          LEFT JOIN boards b ON b.id=l.board_id AND b.workspace_id=wm.workspace_id
           AND (EXISTS(SELECT 1 FROM board_members own WHERE own.board_id=b.id AND own.user_id=$2)
-               OR wm.role IN ('owner','admin'))
+               OR EXISTS(SELECT 1 FROM workspace_members requester
+                          WHERE requester.workspace_id=b.workspace_id
+                            AND requester.user_id=$2 AND requester.role IN ('owner','admin')))
          WHERE wm.workspace_id=$1
          GROUP BY u.id, u.full_name ORDER BY u.full_name",
     )
