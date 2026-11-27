@@ -192,11 +192,12 @@ async fn resolve_provider_addresses(host: &str, port: u16) -> Result<Vec<SocketA
     let is_loopback_name = normalized_host == "localhost";
     let is_loopback_literal = host.parse::<IpAddr>().map(|ip| ip.is_loopback()).unwrap_or(false);
     let allow_loopback = is_loopback_name || is_loopback_literal;
-    let is_production = env::var("CAMPUSFORGE_ENV")
+    let local_development_enabled = env::var("CAMPUSFORGE_ENV")
         .ok()
-        .is_some_and(|value| value.eq_ignore_ascii_case("production"));
+        .is_some_and(|value| value.eq_ignore_ascii_case("development"))
+        && env_enabled("CAMPUSFORGE_AI_ALLOW_LOOPBACK_PROVIDER");
 
-    if (allow_loopback && is_production)
+    if (allow_loopback && !local_development_enabled)
         || addresses.iter().any(|address| {
             if allow_loopback {
                 !address.ip().is_loopback()
