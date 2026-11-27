@@ -84,7 +84,7 @@ These additional features are part of the integrated review candidate and are no
 
 ### 8. Optional AI assistant (Track B)
 
-The integrated candidate includes a provider-neutral, workspace/board-scoped AI assistant for questions, summaries, task plans, risk reviews, and human-approved task proposals. Project Pulse is provider-independent and summarizes permitted project metrics. Every provider request requires an explicit data-sharing acknowledgement; provider access is restricted to bounded workspace context. Proposed task mutations are saved for review and revalidated at approval time; the model cannot autonomously write to the project. The assistant is disabled by default and must remain off until provider credentials, privacy/retention terms, and spending limits are approved. See [Track B implementation and safety guide](docs/track-b/README.md).
+The integrated candidate includes a provider-neutral, workspace/board-scoped AI assistant for questions, summaries, task plans, risk reviews, and human-approved task proposals. Project Pulse is provider-independent and summarizes permitted project metrics; it has its own API/frontend feature flag and remains hidden and blocked by default until explicitly enabled. Every provider request requires an explicit data-sharing acknowledgement; provider access is restricted to bounded workspace context. Proposed task mutations are saved for review and revalidated at approval time; the model cannot autonomously write to the project. The assistant is disabled by default and must remain off until provider credentials, privacy/retention terms, and spending limits are approved. See [Track B implementation and safety guide](docs/track-b/README.md).
 
 ## 🛠️ Technology Stack
 
