@@ -233,11 +233,46 @@ async fn applies_all_postgres_migrations_and_creates_collaboration_tables() {
             .expect("verified timestamp should be readable");
     assert!(verified_at.is_some(), "database guard should timestamp verified provider users");
 
+    // Session IDs must be unique, and deleting an account must revoke all of
+    // its sessions through the user_id foreign-key cascade.
+    let session_id = uuid::Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO auth_sessions(id,user_id,expires_at)
+         VALUES($1,$2,NOW() + INTERVAL '1 hour')",
+    )
+    .bind(session_id)
+    .bind(verified_user_id)
+    .execute(&pool)
+    .await
+    .expect("verified OAuth user should be able to receive a session");
+    let duplicate_session_error = sqlx::query(
+        "INSERT INTO auth_sessions(id,user_id,expires_at)
+         VALUES($1,$2,NOW() + INTERVAL '1 hour')",
+    )
+    .bind(session_id)
+    .bind(verified_user_id)
+    .execute(&pool)
+    .await
+    .expect_err("session identifiers must be unique");
+    assert_eq!(
+        duplicate_session_error.as_database_error().and_then(|error| error.code()).as_deref(),
+        Some("23505"),
+        "duplicate session id must fail with a unique-constraint SQLSTATE"
+    );
+
     sqlx::query("DELETE FROM users WHERE id=$1")
         .bind(verified_user_id)
         .execute(&pool)
         .await
         .expect("verified OAuth migration fixture should be removed");
+    let deleted_user_sessions: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM auth_sessions WHERE user_id=$1",
+    )
+    .bind(verified_user_id)
+    .fetch_one(&pool)
+    .await
+    .expect("auth session cascade should be queryable");
+    assert_eq!(deleted_user_sessions, 0, "deleting a user must delete all of their sessions");
 
     // Deleting a board cascades its workspace_files metadata. The trigger must
     // preserve the object key in a table that is not part of the workspace cascade.
