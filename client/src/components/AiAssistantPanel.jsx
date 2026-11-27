@@ -18,7 +18,7 @@ import {
   Target,
   X
 } from "lucide-react";
-import { aiApi } from "../lib/api.js";
+import { aiApi, taskApi } from "../lib/api.js";
 
 const MODES = [
   { id: "ask", label: "Ask", icon: MessageSquare },
@@ -43,12 +43,55 @@ function parseProposal(content) {
   }
 }
 
-function AssistantAnswer({ message }) {
+function ProposalTaskCard({ task, index, onCreateTask }) {
+  const [saving, setSaving] = useState(false);
+  const [created, setCreated] = useState(false);
+  const [error, setError] = useState("");
+
+  async function createTask() {
+    if (saving || created || !onCreateTask) return;
+    setSaving(true);
+    setError("");
+    try {
+      await onCreateTask(task);
+      setCreated(true);
+    } catch (requestError) {
+      setError(requestError.message || "Could not create this task.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <article className="ai-proposal-card" key={task.title + "-" + index}>
+      <div className="ai-proposal-card-top">
+        <span className="ai-proposal-number">{index + 1}</span>
+        <strong>{task.title}</strong>
+        <span className={"ai-priority ai-priority-" + (["low", "medium", "high"].includes(String(task.priority).toLowerCase()) ? String(task.priority).toLowerCase() : "medium")}>{task.priority}</span>
+      </div>
+      {task.description && <p>{task.description}</p>}
+      <div className="ai-proposal-meta">
+        {Number.isFinite(Number(task.estimated_minutes)) && <span><Clock3 size={12} /> {task.estimated_minutes} min estimate</span>}
+        {task.reason && <span>{task.reason}</span>}
+      </div>
+      {Array.isArray(task.source_refs) && task.source_refs.length > 0 && (
+        <div className="ai-source-references">{task.source_refs.slice(0, 6).map((reference) => <span className="ai-source-chip" key={reference}>{reference}</span>)}</div>
+      )}
+      <div className="ai-proposal-actions">
+        <button className="ai-proposal-create" type="button" onClick={createTask} disabled={saving || created || !onCreateTask}>
+          {created ? <><CheckCircle2 size={13} /> Created</> : saving ? <><LoaderCircle size={13} className="ai-spin" /> Creating…</> : <>Create task <ArrowUpRight size={13} /></>}
+        </button>
+        {error && <span className="ai-proposal-error" role="alert">{error}</span>}
+      </div>
+    </article>
+  );
+}
+
+function AssistantAnswer({ message, onCreateTask }) {
   const proposal = message.mode === "task_breakdown" ? parseProposal(message.content) : null;
   const proposalTasks = proposal && Array.isArray(proposal.tasks)
     ? proposal.tasks.filter((task) => task && typeof task === "object" && typeof task.title === "string").slice(0, 8)
     : [];
-  const allowedReferences = new Set((message.sources || []).map((source) => source.reference));
 
   return (
     <div className="ai-answer-body">
@@ -57,24 +100,10 @@ function AssistantAnswer({ message }) {
           {proposal.summary && <p className="ai-proposal-summary">{proposal.summary}</p>}
           <div className="ai-proposal-list">
             {proposalTasks.map((task, index) => (
-              <article className="ai-proposal-card" key={task.title + "-" + index}>
-                <div className="ai-proposal-card-top">
-                  <span className="ai-proposal-number">{index + 1}</span>
-                  <strong>{task.title}</strong>
-                  <span className={"ai-priority ai-priority-" + (["low", "medium", "high"].includes(String(task.priority).toLowerCase()) ? String(task.priority).toLowerCase() : "medium")}>{["low", "medium", "high"].includes(String(task.priority).toLowerCase()) ? String(task.priority).toLowerCase() : "medium"}</span>
-                </div>
-                {task.description && <p>{task.description}</p>}
-                <div className="ai-proposal-meta">
-                  {Number.isFinite(Number(task.estimated_minutes)) && <span><Clock3 size={12} /> {task.estimated_minutes} min estimate</span>}
-                  {task.reason && <span>{task.reason}</span>}
-                </div>
-                {Array.isArray(task.source_refs) && task.source_refs.some((reference) => allowedReferences.has(reference)) && (
-                  <div className="ai-source-references">{task.source_refs.filter((reference) => allowedReferences.has(reference)).slice(0, 6).map((reference) => <span className="ai-source-chip" key={reference}>{reference}</span>)}</div>
-                )}
-              </article>
+              <ProposalTaskCard task={task} index={index} onCreateTask={onCreateTask} key={task.title + "-" + index} />
             ))}
           </div>
-          <p className="ai-proposal-disclaimer"><LockKeyhole size={13} /> Suggestions only. Nothing has been added to your project.</p>
+          <p className="ai-proposal-disclaimer"><LockKeyhole size={13} /> Suggestions only. Each task is created only after you press its Create task button. CampusForge rechecks your current workspace membership and list access.</p>
         </>
       ) : (
         <p className="ai-answer-copy">{message.content}</p>
@@ -83,12 +112,19 @@ function AssistantAnswer({ message }) {
   );
 }
 
-export default function AiAssistantPanel({ onClose, boards = [], activeBoardId = "" }) {
+export default function AiAssistantPanel({ onClose, boards = [], lists = [], activeBoardId = "", onTaskCreated }) {
   const [status, setStatus] = useState(null);
   const [statusError, setStatusError] = useState("");
   const [privacyAcknowledged, setPrivacyAcknowledged] = useState(false);
   const [mode, setMode] = useState("ask");
   const [boardId, setBoardId] = useState(activeBoardId || "");
+  const initialTargetBoardId = activeBoardId || activeBoardId || boards[0]?.id;
+  const [proposalListId, setProposalListId] = useState(
+    lists.find((list) => list.board_id === initialTargetBoardId && /^(to do|todo)$/i.test(list.name))?.id
+      || lists.find((list) => list.board_id === initialTargetBoardId)?.id
+      || lists[0]?.id
+      || ""
+  );
   const [messages, setMessages] = useState([]);
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
@@ -111,6 +147,14 @@ export default function AiAssistantPanel({ onClose, boards = [], activeBoardId =
       });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    const targetBoardId = boardId || activeBoardId || boards[0]?.id;
+    const nextList = lists.find((list) => list.board_id === targetBoardId && /^(to do|todo)$/i.test(list.name))
+      || lists.find((list) => list.board_id === targetBoardId)
+      || lists[0];
+    setProposalListId(nextList?.id || "");
+  }, [boardId, activeBoardId, lists, boards]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -199,6 +243,22 @@ export default function AiAssistantPanel({ onClose, boards = [], activeBoardId =
     }
   }
 
+  async function createProposedTask(task) {
+    if (!proposalListId) {
+      throw new Error("Choose a project column before creating proposed tasks.");
+    }
+    await taskApi.create({
+      title: String(task.title).trim(),
+      description: String(task.description || "").trim(),
+      priority: ["low", "medium", "high"].includes(String(task.priority).toLowerCase()) ? String(task.priority).toLowerCase() : "medium",
+      due_date: null,
+      list_id: proposalListId,
+      assignee_id: null,
+      estimated_minutes: Number(task.estimated_minutes)
+    });
+    await onTaskCreated?.();
+  }
+
   const enabled = status?.enabled === true;
 
   return (
@@ -245,6 +305,20 @@ export default function AiAssistantPanel({ onClose, boards = [], activeBoardId =
               {boards.map((board) => <option key={board.id} value={board.id}>{board.name}</option>)}
             </select>
           </label>
+          {mode === "task_breakdown" && enabled && (
+            <label className="ai-scope-select ai-proposal-target">
+              <span>Create in</span>
+              <select value={proposalListId} onChange={(event) => setProposalListId(event.target.value)} aria-label="Choose where approved tasks should be created">
+                <option value="">Choose a project column</option>
+                {lists
+                  .filter((list) => !boardId || list.board_id === boardId)
+                  .map((list) => {
+                    const boardName = boards.find((board) => board.id === list.board_id)?.name || "Project";
+                    return <option key={list.id} value={list.id}>{boardName} · {list.name}</option>;
+                  })}
+              </select>
+            </label>
+          )}
         </div>
 
         <div className="ai-panel-content">
@@ -284,7 +358,7 @@ export default function AiAssistantPanel({ onClose, boards = [], activeBoardId =
                   <div className="ai-message-avatar">{message.role === "assistant" ? <Sparkles size={15} /> : <span>You</span>}</div>
                   <div className="ai-message-main">
                     <div className="ai-message-label">{message.role === "assistant" ? "CampusForge assistant" : "You"}</div>
-                    {message.role === "assistant" ? <AssistantAnswer message={message} /> : <p className="ai-user-copy">{message.content}</p>}
+                    {message.role === "assistant" ? <AssistantAnswer message={message} onCreateTask={message.mode === "task_breakdown" ? createProposedTask : undefined} /> : <p className="ai-user-copy">{message.content}</p>}
                     {message.role === "assistant" && message.sources?.length > 0 && (
                       <div className="ai-citations">
                         <span className="ai-citations-label"><BookOpen size={12} /> Sources</span>
