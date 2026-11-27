@@ -30,6 +30,7 @@ async fn task_scope(state: &AppState, user_id: Uuid, task_id: Uuid) -> ApiResult
         "SELECT b.workspace_id, b.id, t.list_id
          FROM tasks t JOIN lists l ON l.id=t.list_id JOIN boards b ON b.id=l.board_id
          JOIN workspace_members wm ON wm.workspace_id=b.workspace_id
+         JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id
          WHERE t.id=$1 AND wm.user_id=$2",
     )
     .bind(task_id)
@@ -38,6 +39,18 @@ async fn task_scope(state: &AppState, user_id: Uuid, task_id: Uuid) -> ApiResult
     .await
     .map_err(|error| internal(error, "Could not verify task access"))?
     .ok_or_else(|| fail(StatusCode::NOT_FOUND, "Task not found"))
+}
+
+async fn task_write_scope(state: &AppState, user_id: Uuid, task_id: Uuid) -> ApiResult<(Uuid, Uuid, Uuid)> {
+    let scope = task_scope(state, user_id, task_id).await?;
+    let role = crate::auth::board_role(&state.db, user_id, scope.0, scope.1)
+        .await
+        .map_err(|error| internal(error, "Could not verify board write permissions"))?;
+    match role.as_deref() {
+        Some("admin" | "member") => Ok(scope),
+        Some("viewer") => Err(fail(StatusCode::FORBIDDEN, "This project is read-only for your account")),
+        _ => Err(fail(StatusCode::NOT_FOUND, "Task not found")),
+    }
 }
 
 async fn task_in_workspace(state: &AppState, task_id: Uuid, workspace_id: Uuid) -> ApiResult<()> {
@@ -182,7 +195,7 @@ async fn subtask_create(
     Path(parent_task_id): Path<Uuid>,
     Json(input): Json<SubtaskInput>,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
-    let (workspace_id, board_id, list_id) = task_scope(&state, user_id, parent_task_id).await?;
+    let (workspace_id, board_id, list_id) = task_write_scope(&state, user_id, parent_task_id).await?;
     let title = input.title.trim();
     if title.is_empty() || title.chars().count() > 180 {
         return Err(fail(StatusCode::BAD_REQUEST, "Subtask title must be between 1 and 180 characters"));
@@ -230,7 +243,7 @@ async fn subtask_update(
     Path(subtask_id): Path<Uuid>,
     Json(input): Json<SubtaskUpdate>,
 ) -> ApiResult<StatusCode> {
-    let (workspace_id, board_id, _) = task_scope(&state, user_id, subtask_id).await?;
+    let (workspace_id, board_id, _) = task_write_scope(&state, user_id, subtask_id).await?;
     let is_child: bool = sqlx::query_scalar("SELECT parent_task_id IS NOT NULL FROM tasks WHERE id=$1")
         .bind(subtask_id).fetch_one(&state.db).await
         .map_err(|error| internal(error, "Could not verify subtask"))?;
@@ -276,7 +289,7 @@ async fn subtask_delete(
     AuthUser(user_id): AuthUser,
     Path(subtask_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let (workspace_id, board_id, _) = task_scope(&state, user_id, subtask_id).await?;
+    let (workspace_id, board_id, _) = task_write_scope(&state, user_id, subtask_id).await?;
     let is_child: bool = sqlx::query_scalar("SELECT parent_task_id IS NOT NULL FROM tasks WHERE id=$1")
         .bind(subtask_id).fetch_one(&state.db).await
         .map_err(|error| internal(error, "Could not verify subtask"))?;
@@ -295,7 +308,7 @@ async fn checklist_list(
     AuthUser(user_id): AuthUser,
     Path(task_id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<ChecklistItem>>> {
-    task_scope(&state, user_id, task_id).await?;
+    task_write_scope(&state, user_id, task_id).await?;
     let rows = sqlx::query_as::<_, ChecklistItem>(
         "SELECT id,task_id,title,position,is_done,completed_by,completed_at,created_at
          FROM task_checklist_items WHERE task_id=$1 ORDER BY position",
@@ -311,7 +324,7 @@ async fn checklist_create(
     Path(task_id): Path<Uuid>,
     Json(input): Json<ChecklistInput>,
 ) -> ApiResult<(StatusCode, Json<ChecklistItem>)> {
-    let (workspace_id, board_id, _) = task_scope(&state, user_id, task_id).await?;
+    let (workspace_id, board_id, _) = task_write_scope(&state, user_id, task_id).await?;
     let title = input.title.trim();
     if title.is_empty() || title.chars().count()>240 {
         return Err(fail(StatusCode::BAD_REQUEST,"Checklist item must be between 1 and 240 characters"));
@@ -347,6 +360,7 @@ async fn checklist_update(
         "SELECT b.workspace_id,b.id FROM task_checklist_items c JOIN tasks t ON t.id=c.task_id
          JOIN lists l ON l.id=t.list_id JOIN boards b ON b.id=l.board_id
          JOIN workspace_members wm ON wm.workspace_id=b.workspace_id
+         JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id AND bm.role IN ('admin','member')
          WHERE c.id=$1 AND wm.user_id=$2")
         .bind(item_id).bind(user_id).fetch_optional(&state.db).await
         .map_err(|error|internal(error,"Could not verify checklist item"))?;
@@ -373,7 +387,9 @@ async fn checklist_delete(
     let scope:Option<(Uuid,Uuid)>=sqlx::query_as(
         "SELECT b.workspace_id,b.id FROM task_checklist_items c JOIN tasks t ON t.id=c.task_id
          JOIN lists l ON l.id=t.list_id JOIN boards b ON b.id=l.board_id
-         JOIN workspace_members wm ON wm.workspace_id=b.workspace_id WHERE c.id=$1 AND wm.user_id=$2")
+         JOIN workspace_members wm ON wm.workspace_id=b.workspace_id
+         JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id AND bm.role IN ('admin','member')
+         WHERE c.id=$1 AND wm.user_id=$2")
         .bind(item_id).bind(user_id).fetch_optional(&state.db).await
         .map_err(|error|internal(error,"Could not verify checklist item"))?;
     let Some((workspace_id,board_id))=scope else{return Err(fail(StatusCode::NOT_FOUND,"Checklist item not found"));};
@@ -450,7 +466,7 @@ async fn dependency_add(
     Path(task_id): Path<Uuid>,
     Json(input): Json<DependencyInput>,
 ) -> ApiResult<StatusCode> {
-    let (workspace_id, board_id, _) = task_scope(&state, user_id, task_id).await?;
+    let (workspace_id, board_id, _) = task_write_scope(&state, user_id, task_id).await?;
     task_in_workspace(&state, input.depends_on_task_id, workspace_id).await?;
     if task_id == input.depends_on_task_id {
         return Err(fail(StatusCode::BAD_REQUEST, "A task cannot depend on itself"));
