@@ -29,7 +29,7 @@ The AI assistant remains disabled by default. Provider calls require an explicit
 ### Database
 
 - Neon project: `neon-rose-book`; branch: `main`; application database: `campusforge_app`.
-- SQLx journal versions 0001–0014 were verified successful; version 14 is `ai_action_proposals`. Candidate migrations 0015 (session revocation) and 0016 (board-scoped notifications) are pending.
+- SQLx journal versions 0001–0014 were verified successful; version 14 is `ai_action_proposals`. Candidate migrations 0015 (session revocation), 0016 (board-scoped notifications), and 0017 (proposal-history retention) are pending.
 - AI proposal and audit tables are present.
 - The session-revocation table `auth_sessions` is not yet present. Candidate migration `0015_revocable_auth_sessions.sql` adds it; do not rename or overwrite version 14.
 - The legacy `neondb` database was preserved. The new `campusforge_app` database contained no user/proposal rows at the last check.
@@ -50,7 +50,7 @@ SQLx stores SHA-384 migration checksums (48 bytes). The initial manual journal h
 1. Keep `0014_ai_action_proposals.sql` unchanged; it is already recorded in Neon SQLx migration history.
 2. Run the candidate through integrated CI and review.
 3. Take/verify a database backup and run the session migration in a controlled release window.
-4. Apply `0015_revocable_auth_sessions.sql`, then `0016_notification_board_scope.sql`, with the matching integrated API binary.
+4. Apply `0015_revocable_auth_sessions.sql`, `0016_notification_board_scope.sql`, then `0017_preserve_ai_proposal_history.sql`, with the matching integrated API binary.
 5. Verify password login, all configured OAuth providers, Bearer and cookie session revocation, WebSocket closure after revocation, and cleanup behavior.
 6. Do not roll back to a binary that ignores `auth_sessions` after migration 0015 has been applied. Follow the rollback procedure in [Database migration release order](DATABASE_MIGRATION_RELEASE_ORDER.md).
 
@@ -66,6 +66,7 @@ JWTs issued before session migration 0015 do not contain `jti`; users will need 
 | Neon schema 0001–0014 | **Verified** | SQLx journal success and AI proposal tables present. |
 | Neon migration 0015 | **Pending** | Apply after candidate checks and backup/restore sign-off; verify `auth_sessions`. |
 | Neon migration 0016 | **Pending** | Apply immediately after 0015; verify notification board scope and index. |
+| Neon migration 0017 | **Pending** | Apply after 0016; verify completed proposal history survives target-column deletion and pending proposals protect active targets. |
 | Database backups/restore | **Not verified** | Configure retention/PITR and complete a restore into an isolated environment. |
 | Google/GitHub/Discord OAuth | **Not configured/verified** | Supply client IDs/secrets, register exact HTTPS callback URLs, and pass verified-email sign-up tests for each provider. |
 | Private object storage | **Startup I/O verified; policy review pending** | The surviving preview API startup log reports a private S3-compatible bucket (`campusforge-private-uploads`, `us-east-1`) and successful PUT/GET/DELETE verification. Still verify bucket ACL/IAM scope, encryption, lifecycle/versioning, backups and restoration. |
