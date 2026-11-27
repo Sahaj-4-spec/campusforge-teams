@@ -361,27 +361,33 @@ async fn checklist_update(
     Path(item_id):Path<Uuid>,
     Json(input):Json<ChecklistUpdate>,
 )->ApiResult<StatusCode>{
-    let scope:Option<(Uuid,Uuid)>=sqlx::query_as(
-        "SELECT b.workspace_id,b.id FROM task_checklist_items c JOIN tasks t ON t.id=c.task_id
-         JOIN lists l ON l.id=t.list_id JOIN boards b ON b.id=l.board_id
-         JOIN workspace_members wm ON wm.workspace_id=b.workspace_id
-         JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id AND bm.role IN ('admin','member')
-         WHERE c.id=$1 AND wm.user_id=$2")
-        .bind(item_id).bind(user_id).fetch_optional(&state.db).await
-        .map_err(|error|internal(error,"Could not verify checklist item"))?;
-    let Some((workspace_id,board_id))=scope else{return Err(fail(StatusCode::NOT_FOUND,"Checklist item not found"));};
     let title=input.title.as_deref().map(str::trim);
     if title.is_some_and(|value|value.is_empty()||value.chars().count()>240){
         return Err(fail(StatusCode::BAD_REQUEST,"Checklist item title is invalid"));
     }
-    sqlx::query(
-        "UPDATE task_checklist_items SET title=COALESCE($1,title),
-          is_done=COALESCE($2,is_done),
-          completed_by=CASE WHEN $2 IS TRUE THEN $3 WHEN $2 IS FALSE THEN NULL ELSE completed_by END,
-          completed_at=CASE WHEN $2 IS TRUE THEN NOW() WHEN $2 IS FALSE THEN NULL ELSE completed_at END
-         WHERE id=$4")
-        .bind(title).bind(input.is_done).bind(user_id).bind(item_id).execute(&state.db).await
+    let scope:Option<(Uuid,Uuid)>=sqlx::query_as(
+        "UPDATE task_checklist_items c
+            SET title=COALESCE($1,title),
+                is_done=COALESCE($2,is_done),
+                completed_by=CASE WHEN $2 IS TRUE THEN $3 WHEN $2 IS FALSE THEN NULL ELSE completed_by END,
+                completed_at=CASE WHEN $2 IS TRUE THEN NOW() WHEN $2 IS FALSE THEN NULL ELSE completed_at END
+           FROM tasks t
+           JOIN lists l ON l.id=t.list_id
+           JOIN boards b ON b.id=l.board_id
+           JOIN workspace_members wm ON wm.workspace_id=b.workspace_id AND wm.user_id=$3
+          WHERE c.id=$4 AND c.task_id=t.id
+            AND (
+                wm.role IN ('owner','admin')
+                OR EXISTS (
+                    SELECT 1 FROM board_members bm
+                     WHERE bm.board_id=b.id AND bm.user_id=$3 AND bm.role IN ('admin','member')
+                )
+            )
+          RETURNING b.workspace_id,b.id")
+        .bind(title).bind(input.is_done).bind(user_id).bind(item_id)
+        .fetch_optional(&state.db).await
         .map_err(|error|internal(error,"Could not update checklist item"))?;
+    let Some((workspace_id,board_id))=scope else{return Err(fail(StatusCode::NOT_FOUND,"Checklist item not found"));};
     state.publish_workspace_event(workspace_id,Some(board_id),"checklist_item_updated","updated a checklist item");
     Ok(StatusCode::NO_CONTENT)
 }
@@ -390,16 +396,23 @@ async fn checklist_delete(
     State(state):State<AppState>,AuthUser(user_id):AuthUser,Path(item_id):Path<Uuid>,
 )->ApiResult<StatusCode>{
     let scope:Option<(Uuid,Uuid)>=sqlx::query_as(
-        "SELECT b.workspace_id,b.id FROM task_checklist_items c JOIN tasks t ON t.id=c.task_id
-         JOIN lists l ON l.id=t.list_id JOIN boards b ON b.id=l.board_id
-         JOIN workspace_members wm ON wm.workspace_id=b.workspace_id
-         JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id AND bm.role IN ('admin','member')
-         WHERE c.id=$1 AND wm.user_id=$2")
+        "DELETE FROM task_checklist_items c
+          USING tasks t
+          JOIN lists l ON l.id=t.list_id
+          JOIN boards b ON b.id=l.board_id
+          JOIN workspace_members wm ON wm.workspace_id=b.workspace_id AND wm.user_id=$2
+         WHERE c.id=$1 AND c.task_id=t.id
+           AND (
+                wm.role IN ('owner','admin')
+                OR EXISTS (
+                    SELECT 1 FROM board_members bm
+                     WHERE bm.board_id=b.id AND bm.user_id=$2 AND bm.role IN ('admin','member')
+                )
+           )
+         RETURNING b.workspace_id,b.id")
         .bind(item_id).bind(user_id).fetch_optional(&state.db).await
-        .map_err(|error|internal(error,"Could not verify checklist item"))?;
-    let Some((workspace_id,board_id))=scope else{return Err(fail(StatusCode::NOT_FOUND,"Checklist item not found"));};
-    sqlx::query("DELETE FROM task_checklist_items WHERE id=$1").bind(item_id).execute(&state.db).await
         .map_err(|error|internal(error,"Could not delete checklist item"))?;
+    let Some((workspace_id,board_id))=scope else{return Err(fail(StatusCode::NOT_FOUND,"Checklist item not found"));};
     state.publish_workspace_event(workspace_id,Some(board_id),"checklist_item_deleted","deleted a checklist item");
     Ok(StatusCode::NO_CONTENT)
 }
@@ -764,10 +777,10 @@ async fn process_recurrences(state:&AppState){
 }
 
 async fn process_deadline_notifications(state:&AppState){
-    let approaching=sqlx::query_as::<_,(Uuid,Uuid)>(
+    let approaching=sqlx::query_as::<_,(Uuid,Uuid,Uuid)>(
         "WITH inserted AS (
-            INSERT INTO notifications(workspace_id,recipient_user_id,notification_type,title,body,resource_type,resource_id,dedupe_key)
-            SELECT b.workspace_id,ta.user_id,'deadline_approaching','Deadline approaching',
+            INSERT INTO notifications(workspace_id,board_id,recipient_user_id,notification_type,title,body,resource_type,resource_id,dedupe_key)
+            SELECT b.workspace_id,b.id,ta.user_id,'deadline_approaching','Deadline approaching',
                 'A task assigned to you is due within the next 24 hours.','task',t.id,
                 'deadline:'||t.id::text||':'||ta.user_id::text||':'||to_char(t.due_at AT TIME ZONE 'UTC','YYYY-MM-DD')
             FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id
@@ -777,8 +790,11 @@ async fn process_deadline_notifications(state:&AppState){
             WHERE t.due_at>NOW() AND t.due_at<=NOW()+INTERVAL '24 hours'
               AND lower(l.name) NOT IN ('done','complete','completed')
               AND (COALESCE(p.in_app_enabled,TRUE) OR COALESCE(p.email_enabled,FALSE))
+              AND (wm.role IN ('owner','admin') OR EXISTS(
+                    SELECT 1 FROM board_members bm WHERE bm.board_id=b.id AND bm.user_id=ta.user_id
+              ))
             ON CONFLICT(dedupe_key) DO NOTHING
-            RETURNING id,workspace_id,recipient_user_id
+            RETURNING id,workspace_id,recipient_user_id,board_id
          ),
          queued_emails AS (
             INSERT INTO notification_email_outbox(notification_id,recipient_user_id)
@@ -788,15 +804,15 @@ async fn process_deadline_notifications(state:&AppState){
             ON CONFLICT(notification_id) DO NOTHING
             RETURNING notification_id
          )
-         SELECT workspace_id,recipient_user_id FROM inserted")
+         SELECT workspace_id,recipient_user_id,board_id FROM inserted")
         .fetch_all(&state.db).await;
     if let Ok(rows)=approaching{
-        for (workspace_id,_) in rows{state.publish_workspace_event(workspace_id,None,"notification_created","a deadline reminder is available");}
+        for (workspace_id,_,board_id) in rows{state.publish_workspace_event(workspace_id,Some(board_id),"notification_created","a deadline reminder is available");}
     }
-    let overdue=sqlx::query_as::<_,(Uuid,Uuid)>(
+    let overdue=sqlx::query_as::<_,(Uuid,Uuid,Uuid)>(
         "WITH inserted AS (
-            INSERT INTO notifications(workspace_id,recipient_user_id,notification_type,title,body,resource_type,resource_id,dedupe_key)
-            SELECT b.workspace_id,ta.user_id,'overdue_task','Task overdue',
+            INSERT INTO notifications(workspace_id,board_id,recipient_user_id,notification_type,title,body,resource_type,resource_id,dedupe_key)
+            SELECT b.workspace_id,b.id,ta.user_id,'overdue_task','Task overdue',
                 'A task assigned to you is overdue.','task',t.id,
                 'overdue:'||t.id::text||':'||ta.user_id::text||':'||to_char(t.due_at AT TIME ZONE 'UTC','YYYY-MM-DD')
             FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id
@@ -806,8 +822,11 @@ async fn process_deadline_notifications(state:&AppState){
             WHERE t.due_at<NOW() AND t.due_at>=NOW()-INTERVAL '24 hours'
               AND lower(l.name) NOT IN ('done','complete','completed')
               AND (COALESCE(p.in_app_enabled,TRUE) OR COALESCE(p.email_enabled,FALSE))
+              AND (wm.role IN ('owner','admin') OR EXISTS(
+                    SELECT 1 FROM board_members bm WHERE bm.board_id=b.id AND bm.user_id=ta.user_id
+              ))
             ON CONFLICT(dedupe_key) DO NOTHING
-            RETURNING id,workspace_id,recipient_user_id
+            RETURNING id,workspace_id,recipient_user_id,board_id
          ),
          queued_emails AS (
             INSERT INTO notification_email_outbox(notification_id,recipient_user_id)
@@ -817,10 +836,10 @@ async fn process_deadline_notifications(state:&AppState){
             ON CONFLICT(notification_id) DO NOTHING
             RETURNING notification_id
          )
-         SELECT workspace_id,recipient_user_id FROM inserted")
+         SELECT workspace_id,recipient_user_id,board_id FROM inserted")
         .fetch_all(&state.db).await;
     if let Ok(rows)=overdue{
-        for (workspace_id,_) in rows{state.publish_workspace_event(workspace_id,None,"notification_created","an overdue task reminder is available");}
+        for (workspace_id,_,board_id) in rows{state.publish_workspace_event(workspace_id,Some(board_id),"notification_created","an overdue task reminder is available");}
     }
 }
 
