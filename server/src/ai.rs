@@ -854,7 +854,7 @@ fn pulse_counts(tasks: &[&PulseTask], now: &DateTime<Utc>) -> PulseCounts {
         } else if days_to_due.is_some_and(|days| (0..=3).contains(&days)) {
             due_soon += 1;
         }
-        let urgent = matches!(task.priority.to_ascii_lowercase().as_str(), "urgent" | "high");
+        let urgent = matches!(task.priority.to_ascii_lowercase().as_str(), "urgent" | "critical" | "high");
         if urgent && task.assignees.is_empty() {
             unassigned_urgent += 1;
         }
@@ -902,10 +902,10 @@ fn focus_recommendation(task: &PulseTask, overdue: bool, blocked: bool, unassign
 
 fn focus_score(task: &PulseTask, now: &DateTime<Utc>) -> (u8, String, String) {
     let blocked = is_blocked_column(&task.list_name);
-    let days_to_due = task.due_at.map(|due| (due.date_naive() - now.date_naive()).num_days());
+    let days_to_due = task.due_at.as_ref().map(|due| (due.date_naive() - now.date_naive()).num_days());
     let overdue = days_to_due.is_some_and(|days| days < 0);
     let due_soon = days_to_due.is_some_and(|days| (0..=3).contains(&days));
-    let urgent = matches!(task.priority.to_ascii_lowercase().as_str(), "urgent" | "high");
+    let urgent = matches!(task.priority.to_ascii_lowercase().as_str(), "urgent" | "critical" | "high");
     let unassigned_urgent = urgent && task.assignees.is_empty();
     let stale = now.clone().signed_duration_since(task.updated_at.clone()).num_days() >= 7;
 
@@ -913,7 +913,7 @@ fn focus_score(task: &PulseTask, now: &DateTime<Utc>) -> (u8, String, String) {
     let mut reasons = Vec::new();
     if overdue { score += 55; reasons.push("overdue"); }
     if blocked { score += 45; reasons.push("in a blocked column"); }
-    if urgent { score += if task.priority.eq_ignore_ascii_case("urgent") { 32 } else { 20 }; reasons.push("high priority"); }
+    if urgent { score += if task.priority.eq_ignore_ascii_case("urgent") || task.priority.eq_ignore_ascii_case("critical") { 32 } else { 20 }; reasons.push("high priority"); }
     if due_soon { score += 18; reasons.push("due within three days"); }
     if unassigned_urgent { score += 18; reasons.push("no assignee"); }
     if stale { score += 12; reasons.push("no update in seven days"); }
