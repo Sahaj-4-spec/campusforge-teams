@@ -335,6 +335,72 @@ async fn load_authorized_context(
     ))
 }
 
+fn validate_task_breakdown(
+    raw_answer: &str,
+    sources: &[AssistantSource],
+) -> Option<(String, Vec<String>)> {
+    let value = serde_json::from_str::<Value>(raw_answer).ok()?;
+    let summary = value.get("summary")?.as_str()?.trim();
+    let tasks = value.get("tasks")?.as_array()?;
+    if summary.is_empty() || summary.chars().count() > 1200 || tasks.len() > 8 {
+        return None;
+    }
+
+    let mut normalized_tasks = Vec::with_capacity(tasks.len());
+    let mut cited_references = Vec::new();
+
+    for task in tasks {
+        let title = task.get("title")?.as_str()?.trim();
+        let priority = task.get("priority")?.as_str()?.to_ascii_lowercase();
+        let estimated_minutes = task.get("estimated_minutes")?.as_u64()?;
+        if title.is_empty()
+            || title.chars().count() > 160
+            || !matches!(priority.as_str(), "low" | "medium" | "high")
+            || !(1..=600).contains(&estimated_minutes)
+        {
+            return None;
+        }
+
+        let description = task.get("description").and_then(Value::as_str).unwrap_or("").trim();
+        let reason = task.get("reason").and_then(Value::as_str).unwrap_or("").trim();
+        if description.chars().count() > 600 || reason.chars().count() > 400 {
+            return None;
+        }
+
+        let source_refs = task.get("source_refs")
+            .and_then(Value::as_array)
+            .map(|references| {
+                references.iter()
+                    .filter_map(Value::as_str)
+                    .filter(|reference| sources.iter().any(|source| source.reference == *reference))
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        for reference in &source_refs {
+            if !cited_references.contains(reference) {
+                cited_references.push(reference.clone());
+            }
+        }
+
+        normalized_tasks.push(json!({
+            "title": title,
+            "description": description,
+            "priority": priority,
+            "estimated_minutes": estimated_minutes,
+            "reason": reason,
+            "source_refs": source_refs,
+        }));
+    }
+
+    let normalized = serde_json::to_string(&json!({
+        "summary": summary,
+        "tasks": normalized_tasks,
+    })).ok()?;
+    Some((normalized, cited_references))
+}
+
 fn system_instruction(mode: AssistantMode) -> String {
     format!(
         "You are the read-only CampusForge Teams project assistant.\n\
@@ -449,16 +515,24 @@ async fn assistant(
         tracing::warn!(%error, "AI provider response was not valid JSON");
         fail(StatusCode::BAD_GATEWAY, "The AI provider returned an invalid response")
     })?;
-    let answer = payload
+    let raw_answer = payload
         .pointer("/choices/0/message/content")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|answer| !answer.is_empty())
         .ok_or_else(|| fail(StatusCode::BAD_GATEWAY, "The AI provider returned an empty response"))?;
 
-    if answer.chars().count() > 12_000 {
+    if raw_answer.chars().count() > 12_000 {
         return Err(fail(StatusCode::BAD_GATEWAY, "The AI provider response exceeded the allowed size"));
     }
+
+    let (answer, proposal_references) = if matches!(request.mode, AssistantMode::TaskBreakdown) {
+        let (normalized, references) = validate_task_breakdown(raw_answer, &sources)
+            .ok_or_else(|| fail(StatusCode::BAD_GATEWAY, "The AI provider returned an invalid task proposal"))?;
+        (normalized, Some(references))
+    } else {
+        (raw_answer.to_owned(), None)
+    };
 
     let prompt_tokens = payload.pointer("/usage/prompt_tokens").and_then(Value::as_u64);
     let completion_tokens = payload.pointer("/usage/completion_tokens").and_then(Value::as_u64);
@@ -474,7 +548,11 @@ async fn assistant(
     );
 
     let cited_sources = sources.into_iter().filter(|source| {
-        answer.contains(&format!("[{}]", source.reference))
+        if let Some(references) = &proposal_references {
+            references.contains(&source.reference)
+        } else {
+            answer.contains(&format!("[{}]", source.reference))
+        }
     }).collect();
 
     Ok(Json(AssistantResponse {
@@ -565,5 +643,32 @@ mod tests {
             }],
         };
         assert!(validate_request(&request).is_err());
+    }
+
+    #[test]
+    fn task_plan_validation_rejects_invalid_priorities_and_estimates() {
+        let source = AssistantSource {
+            reference: "T1".to_owned(),
+            kind: "task",
+            label: "Existing task".to_owned(),
+            resource_id: Uuid::new_v4(),
+        };
+        let invalid = r#"{"summary":"Plan","tasks":[{"title":"Do the work","description":"","priority":"critical","estimated_minutes":9999,"reason":"test","source_refs":["T1"]}]}"#;
+        assert!(validate_task_breakdown(invalid, &[source]).is_none());
+    }
+
+    #[test]
+    fn task_plan_validation_keeps_only_real_source_references() {
+        let source = AssistantSource {
+            reference: "T1".to_owned(),
+            kind: "task",
+            label: "Existing task".to_owned(),
+            resource_id: Uuid::new_v4(),
+        };
+        let valid = r#"{"summary":"Plan","tasks":[{"title":"Review the draft","description":"Check key sections","priority":"high","estimated_minutes":45,"reason":"A review task","source_refs":["T1","T999"]}]}"#;
+        let (normalized, references) = validate_task_breakdown(valid, &[source]).unwrap();
+        let value = serde_json::from_str::<Value>(&normalized).unwrap();
+        assert_eq!(value["tasks"][0]["source_refs"], json!(["T1"]));
+        assert_eq!(references, vec!["T1".to_owned()]);
     }
 }
