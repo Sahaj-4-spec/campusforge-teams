@@ -72,8 +72,9 @@ This file establishes the initial product and engineering boundary. The first re
 - Rendered AI output as plain text; no generated HTML is injected into the page.
 - All requests remain read-only; the API returns `actions_applied: false`.
 - The task-plan JSON schema, task count, priority, estimate, field lengths, and source references are validated server-side; model-invented source IDs are removed.
-- A first-use data-sharing acknowledgement is required in the UI and is checked again by the API on every provider request. The notice covers the prompt, recent conversation, and authorized project context.
-- Changing the selected project clears the conversation; changing workspaces remounts the assistant so prior history and consent do not carry across tenants.
+- A data-sharing acknowledgement is required in the UI and is checked again by the API on every provider request. The notice covers the prompt, recent conversation, and context selected by the current mode.
+- Changing project, mode, file, or workspace clears the in-memory conversation and resets acknowledgement. Changing workspaces remounts the assistant.
+- User-confirmed task-plan application uses the existing task-creation API and its current workspace/list authorization checks; no AI tool or autonomous write access exists.
 
 **Not yet implemented:** meeting-note or file summarization, persistent conversations, streaming, and user preferences.
 
@@ -122,9 +123,17 @@ Example request:
 }
 ```
 
-Supported modes are `ask`, `summary`, `task_breakdown`, and `risk_review`. Prompt length is capped at 2,000 characters; up to eight user/assistant history messages are accepted, with each message capped at 1,800 characters. The request must include `acknowledged_data_sharing: true`; the API rejects requests without it. An optional `board_id` scopes retrieval to one authorized board. Without it, retrieval is limited to the caller's accessible boards within the selected workspace.
+Supported modes are `ask`, `summary`, `task_breakdown`, `risk_review`, `meeting_summary`, `chat_summary`, and `file_summary`. Prompt length is capped at 2,000 characters; up to eight user/assistant history messages are accepted, with each message capped at 1,800 characters. The request must include `acknowledged_data_sharing: true`; the API rejects requests without it. An optional `board_id` scopes retrieval to one authorized board. Without it, retrieval is limited to the caller's accessible boards within the selected workspace.
 
-The response contains `answer`, `mode`, `model`, `generated_at`, cited `sources`, prompt/completion token counts when supplied by the provider, and `actions_applied: false`. Only source references actually cited in the answer are returned in the `sources` list.
+Mode-specific context is minimized:
+- Ask, Summary, Task Plan and Risk Review read only the bounded authorized board/task context.
+- Meeting Summary loads up to 10 meeting notes from workspace-level notes and boards the caller may access.
+- Team Chat loads up to 30 shared-channel messages from workspace-level channels and boards the caller may access. Direct messages are explicitly excluded.
+- Document requires `file_id` and loads only that file. The file must belong to the active workspace, be visible under the board/member policy, have `scan_status=clean`, use an allowed UTF-8 text media type, and be no larger than 128 KB. The stored byte length and SHA-256 checksum are verified, and the object read itself is byte-bounded. PDFs and images are not parsed or sent in this mode.
+
+Changing the assistant mode, selected project, or selected document clears the in-memory conversation and requires a new acknowledgement. Each task-plan card has a separate Create task action; the model cannot call write tools, and the existing authenticated task API revalidates the target list and assignee at the time of creation.
+
+The response contains `answer`, `mode`, `model`, `generated_at`, cited `sources`, prompt/completion token counts when supplied by the provider, and `actions_applied: false`. Only source references actually cited in the answer are returned in the `sources` list. The endpoint remains read-only; approved task-plan cards call the normal task API only after a separate user click.
 
 ### Project Pulse
 
@@ -151,6 +160,8 @@ Hosted endpoints must use HTTPS. HTTP loopback is accepted only when both `CAMPU
 
 - Fixed-window rate limits: 10 requests/user/minute and 120 requests/workspace/hour, shared through the existing PostgreSQL rate-limit table.
 - Provider call timeout: 45 seconds; output limit: 1,200 tokens and 12,000 characters.
+- Provider response body is capped at 256 KB before JSON parsing. Provider DNS resolution and HTTP exchange share a 45-second request deadline; private, loopback (except explicitly opted-in unauthenticated development), link-local and metadata destinations are blocked, DNS results are pinned, ambient proxies are disabled, and redirects are not followed.
+- File-summary storage reads are capped at 128 KB while streaming from local/S3 storage, then checked against recorded byte length and SHA-256. Only clean UTF-8 text files are eligible; no PDF parsing or OCR is implemented.
 - Prompt size, history length/roles, context record counts and description lengths are bounded.
 - Common private-key, API-key, bearer-token, JWT-like, database-URL and email patterns are redacted recursively from provider-bound text and sanitized responses. This is defense in depth, not a guarantee that every sensitive value can be detected.
 - Project records and conversation history are identified as untrusted content; no tools, arbitrary SQL or autonomous writes are exposed.
@@ -194,21 +205,13 @@ Track B is not ready for production until all applicable checks pass:
 
 ## 8. Current execution status
 
-| Work item | Status |
-|---|---|
-| Track B repository workspace | Started on `track-b/ai-assistant-foundation` |
-| Initial scope and guardrails | Documented in this file |
-| Rust read-only assistant API | Implemented on branch; CI verification pending |
-| Provider-neutral OpenAI-compatible adapter | Implemented; server feature flag defaults off |
-| Workspace/project-scoped context | Implemented for boards and tasks; adversarial integration tests pending |
-| Assistant UI and conversation state | Implemented; current-session memory only |
-| Ask, summary, task-plan, risk-review modes | Implemented |
-| Source references and token usage display | Implemented |
-| Request limits and provider URL checks | Implemented; spend-budget policy still needed |
-| Meeting-note/file summarization | Not started |
-| Persistent conversation/audit schema | Not started; requires retention and migration-order decision |
-| Human-reviewed action application | Proposal preview only; apply workflow not implemented |
-| Provider selection, terms, and credentials | Not decided/configured |
-| Production enablement | Disabled / not approved |
+**Implemented on the Track B branch:** seven assistant modes; authorized, bounded board/task, meeting-note, shared-channel and clean text-file context; provider URL/DNS protections; pattern-based sensitive-data redaction; explicit data-sharing consent; validated task-plan previews with per-task user-approved creation; Project Pulse analytics; rate limits; and responsive accessible dialogs.
 
-The `CAMPUSFORGE_AI_*` variables are server-only. Keep `CAMPUSFORGE_AI_ENABLED=false` until provider data-handling terms, retention, spend ceilings, and production privacy/security review are approved. Track B is separate from Track A; do not merge either track to `main` or trigger deployment without explicit release authorization.
+**Still gated before a production release:**
+- External AI provider selection, data-processing/retention terms, training-use confirmation, DPA/legal review, encrypted provider key, cost ceilings and live-provider verification. The feature stays disabled by default until an operator provisions these items.
+- Durable conversation history and a dedicated AI audit schema are intentionally not added yet. Conversations remain in-memory only and are cleared on scope changes/close. A persistence migration must be added after the Track A migration sequence is reconciled and a retention/deletion schedule, user export/delete behavior and access policy are approved. Do not store prompt/answer bodies by default.
+- Streaming responses remain deferred. The current bounded response path preserves full-response validation and redaction; streaming needs an incremental redaction/validation design before it is safe.
+- File summaries support clean UTF-8 text only. PDF parsing, OCR, image understanding and archive extraction are not implemented.
+- Automated tests run in CI; separate two-account browser acceptance, accessibility testing, cost/load testing, provider egress testing and production backup/restore sign-off remain release gates.
+- No provider credentials are present in the repository; no production merge or deployment is performed by this branch.
+
