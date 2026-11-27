@@ -179,7 +179,15 @@ async fn resolve_provider_addresses(host: &str, port: u16) -> Result<Vec<SocketA
         return Err(());
     }
 
-    let is_loopback_name = host.eq_ignore_ascii_case("localhost");
+    let normalized_host = host.trim_end_matches('.').to_ascii_lowercase();
+    if normalized_host == "metadata.google.internal"
+        || normalized_host.ends_with(".internal")
+        || normalized_host.ends_with(".local")
+        || normalized_host.ends_with(".localhost")
+    {
+        return Err(());
+    }
+    let is_loopback_name = normalized_host == "localhost";
     let is_loopback_literal = host.parse::<IpAddr>().map(|ip| ip.is_loopback()).unwrap_or(false);
     let allow_loopback = is_loopback_name || is_loopback_literal;
     let is_production = env::var("CAMPUSFORGE_ENV")
@@ -283,7 +291,7 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
 fn privacy_patterns() -> &'static [(Regex, &'static str)] {
     static PATTERNS: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
     PATTERNS.get_or_init(|| vec![
-        (Regex::new(r"(?s)-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----.*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----").expect("valid private-key pattern"), "[REDACTED_PRIVATE_KEY]"),
+        (Regex::new(r"(?s)-----BEGIN (?:RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----.*?-----END (?:RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----").expect("valid private-key pattern"), "[REDACTED_PRIVATE_KEY]"),
         (Regex::new(r#"(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?)://[^\s"'<>]+"#).expect("valid database URL pattern"), "[REDACTED_DATABASE_URL]"),
         (Regex::new(r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]{16,}={0,2}").expect("valid bearer-token pattern"), "[REDACTED_BEARER_TOKEN]"),
         (Regex::new(r"(?i)\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b").expect("valid API-key pattern"), "[REDACTED_API_KEY]"),
@@ -581,6 +589,7 @@ async fn assistant(
     let client = Client::builder()
         .timeout(StdDuration::from_secs(45))
         .redirect(Policy::none())
+        .no_proxy()
         .resolve_to_addrs(provider_host, &resolved_addresses)
         .build()
         .map_err(|error| {
@@ -811,7 +820,7 @@ fn health_label(score: u8) -> &'static str {
     }
 }
 
-fn pulse_counts(tasks: &[&PulseTask], now: DateTime<Utc>) -> PulseCounts {
+fn pulse_counts(tasks: &[&PulseTask], now: &DateTime<Utc>) -> PulseCounts {
     let mut completed = 0usize;
     let mut open = 0usize;
     let mut overdue = 0usize;
@@ -831,7 +840,7 @@ fn pulse_counts(tasks: &[&PulseTask], now: DateTime<Utc>) -> PulseCounts {
         if is_blocked {
             blocked += 1;
         }
-        let days_to_due = task.due_at.map(|due| (due.date_naive() - now.date_naive()).num_days());
+        let days_to_due = task.due_at.as_ref().map(|due| (due.date_naive() - now.date_naive()).num_days());
         if days_to_due.is_some_and(|days| days < 0) {
             overdue += 1;
         } else if days_to_due.is_some_and(|days| (0..=3).contains(&days)) {
@@ -841,7 +850,7 @@ fn pulse_counts(tasks: &[&PulseTask], now: DateTime<Utc>) -> PulseCounts {
         if urgent && task.assignees.is_empty() {
             unassigned_urgent += 1;
         }
-        if now.signed_duration_since(task.updated_at).num_days() >= 7 {
+        if now.clone().signed_duration_since(task.updated_at.clone()).num_days() >= 7 {
             stale += 1;
         }
         if task.estimated_minutes.is_none() {
@@ -883,14 +892,14 @@ fn focus_recommendation(task: &PulseTask, overdue: bool, blocked: bool, unassign
     }
 }
 
-fn focus_score(task: &PulseTask, now: DateTime<Utc>) -> (u8, String, String) {
+fn focus_score(task: &PulseTask, now: &DateTime<Utc>) -> (u8, String, String) {
     let blocked = is_blocked_column(&task.list_name);
     let days_to_due = task.due_at.map(|due| (due.date_naive() - now.date_naive()).num_days());
     let overdue = days_to_due.is_some_and(|days| days < 0);
     let due_soon = days_to_due.is_some_and(|days| (0..=3).contains(&days));
     let urgent = matches!(task.priority.to_ascii_lowercase().as_str(), "urgent" | "high");
     let unassigned_urgent = urgent && task.assignees.is_empty();
-    let stale = now.signed_duration_since(task.updated_at).num_days() >= 7;
+    let stale = now.clone().signed_duration_since(task.updated_at.clone()).num_days() >= 7;
 
     let mut score = 0u16;
     let mut reasons = Vec::new();
@@ -979,12 +988,12 @@ async fn project_pulse(
     let tasks: Vec<PulseTask> = tasks.into_iter().take(MAX_TASKS).collect();
     let now = Utc::now();
     let task_refs: Vec<&PulseTask> = tasks.iter().collect();
-    let overall = pulse_counts(&task_refs, now);
+    let overall = pulse_counts(&task_refs, &now);
 
     let mut board_health = Vec::with_capacity(boards.len());
     for board in &boards {
         let scoped: Vec<&PulseTask> = tasks.iter().filter(|task| task.board_id == board.id).collect();
-        let counts = pulse_counts(&scoped, now);
+        let counts = pulse_counts(&scoped, &now);
         board_health.push(PulseBoardHealth {
             board_id: board.id,
             name: truncate_chars(&board.name, 100),
@@ -1001,7 +1010,7 @@ async fn project_pulse(
     let mut focus_queue = Vec::new();
     for task in &tasks {
         if is_done_column(&task.list_name) { continue; }
-        let (score, reason, recommendation) = focus_score(task, now);
+        let (score, reason, recommendation) = focus_score(task, &now);
         if score == 0 { continue; }
         focus_queue.push(PulseFocusItem {
             task_id: task.id,
@@ -1010,7 +1019,7 @@ async fn project_pulse(
             title: truncate_chars(&task.title, 160),
             list_name: truncate_chars(&task.list_name, 80),
             priority: task.priority.clone(),
-            due_at: task.due_at,
+            due_at: task.due_at.clone(),
             assignees: task.assignees.clone(),
             score,
             reason,
