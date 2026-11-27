@@ -182,7 +182,7 @@ async fn send_one(
                 COALESCE(np.email_enabled,FALSE) AS email_enabled
            FROM notifications n
            JOIN users u ON u.id=n.recipient_user_id
-           JOIN workspace_members wm
+           LEFT JOIN workspace_members wm
              ON wm.workspace_id=n.workspace_id AND wm.user_id=n.recipient_user_id
            LEFT JOIN notification_preferences np
              ON np.user_id=n.recipient_user_id AND np.notification_type=n.notification_type
@@ -190,17 +190,24 @@ async fn send_one(
              ON outbox.notification_id=n.id AND outbox.recipient_user_id=n.recipient_user_id
           WHERE n.id=$1 AND n.recipient_user_id=$2
             AND outbox.id=$3 AND outbox.status='processing' AND outbox.attempts=$4
-            AND n.board_id IS NOT NULL
-            AND EXISTS(
-                SELECT 1 FROM boards b
-                 WHERE b.id=n.board_id AND b.workspace_id=n.workspace_id
-                   AND (
-                        wm.role IN ('owner','admin')
-                        OR EXISTS(
-                            SELECT 1 FROM board_members bm
-                             WHERE bm.board_id=b.id AND bm.user_id=n.recipient_user_id
-                        )
-                   )
+            AND (
+                (n.board_id IS NOT NULL AND wm.user_id IS NOT NULL AND EXISTS(
+                    SELECT 1 FROM boards b
+                     WHERE b.id=n.board_id AND b.workspace_id=n.workspace_id
+                       AND (
+                            wm.role IN ('owner','admin')
+                            OR EXISTS(
+                                SELECT 1 FROM board_members bm
+                                 WHERE bm.board_id=b.id AND bm.user_id=n.recipient_user_id
+                            )
+                       )
+                ))
+                OR (n.notification_type='workspace_invitation' AND EXISTS(
+                    SELECT 1 FROM invitations i
+                     WHERE i.id=n.resource_id AND i.workspace_id=n.workspace_id
+                       AND lower(i.email)=lower(u.email)
+                       AND i.revoked_at IS NULL AND i.expires_at>NOW() AND i.accepted_at IS NULL
+                ))
             )
           FOR UPDATE OF outbox",
     )
