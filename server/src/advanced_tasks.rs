@@ -436,7 +436,7 @@ async fn task_label_add(
     State(state):State<AppState>,AuthUser(user_id):AuthUser,
     Path((task_id,label_id)):Path<(Uuid,Uuid)>,
 )->ApiResult<StatusCode>{
-    let (workspace_id,board_id,_)=task_scope(&state,user_id,task_id).await?;
+    let (workspace_id,board_id,_)=task_write_scope(&state,user_id,task_id).await?;
     let label_valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM labels WHERE id=$1 AND workspace_id=$2)")
         .bind(label_id).bind(workspace_id).fetch_one(&state.db).await.map_err(|error|internal(error,"Could not validate label"))?;
     if !label_valid{return Err(fail(StatusCode::BAD_REQUEST,"Label is outside this workspace"));}
@@ -450,7 +450,7 @@ async fn task_label_remove(
     State(state):State<AppState>,AuthUser(user_id):AuthUser,
     Path((task_id,label_id)):Path<(Uuid,Uuid)>,
 )->ApiResult<StatusCode>{
-    let (workspace_id,board_id,_)=task_scope(&state,user_id,task_id).await?;
+    let (workspace_id,board_id,_)=task_write_scope(&state,user_id,task_id).await?;
     sqlx::query("DELETE FROM task_labels WHERE task_id=$1 AND label_id=$2")
         .bind(task_id).bind(label_id).execute(&state.db).await.map_err(|error|internal(error,"Could not remove label"))?;
     state.publish_workspace_event(workspace_id,Some(board_id),"task_label_removed","removed a task label");
@@ -540,7 +540,7 @@ async fn dependency_remove(
     State(state):State<AppState>,AuthUser(user_id):AuthUser,
     Path((task_id,depends_on_task_id)):Path<(Uuid,Uuid)>,
 )->ApiResult<StatusCode>{
-    let (workspace_id,board_id,_)=task_scope(&state,user_id,task_id).await?;
+    let (workspace_id,board_id,_)=task_write_scope(&state,user_id,task_id).await?;
     sqlx::query("DELETE FROM task_dependencies WHERE task_id=$1 AND depends_on_task_id=$2")
         .bind(task_id).bind(depends_on_task_id).execute(&state.db).await
         .map_err(|error|internal(error,"Could not remove task dependency"))?;
@@ -555,7 +555,7 @@ async fn estimate_update(
     State(state):State<AppState>,AuthUser(user_id):AuthUser,
     Path(task_id):Path<Uuid>,Json(input):Json<EstimateInput>,
 )->ApiResult<StatusCode>{
-    let (workspace_id,board_id,_)=task_scope(&state,user_id,task_id).await?;
+    let (workspace_id,board_id,_)=task_write_scope(&state,user_id,task_id).await?;
     if input.estimated_minutes.is_some_and(|value|value<1||value>100000){
         return Err(fail(StatusCode::BAD_REQUEST,"Estimated time must be between 1 and 100000 minutes"));
     }
@@ -577,7 +577,7 @@ async fn recurrence_update(
     State(state):State<AppState>,AuthUser(user_id):AuthUser,
     Path(task_id):Path<Uuid>,Json(input):Json<RecurrenceInput>,
 )->ApiResult<StatusCode>{
-    let (workspace_id,board_id,_)=task_scope(&state,user_id,task_id).await?;
+    let (workspace_id,board_id,_)=task_write_scope(&state,user_id,task_id).await?;
     match input.interval_days {
         None=>{
             sqlx::query("DELETE FROM task_recurrence_rules WHERE template_task_id=$1").bind(task_id).execute(&state.db).await
