@@ -816,17 +816,17 @@ mod tests {
         };
         assert_eq!(verified_discord_email(&verified).unwrap(), "student@example.org");
 
-        let unverified = DiscordProfile {
-            verified: Some(false),
-            ..verified
-        };
-        assert!(verified_discord_email(&unverified).is_err());
-
         let missing_subject = DiscordProfile {
             id: "  ".to_owned(),
             ..verified
         };
         assert!(verified_discord_email(&missing_subject).is_err());
+
+        let unverified = DiscordProfile {
+            verified: Some(false),
+            ..verified
+        };
+        assert!(verified_discord_email(&unverified).is_err());
 
         let unknown_verification = DiscordProfile {
             verified: None,
