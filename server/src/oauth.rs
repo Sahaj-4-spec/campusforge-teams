@@ -818,7 +818,11 @@ mod tests {
 
         let missing_subject = DiscordProfile {
             id: "  ".to_owned(),
-            ..verified
+            username: "student".to_owned(),
+            global_name: None,
+            email: Some("student@example.org".to_owned()),
+            verified: Some(true),
+            avatar: None,
         };
         assert!(verified_discord_email(&missing_subject).is_err());
 
