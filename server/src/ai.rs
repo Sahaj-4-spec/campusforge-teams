@@ -372,7 +372,7 @@ fn validate_task_breakdown(
             .map(|references| {
                 references.iter()
                     .filter_map(Value::as_str)
-                    .filter(|reference| sources.iter().any(|source| source.reference == *reference))
+                    .filter(|reference| sources.iter().any(|source| source.reference.as_str() == *reference))
                     .map(str::to_owned)
                     .collect::<Vec<_>>()
             })
