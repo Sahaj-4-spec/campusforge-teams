@@ -4,9 +4,9 @@
 
 CampusForge Teams is a project and collaboration workspace for student teams and small delivery groups. The product combines project boards, task planning, coordination, shared resources, calendar workflows, team communications, and measurable project progress.
 
-**AI project assistance is explicitly excluded from this delivery.** No AI assistant, AI provider integration, or AI-generated project action is part of the current scope.
+**AI project assistance is a separate optional Track B scope.** The integrated candidate adds a read-only assistant, Project Pulse, and durable human-approved task proposals. AI stays disabled by default pending provider/privacy/cost approvals.
 
-## Delivery status — 27 November 2026
+## Delivery status — 28 November 2026
 
 The non-AI feature implementation described in Phases 1–8 is merged into `main`. The release history is:
 
@@ -25,7 +25,7 @@ PR #19 was closed without merging; its verified-provider sign-up implementation 
 
 The latest recorded CI and security workflows for main commit `2b0c5bf` passed on 24 November 2026. Those checks cover the frontend production build and unit regressions, Rust checks/tests, PostgreSQL migration smoke tests, dependency audit, and CodeQL. Browser-based two-account acceptance, accessibility review, backup/restore exercises, and production integration tests are separate release gates.
 
-The Track A finalization branch `track-a/final-session-hardening-docs` adds migration `0014_revocable_auth_sessions.sql` and wires server-side session IDs into password login, OAuth login, protected API authentication, logout, and WebSocket heartbeat validation. The branch CI and Security workflows passed on 27 November 2026; independent review and runtime PostgreSQL session-revocation acceptance remain before merge. Legacy JWTs issued before this change do not contain a session ID and will require users to sign in again after the hardening branch is released.
+The integrated candidate `release/campusforge-integrated-candidate` combines the Track A session-revocation code with Track B assistant and proposal approval work. Migration 0015 remains the AI proposal/audit migration already present in Neon; revocable sessions are migration 0015. The separate feature branches have green component checks, but the integrated candidate still needs fresh CI and runtime PostgreSQL session-revocation acceptance. Pre-0015 JWTs lack a session ID and require fresh sign-in after rollout.
 
 **Hosting status:** the Render preview and API are test services. The repository's `render.yaml` currently tracks `main` with commit-triggered auto-deploy. Therefore, do not merge finalization changes to `main` until the user explicitly authorizes the corresponding deployment and the external production gates below are met. The current source branch being complete does not prove that the deployed database or services have been upgraded.
 
@@ -179,6 +179,14 @@ The following items are intentionally not part of the current delivery:
 
 The non-AI implementation is merged into `main`; production deployment is still withheld. The current Render preview uses a temporary free PostgreSQL database (documented expiry: 22 December 2026) and must not be treated as durable production storage. Check the actual deployed migration version before any release; source migrations being present in GitHub does not mean they have been applied to the running database.
 
-The Track A finalization branch adds migration 0014 for revocable sessions and must pass CI/review before release. Because `render.yaml` uses commit-triggered auto-deploy from `main`, do not merge it to `main` until the user has explicitly authorized the release and the production configuration is prepared. No deployment is authorized by the roadmap or this branch.
+The integrated candidate adds migration 0015 for revocable sessions after migration 0015 for AI proposal persistence; the combined branch must pass CI/review and runtime database checks before release. Because `render.yaml` uses commit-triggered auto-deploy from `main`, do not merge it to `main` until the user has explicitly authorized the release and the production configuration is prepared. No deployment is authorized by the roadmap or this branch.
 
-The release owner must sign off every item in [Track A Final Acceptance](TRACK_A_FINAL_ACCEPTANCE.md): durable database and restore drill, private object storage, mandatory malware scanning, OAuth, email delivery, edge protection, privacy/retention, two-account end-to-end tests, accessibility, and operational monitoring. The AI project assistant remains excluded from Track A.
+The release owner must sign off every item in [Track A Final Acceptance](TRACK_A_FINAL_ACCEPTANCE.md): durable database and restore drill, private object storage, mandatory malware scanning, OAuth, email delivery, edge protection, privacy/retention, two-account end-to-end tests, accessibility, and operational monitoring. The AI project assistant remains optional, feature-flagged, and disabled until provider/privacy/cost controls are approved.
+
+
+### Integrated candidate state — 28 November 2026
+
+- Code is consolidated on `release/campusforge-integrated-candidate`; it is not merged into `main`.
+- The Neon `campusforge_app` SQLx journal records successful migrations 0001–0014, including the AI proposal tables. Migration 0015 adds revocable sessions and is awaiting integrated validation before application.
+- Render still identifies the Rust API and frontend as preview/test services. The most recent API deploy built successfully but was still reported `update_in_progress` at the last observation; do not assume the new database connection is serving traffic.
+- No production release is authorized. Merge/deploy remains gated on the release owner’s explicit approval and the checklist in `TRACK_A_FINAL_ACCEPTANCE.md`.
