@@ -351,7 +351,7 @@ The product roadmap and the decisions for the target data model, API boundaries,
 - [Architecture and project decisions](docs/ARCHITECTURE.md)
 - [Storage and email operations](docs/OPERATIONS.md)
 
-The integrated candidate adds Track B's optional AI assistant and human-approved proposal workflow without enabling provider calls by default. Track A's session hardening is migration 0015; Track B's durable proposal/audit schema is migration 0014 and already exists on Neon `campusforge_app`. The board-level authorization policy now filters project snapshots and analytics and denies write operations to board viewers. Do not merge or deploy until the combined CI, migration/session checks, privacy and operational acceptance gates pass and the release owner explicitly authorizes release.
+The integrated candidate adds Track B's optional AI assistant and human-approved proposal workflow without enabling provider calls by default. Track A's session hardening is migration 0015; Track B's durable proposal/audit schema is migration 0014 and already exists on Neon `campusforge_app`. The board-level authorization policy now filters project snapshots and analytics, denies writes to board viewers, restricts task/board notifications and email to authorized recipients, and validates task assignees against board membership. Do not merge or deploy until the combined CI, migration/session checks, privacy and operational acceptance gates pass and the release owner explicitly authorizes release.
 
 
 ## Track B — AI project assistant
@@ -362,3 +362,6 @@ The API uses an OpenAI-compatible `/chat/completions` endpoint configured only o
 
 
 Production configuration and release steps: see [docs/PRODUCTION_SETUP.md](docs/PRODUCTION_SETUP.md) and [the final acceptance checklist](docs/TRACK_A_FINAL_ACCEPTANCE.md).
+
+
+**Notification privacy:** task and project activity notifications are board-scoped. Only board members and workspace owners/admins can view the inbox item or receive its email; workspace invitation notifications use a separate invitation check. Migration 0016 adds the persisted board scope required for this enforcement.
