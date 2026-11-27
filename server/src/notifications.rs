@@ -201,6 +201,19 @@ async fn send_one(
                                  WHERE bm.board_id=b.id AND bm.user_id=n.recipient_user_id
                             )
                        )
+                )
+                AND (
+                    n.notification_type NOT IN ('calendar_invitation','calendar_reminder')
+                    OR (
+                        n.resource_type='calendar_event'
+                        AND EXISTS (
+                            SELECT 1 FROM calendar_events e
+                            JOIN calendar_event_attendees a ON a.event_id=e.id
+                             WHERE e.id=n.resource_id AND e.workspace_id=n.workspace_id
+                               AND e.board_id=n.board_id AND a.user_id=n.recipient_user_id
+                               AND a.response <> 'declined'
+                        )
+                    )
                 ))
                 OR (n.notification_type='workspace_invitation' AND EXISTS(
                     SELECT 1 FROM invitations i
@@ -244,7 +257,7 @@ async fn send_one(
                     )
                 )
             )
-          FOR UPDATE OF outbox",
+          FOR UPDATE OF outbox, n",
     )
     .bind(job.notification_id)
     .bind(job.recipient_user_id)
