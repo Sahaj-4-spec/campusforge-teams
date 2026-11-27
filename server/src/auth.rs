@@ -194,6 +194,28 @@ impl FromRequestParts<AppState> for AuthUser {
     }
 }
 
+/// Return the caller's role on a board in the selected workspace.
+/// Workspace membership alone is not sufficient for board-scoped reads or writes.
+pub(crate) async fn board_role(
+    pool: &PgPool,
+    user_id: uuid::Uuid,
+    workspace_id: uuid::Uuid,
+    board_id: uuid::Uuid,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT bm.role
+         FROM board_members bm
+         JOIN boards b ON b.id = bm.board_id
+         JOIN workspace_members wm ON wm.workspace_id = b.workspace_id AND wm.user_id = bm.user_id
+         WHERE bm.user_id = $1 AND b.workspace_id = $2 AND b.id = $3",
+    )
+    .bind(user_id)
+    .bind(workspace_id)
+    .bind(board_id)
+    .fetch_optional(pool)
+    .await
+}
+
 /// Authenticated user scoped to one explicitly selected workspace.
 /// Requests without a workspace header are accepted only when the account has
 /// exactly one workspace membership.
