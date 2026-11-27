@@ -454,6 +454,9 @@ async fn load_authorized_context(
           WHERE b.workspace_id = $1
             AND ($2::uuid IS NULL OR b.id = $2)
             AND $4::boolean
+            AND EXISTS (SELECT 1 FROM workspace_members membership_check
+                         WHERE membership_check.workspace_id = b.workspace_id
+                           AND membership_check.user_id = $3)
             AND (
               EXISTS (SELECT 1 FROM board_members bm WHERE bm.board_id = b.id AND bm.user_id = $3)
               OR EXISTS (SELECT 1 FROM workspace_members wm
@@ -487,6 +490,9 @@ async fn load_authorized_context(
           WHERE b.workspace_id = $1
             AND ($2::uuid IS NULL OR b.id = $2)
             AND $4::boolean
+            AND EXISTS (SELECT 1 FROM workspace_members membership_check
+                         WHERE membership_check.workspace_id = b.workspace_id
+                           AND membership_check.user_id = $3)
             AND (
               EXISTS (SELECT 1 FROM board_members bm WHERE bm.board_id = b.id AND bm.user_id = $3)
               OR EXISTS (SELECT 1 FROM workspace_members wm
@@ -514,6 +520,8 @@ async fn load_authorized_context(
                FROM meeting_notes mn
                LEFT JOIN boards b ON b.id = mn.board_id AND b.workspace_id = mn.workspace_id
               WHERE mn.workspace_id = $1
+                AND EXISTS (SELECT 1 FROM workspace_members wm
+                             WHERE wm.workspace_id = mn.workspace_id AND wm.user_id = $3)
                 AND ($2::uuid IS NULL OR mn.board_id IS NULL OR mn.board_id = $2)
                 AND (mn.board_id IS NULL OR b.id IS NOT NULL)
                 AND (
@@ -545,6 +553,8 @@ async fn load_authorized_context(
                FROM chat_messages cm
                LEFT JOIN boards b ON b.id = cm.board_id AND b.workspace_id = cm.workspace_id
               WHERE cm.workspace_id = $1
+                AND EXISTS (SELECT 1 FROM workspace_members wm
+                             WHERE wm.workspace_id = cm.workspace_id AND wm.user_id = $3)
                 AND ($2::uuid IS NULL OR cm.board_id IS NULL OR cm.board_id = $2)
                 AND (cm.board_id IS NULL OR b.id IS NOT NULL)
                 AND (
@@ -585,6 +595,9 @@ async fn load_authorized_context(
               WHERE wf.id = $1
                 AND wf.workspace_id = $2
                 AND wf.is_deleting = FALSE
+                AND EXISTS (SELECT 1 FROM workspace_members workspace_member
+                             WHERE workspace_member.workspace_id = wf.workspace_id
+                               AND workspace_member.user_id = $3)
                 AND (
                   COALESCE(wf.board_id, fl.board_id) IS NULL
                   OR EXISTS (
@@ -635,7 +648,7 @@ async fn load_authorized_context(
         None
     };
 
-    let mut sources = Vec::with_capacity(boards.len() + tasks.len() + meeting_notes.len() + chat_messages.len() + usize::from(file_record.is_some()));
+    let mut sources = Vec::with_capacity(boards.len() + tasks.len() + meeting_notes.len() + chat_messages.len() + if file_record.is_some() { 1 } else { 0 });
     let mut board_records = Vec::with_capacity(boards.len());
     for (index, board) in boards.iter().enumerate() {
         let reference = format!("B{}", index + 1);
@@ -1301,6 +1314,9 @@ async fn project_pulse(
            FROM boards b
           WHERE b.workspace_id = $1
             AND ($2::uuid IS NULL OR b.id = $2)
+            AND EXISTS (SELECT 1 FROM workspace_members membership_check
+                         WHERE membership_check.workspace_id = b.workspace_id
+                           AND membership_check.user_id = $3)
             AND (
               EXISTS (SELECT 1 FROM board_members bm WHERE bm.board_id = b.id AND bm.user_id = $3)
               OR EXISTS (SELECT 1 FROM workspace_members wm
@@ -1344,6 +1360,9 @@ async fn project_pulse(
                  JOIN boards b ON b.id = l.board_id
                 WHERE b.workspace_id = $1
                   AND b.id = ANY($2::uuid[])
+                  AND EXISTS (SELECT 1 FROM workspace_members membership_check
+                               WHERE membership_check.workspace_id = b.workspace_id
+                                 AND membership_check.user_id = $3)
                   AND (
                     EXISTS (SELECT 1 FROM board_members bm WHERE bm.board_id = b.id AND bm.user_id = $3)
                     OR EXISTS (SELECT 1 FROM workspace_members wm
