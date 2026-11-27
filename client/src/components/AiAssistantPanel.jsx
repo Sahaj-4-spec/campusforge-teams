@@ -186,6 +186,8 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
     let cancelled = false;
     setFilesLoading(true);
     setFilesError("");
+    setAvailableFiles([]);
+    setSelectedFileId("");
     aiApi.files(boardId || null)
       .then((rows) => {
         if (!cancelled) {
@@ -329,7 +331,7 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
             <div>
               <p className="eyebrow">CAMPUSFORGE INTELLIGENCE</p>
               <h2 id="ai-panel-title">Project assistant</h2>
-              <span className="ai-panel-subtitle"><span className={enabled ? "ai-status-dot active" : "ai-status-dot"} /> {enabled ? "Connected · Read-only mode" : "Not configured on this environment"}</span>
+              <span className="ai-panel-subtitle"><span className={enabled ? "ai-status-dot active" : "ai-status-dot"} /> {enabled ? "Configured · Read-only mode" : "Not configured on this environment"}</span>
             </div>
           </div>
           <button className="ai-close-button" type="button" onClick={onClose} aria-label="Close AI assistant" disabled={loading}><X size={19} /></button>
