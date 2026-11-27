@@ -313,7 +313,7 @@ async fn checklist_list(
     AuthUser(user_id): AuthUser,
     Path(task_id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<ChecklistItem>>> {
-    task_write_scope(&state, user_id, task_id).await?;
+    task_scope(&state, user_id, task_id).await?;
     let rows = sqlx::query_as::<_, ChecklistItem>(
         "SELECT id,task_id,title,position,is_done,completed_by,completed_at,created_at
          FROM task_checklist_items WHERE task_id=$1 ORDER BY position",
