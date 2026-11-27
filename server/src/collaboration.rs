@@ -597,13 +597,21 @@ async fn notifications_list(
          LEFT JOIN workspace_members wm
            ON wm.workspace_id=n.workspace_id AND wm.user_id=n.recipient_user_id
          WHERE n.recipient_user_id=$1
-           AND (wm.user_id IS NOT NULL OR (
-                n.notification_type='workspace_invitation' AND EXISTS(
+           AND (
+                (n.board_id IS NOT NULL AND wm.user_id IS NOT NULL AND EXISTS(
+                    SELECT 1 FROM boards b
+                     WHERE b.id=n.board_id AND b.workspace_id=n.workspace_id
+                       AND (
+                            wm.role IN ('owner','admin')
+                            OR EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id=b.id AND bm.user_id=$1)
+                       )
+                ))
+                OR (n.notification_type='workspace_invitation' AND EXISTS(
                     SELECT 1 FROM invitations i JOIN users u ON lower(u.email)=lower(i.email)
                      WHERE i.id=n.resource_id AND i.workspace_id=n.workspace_id
                        AND u.id=$1 AND i.revoked_at IS NULL AND i.expires_at>NOW()
-                )
-           ))
+                ))
+           )
            AND ($2::timestamptz IS NULL OR n.created_at<$2)
            AND COALESCE((
                 SELECT np.in_app_enabled
@@ -623,8 +631,15 @@ async fn notifications_list(
         "SELECT COUNT(*)::bigint FROM notifications n
          WHERE n.recipient_user_id=$1 AND n.read_at IS NULL
            AND (
-                EXISTS(SELECT 1 FROM workspace_members wm
-                       WHERE wm.workspace_id=n.workspace_id AND wm.user_id=n.recipient_user_id)
+                (n.board_id IS NOT NULL AND EXISTS(
+                    SELECT 1 FROM workspace_members wm JOIN boards b
+                      ON b.id=n.board_id AND b.workspace_id=wm.workspace_id
+                     WHERE wm.workspace_id=n.workspace_id AND wm.user_id=$1
+                       AND (
+                            wm.role IN ('owner','admin')
+                            OR EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id=b.id AND bm.user_id=$1)
+                       )
+                ))
                 OR (n.notification_type='workspace_invitation' AND EXISTS(
                     SELECT 1 FROM invitations i JOIN users u ON lower(u.email)=lower(i.email)
                      WHERE i.id=n.resource_id AND i.workspace_id=n.workspace_id
@@ -662,7 +677,15 @@ async fn notification_read(
             SET read_at=COALESCE(n.read_at,NOW())
           WHERE n.id=$1 AND n.recipient_user_id=$2
             AND (
-                EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=n.workspace_id AND wm.user_id=$2)
+                (n.board_id IS NOT NULL AND EXISTS(
+                    SELECT 1 FROM workspace_members wm JOIN boards b
+                      ON b.id=n.board_id AND b.workspace_id=wm.workspace_id
+                     WHERE wm.workspace_id=n.workspace_id AND wm.user_id=$2
+                       AND (
+                            wm.role IN ('owner','admin')
+                            OR EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id=b.id AND bm.user_id=$2)
+                       )
+                ))
                 OR (n.notification_type='workspace_invitation' AND EXISTS(
                     SELECT 1 FROM invitations i JOIN users u ON lower(u.email)=lower(i.email)
                      WHERE i.id=n.resource_id AND i.workspace_id=n.workspace_id AND u.id=$2
@@ -694,7 +717,15 @@ async fn notifications_read_all(
         "UPDATE notifications n SET read_at=NOW()
           WHERE n.recipient_user_id=$1 AND n.read_at IS NULL
             AND (
-                EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=n.workspace_id AND wm.user_id=$1)
+                (n.board_id IS NOT NULL AND EXISTS(
+                    SELECT 1 FROM workspace_members wm JOIN boards b
+                      ON b.id=n.board_id AND b.workspace_id=wm.workspace_id
+                     WHERE wm.workspace_id=n.workspace_id AND wm.user_id=$1
+                       AND (
+                            wm.role IN ('owner','admin')
+                            OR EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id=b.id AND bm.user_id=$1)
+                       )
+                ))
                 OR (n.notification_type='workspace_invitation' AND EXISTS(
                     SELECT 1 FROM invitations i JOIN users u ON lower(u.email)=lower(i.email)
                      WHERE i.id=n.resource_id AND i.workspace_id=n.workspace_id AND u.id=$1
