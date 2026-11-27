@@ -389,6 +389,8 @@ async fn list_proposals(
                 p.created_at, p.reviewed_by, p.reviewed_at, p.applied_task_ids
            FROM ai_action_proposals p
           WHERE p.workspace_id = $1
+            AND EXISTS (SELECT 1 FROM workspace_members active_member
+                         WHERE active_member.workspace_id = p.workspace_id AND active_member.user_id = $2)
             AND (
                 EXISTS (SELECT 1 FROM workspace_members wm
                          WHERE wm.workspace_id = p.workspace_id AND wm.user_id = $2
