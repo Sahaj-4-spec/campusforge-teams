@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{header::CACHE_CONTROL, HeaderMap, HeaderValue, StatusCode},
     routing::{get, post},
     Json, Router,
 };
@@ -22,6 +22,12 @@ type ApiResult<T> = Result<T, (StatusCode, Json<ApiError>)>;
 
 fn fail(status: StatusCode, message: &'static str) -> (StatusCode, Json<ApiError>) {
     (status, Json(ApiError { error: message }))
+}
+
+fn no_store_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers
 }
 
 fn internal_error<E: std::fmt::Display>(
@@ -167,11 +173,11 @@ fn validate_tasks(tasks: &mut [ProposedTask]) -> Result<(), (StatusCode, Json<Ap
 
     for task in tasks.iter_mut() {
         task.title = task.title.trim().to_owned();
-        if task.title.is_empty() || task.title.chars().count() > 160 {
+        if task.title.is_empty() || task.title.chars().count() > 160 || task.title.contains('\0') {
             return Err(fail(StatusCode::BAD_REQUEST, "Proposed task titles must be 1 to 160 characters"));
         }
         task.description = task.description.as_ref().map(|value| value.trim().to_owned());
-        if task.description.as_ref().is_some_and(|value| value.chars().count() > 4000) {
+        if task.description.as_ref().is_some_and(|value| value.chars().count() > 4000 || value.contains('\0')) {
             return Err(fail(StatusCode::BAD_REQUEST, "A proposed task description is too long"));
         }
         task.priority = task.priority.trim().to_ascii_lowercase();
@@ -187,7 +193,7 @@ fn validate_tasks(tasks: &mut [ProposedTask]) -> Result<(), (StatusCode, Json<Ap
         task.assignee_ids.sort_unstable();
         task.assignee_ids.dedup();
         if task.source_refs.len() > 8
-            || task.source_refs.iter().any(|value| value.trim().is_empty() || value.chars().count() > 80)
+            || task.source_refs.iter().any(|value| value.trim().is_empty() || value.chars().count() > 80 || value.contains('\0'))
         {
             return Err(fail(StatusCode::BAD_REQUEST, "A proposed task contains invalid source references"));
         }
@@ -375,7 +381,7 @@ async fn insert_audit(
 async fn list_proposals(
     State(state): State<AppState>,
     WorkspaceUser(user_id, workspace_id): WorkspaceUser,
-) -> ApiResult<Json<Vec<ProposalView>>> {
+) -> ApiResult<(HeaderMap, Json<Vec<ProposalView>>)> {
     check_proposal_rate_limit(&state, user_id, workspace_id, "read", 60).await?;
     let rows = sqlx::query_as::<_, ProposalRow>(
         "SELECT p.id, p.board_id, p.target_list_id, p.created_by, p.status,
@@ -405,7 +411,7 @@ async fn list_proposals(
             internal_error(cause, "Could not decode a stored AI action proposal")
         })?);
     }
-    Ok(Json(proposals))
+    Ok((no_store_headers(), Json(proposals)))
 }
 
 async fn create_proposal(
@@ -736,7 +742,7 @@ async fn reject_proposal(
 async fn list_audit(
     State(state): State<AppState>,
     WorkspaceUser(user_id, workspace_id): WorkspaceUser,
-) -> ApiResult<Json<Vec<AuditResponse>>> {
+) -> ApiResult<(HeaderMap, Json<Vec<AuditResponse>>)> {
     check_proposal_rate_limit(&state, user_id, workspace_id, "read", 60).await?;
     let rows = sqlx::query_as::<_, AuditView>(
         "SELECT e.id, e.board_id, e.proposal_id, e.actor_id, e.event_type,
@@ -772,7 +778,7 @@ async fn list_audit(
             created_at: row.created_at,
         });
     }
-    Ok(Json(events))
+    Ok((no_store_headers(), Json(events)))
 }
 
 pub fn router() -> Router<AppState> {
