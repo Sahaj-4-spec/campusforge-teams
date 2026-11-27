@@ -107,6 +107,7 @@ The existing application remains the system of record:
 
 - `GET /api/ai/status` — authenticated workspace status and supported modes.
 - `POST /api/ai/assistant` — authenticated read-only request.
+- `GET /api/ai/insights` — authenticated, provider-independent Project Pulse dashboard data. Accepts an optional `board_id` query parameter and applies the same board-member or workspace owner/admin scope as assistant context reads.
 
 Example request:
 
@@ -122,6 +123,16 @@ Example request:
 Supported modes are `ask`, `summary`, `task_breakdown`, and `risk_review`. Prompt length is capped at 2,000 characters; up to eight user/assistant history messages are accepted, with each message capped at 1,800 characters. An optional `board_id` scopes retrieval to one authorized board. Without it, retrieval is limited to the caller's accessible boards within the selected workspace.
 
 The response contains `answer`, `mode`, `model`, `generated_at`, cited `sources`, prompt/completion token counts when supplied by the provider, and `actions_applied: false`. Only source references actually cited in the answer are returned in the `sources` list.
+
+### Project Pulse
+
+Project Pulse is available independently of the external AI provider and does not send workspace data to an AI vendor. It returns:
+- A transparent 0–100 health heuristic and the underlying overdue, blocked, due-soon, unassigned-priority, stale, and unestimated counts.
+- A top-five focus queue with evidence signals and suggested human next steps.
+- Assigned workload estimates, with work split evenly for tasks that have multiple assignees and missing estimates shown separately.
+- Per-board health comparisons for the authorized boards in scope.
+
+The API reads up to 100 authorized boards and 5,000 tasks per response. When either cap is reached, `sample_capped` is true and the dashboard warns that the figures represent a bounded sample. Completion is inferred from Done/Complete/Completed/Closed/Resolved list names; blockers are inferred from Blocked/Stuck/On Hold list names. These are heuristics, not predictive analytics or AI-generated judgments. Users can narrow the dashboard to a single board for a more focused view.
 
 ### Provider configuration
 
@@ -149,7 +160,7 @@ No AI-specific persistence migration has been created. Conversation/audit tables
 - Treat retrieved user content as untrusted input; it cannot override system policy or grant tools/permissions.
 - Start with read-only model capabilities. Any future tool/action interface must use allow-listed server functions, strict input schemas, and user confirmation.
 - Keep provider API keys, database credentials, and session tokens outside model context and client responses. A controlled internal system instruction is necessarily included in model context; model responses must never disclose that instruction or implementation details.
-- Apply redaction and data minimization before external provider calls.
+- Apply pattern-based redaction to prompts, conversation history, serialized workspace text and provider responses before returning them. This detects common credential, database-URL, JWT-like token and email patterns but cannot guarantee detection of every sensitive value; data minimization and provider privacy review remain required.
 - Define conversation retention, export, and deletion behavior before persisting sensitive prompts or completions.
 - Review each provider's data processing, storage region, retention, and model-training terms before using real user content.
 - Apply per-user/workspace request limits, token budgets, spend ceilings, and an administrator kill switch.
