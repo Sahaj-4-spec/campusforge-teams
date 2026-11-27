@@ -770,7 +770,7 @@ async fn notification_read(
                 OR (
                     n.board_id IS NULL
                     AND EXISTS(SELECT 1 FROM workspace_members active_member
-                                WHERE active_member.workspace_id=n.workspace_id AND active_member.user_id=$1)
+                                WHERE active_member.workspace_id=n.workspace_id AND active_member.user_id=$2)
                     AND (
                         (
                             n.notification_type IN ('calendar_invitation','calendar_reminder')
