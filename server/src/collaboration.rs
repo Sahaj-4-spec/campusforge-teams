@@ -149,11 +149,12 @@ async fn board_access(
 ) -> ApiResult<()> {
     let role = crate::auth::board_role(&state.db, user_id, workspace_id, board_id)
         .await.map_err(|error| internal(error, "Could not verify board permissions"))?;
-    match (role.as_deref(), write) {
-        (Some("admin" | "member" | "viewer"), false) => Ok(()),
-        (Some("admin" | "member"), true) => Ok(()),
-        (Some("viewer"), true) => Err(fail(StatusCode::FORBIDDEN, "This project is read-only for your account")),
-        _ => Err(fail(StatusCode::NOT_FOUND, "Project not found in this workspace")),
+    if crate::auth::board_role_allows(role.as_deref(), write) {
+        Ok(())
+    } else if role.as_deref() == Some("viewer") && write {
+        Err(fail(StatusCode::FORBIDDEN, "This project is read-only for your account"))
+    } else {
+        Err(fail(StatusCode::NOT_FOUND, "Project not found in this workspace"))
     }
 }
 async fn board_in_workspace(state: &AppState, user_id: Uuid, board_id: Uuid, workspace_id: Uuid) -> ApiResult<()> {
