@@ -69,7 +69,7 @@ The collaboration suite in merged PR #12 includes:
 - Workspace/project chat and structured meeting notes with agenda and decisions.
 
 ### 7. Additional non-AI collaboration capabilities
-The current non-AI completion branch adds:
+The merged Track A non-AI implementation includes:
 - Editable calendar events, event-type/project/attendee filters, timezone-aware all-day events, attendee invitations and responses, and one-time event reminders.
 - Server-backed My Tasks filters for project, status, priority, effort range, blockers, assignee, and due-date range.
 - Cursor-paginated notification and chat histories, workspace-invitation notifications, and mention notifications from task comments and shared channels.
