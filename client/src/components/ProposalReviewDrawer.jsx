@@ -30,6 +30,8 @@ export default function ProposalReviewDrawer({
   useEffect(() => {
     if (typeof document === "undefined") return undefined;
     const previousFocus = document.activeElement;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     const dialog = dialogRef.current;
     const selector = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
     const items = () => Array.from(dialog?.querySelectorAll(selector) || [])
@@ -63,6 +65,7 @@ export default function ProposalReviewDrawer({
     document.addEventListener("keydown", onKeyDown, true);
     return () => {
       document.removeEventListener("keydown", onKeyDown, true);
+      document.body.style.overflow = previousOverflow;
       if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
     };
   }, [onClose]);
