@@ -29,9 +29,10 @@ async fn task_scope(state: &AppState, user_id: Uuid, task_id: Uuid) -> ApiResult
     sqlx::query_as(
         "SELECT b.workspace_id, b.id, t.list_id
          FROM tasks t JOIN lists l ON l.id=t.list_id JOIN boards b ON b.id=l.board_id
-         JOIN workspace_members wm ON wm.workspace_id=b.workspace_id
-         JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id
-         WHERE t.id=$1 AND wm.user_id=$2",
+         JOIN workspace_members wm ON wm.workspace_id=b.workspace_id AND wm.user_id=$2
+         LEFT JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id
+         WHERE t.id=$1
+           AND (wm.role IN ('owner','admin') OR bm.user_id IS NOT NULL)",
     )
     .bind(task_id)
     .bind(user_id)
