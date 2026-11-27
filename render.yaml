@@ -11,14 +11,40 @@ services:
     healthCheckPath: /api/health
     autoDeployTrigger: commit
     envVars:
+      # Supply the managed Neon application database through the service secret store.
+      # Keep this unsynchronized so a Blueprint refresh cannot replace the selected database.
       - key: DATABASE_URL
-        fromDatabase:
-          name: campusforge-test-db
-          property: connectionString
+        sync: false
       - key: JWT_SECRET
         generateValue: true
       - key: FRONTEND_ORIGIN
         value: https://campusforge-preview.onrender.com
+      - key: OAUTH_REDIRECT_BASE_URL
+        value: https://campusforge-api-test.onrender.com
+      - key: CAMPUSFORGE_AI_ENABLED
+        value: "false"
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: DISCORD_CLIENT_ID
+        sync: false
+      - key: DISCORD_CLIENT_SECRET
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: CAMPUSFORGE_AI_API_BASE_URL
+        sync: false
+      - key: CAMPUSFORGE_AI_API_KEY
+        sync: false
+      - key: CAMPUSFORGE_AI_MODEL
+        sync: false
 
   - type: web
     name: campusforge-preview
