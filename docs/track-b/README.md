@@ -1,10 +1,10 @@
 # Track B — AI Project Assistant and Intelligent Collaboration
 
-**Status:** Started — foundation and scope definition  
+**Status:** Integrated candidate — read-only assistant and human-approved proposals implemented  
 **Repository:** `Sahaj-4-spec/campusforge-teams`  
 **Working branch:** `track-b/ai-assistant-foundation`  
 **Base:** `main`  
-**Track A relationship:** Parallel, isolated work. Track A's release and acceptance gates remain unchanged.
+**Track A relationship:** Consolidated with session-revocation hardening in the integrated candidate; production acceptance gates remain in force.
 
 ## 1. Purpose
 
@@ -74,17 +74,18 @@ This file establishes the initial product and engineering boundary. The first re
 - The task-plan JSON schema, task count, priority, estimate, field lengths, and source references are validated server-side; model-invented source IDs are removed.
 - A data-sharing acknowledgement is required in the UI and is checked again by the API on every provider request. The notice covers the prompt, recent conversation, and context selected by the current mode.
 - Changing project, mode, file, or workspace clears the in-memory conversation and resets acknowledgement. Changing workspaces remounts the assistant.
-- User-confirmed task-plan application uses the existing task-creation API and its current workspace/list authorization checks; no AI tool or autonomous write access exists.
+- The assistant cannot autonomously mutate projects. Task plans are persisted as structured proposals and require explicit approval through the separate proposal review endpoint; permissions, destination membership, expiry and source state are revalidated at approval time.
 
 **Not yet implemented:** meeting-note or file summarization, persistent conversations, streaming, and user preferences.
 
 ### B4 — Human-approved action proposals
 
-- Generate structured task breakdowns, subtasks, and meeting action-item proposals.
-- Show a preview with the proposed title, description, assignee, due date, and source evidence.
-- Require an explicit user confirmation before calling existing mutation APIs.
-- Re-check authorization and resource state at confirmation time; never rely on permissions captured when the proposal was generated.
-- Record who approved an action and what proposal was applied.
+**Implemented in the integrated candidate:**
+- Persist structured task proposals scoped to workspace, board and destination list.
+- Review saved proposals in a dedicated drawer with approve/reject controls and recent audit history.
+- Re-check write permissions, membership, destination list, assignee membership, expiry, status and SHA-256 source fingerprint at approval time.
+- Apply task creation and audit writes in one transaction; repeat application is rejected.
+- Store structured proposed task data and metadata-only audit events, not original prompts or raw model completions.
 
 ### B5 — Evaluation and controlled release
 
@@ -111,7 +112,7 @@ The existing application remains the system of record:
 - `POST /api/ai/assistant` — authenticated read-only request.
 - `GET /api/ai/insights` — authenticated, provider-independent Project Pulse dashboard data. Accepts an optional `board_id` query parameter and applies the same board-member or workspace owner/admin scope as assistant context reads.
 - `GET /api/ai/files` — authenticated, permission-filtered list of clean, supported text files (max 128 KB) that are eligible for AI document summaries. Accepts an optional `board_id` and returns only file identifiers and display metadata, never storage keys or object URLs. It is limited to 30 requests per user per minute and 300 per workspace per hour.
-
+- `GET/POST /api/ai/proposals` — list or save validated workspace/board-scoped task proposals.\n- `GET /api/ai/proposals/audit` — list metadata-only proposal review events.\n- `POST /api/ai/proposals/{proposal_id}/apply` and `/reject` — perform explicit human review, rechecking permissions and source state.\n
 Example request:
 
 ```json
@@ -168,7 +169,7 @@ Hosted endpoints must use HTTPS. HTTP loopback is accepted only when both `CAMPU
 - Common private-key, API-key, bearer-token, JWT-like, database-URL and email patterns are redacted recursively from provider-bound text and sanitized responses. This is defense in depth, not a guarantee that every sensitive value can be detected.
 - Project records and conversation history are identified as untrusted content; no tools, arbitrary SQL or autonomous writes are exposed.
 
-No AI-specific persistence migration has been created. Conversation/audit tables remain deferred until retention, deletion, indexing and migration ordering are approved.
+SQLx migration `0014_ai_action_proposals.sql` stores structured proposals and metadata-only audit events; it does not store prompts or raw provider completions. The integrated candidate uses `0015_revocable_auth_sessions.sql` for Track A session revocation so the already-applied proposal migration version 14 remains unchanged.
 
 ## 5. Security and privacy requirements
 
