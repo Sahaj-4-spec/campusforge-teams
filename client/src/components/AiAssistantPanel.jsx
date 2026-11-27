@@ -21,7 +21,7 @@ import {
   Target,
   X
 } from "lucide-react";
-import { aiApi, filesApi, taskApi } from "../lib/api.js";
+import { aiApi, taskApi } from "../lib/api.js";
 
 const MODES = [
   { id: "ask", label: "Ask", icon: MessageSquare },
@@ -186,7 +186,7 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
     let cancelled = false;
     setFilesLoading(true);
     setFilesError("");
-    filesApi.list()
+    aiApi.files(boardId || null)
       .then((rows) => {
         if (!cancelled) {
           const usable = Array.isArray(rows) ? rows.filter(canSummarizeFile) : [];
@@ -199,7 +199,7 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
       })
       .finally(() => { if (!cancelled) setFilesLoading(false); });
     return () => { cancelled = true; };
-  }, [mode]);
+  }, [mode, boardId]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
