@@ -932,6 +932,29 @@ async fn project_pulse(
     const MAX_BOARDS: usize = 100;
     const MAX_TASKS: usize = 5000;
 
+    let user_allowed = state.check_rate_limit(
+        &rate_limit_key("pulse-user", Some(user_id), workspace_id),
+        30,
+        60,
+    ).await.map_err(|error| {
+        tracing::error!(%error, "Could not enforce Project Pulse user rate limit");
+        fail(StatusCode::SERVICE_UNAVAILABLE, "Project Pulse is temporarily unavailable")
+    })?;
+    if !user_allowed {
+        return Err(fail(StatusCode::TOO_MANY_REQUESTS, "Project Pulse user request limit reached; please wait before refreshing"));
+    }
+    let workspace_allowed = state.check_rate_limit(
+        &rate_limit_key("pulse-workspace", None, workspace_id),
+        300,
+        3600,
+    ).await.map_err(|error| {
+        tracing::error!(%error, "Could not enforce Project Pulse workspace rate limit");
+        fail(StatusCode::SERVICE_UNAVAILABLE, "Project Pulse is temporarily unavailable")
+    })?;
+    if !workspace_allowed {
+        return Err(fail(StatusCode::TOO_MANY_REQUESTS, "Project Pulse workspace request limit reached; please try again later"));
+    }
+
     let boards = sqlx::query_as::<_, PulseBoard>(
         "SELECT b.id, b.name
            FROM boards b
