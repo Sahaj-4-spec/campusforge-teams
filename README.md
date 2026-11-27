@@ -263,7 +263,7 @@ The frontend milestone is connected to the authenticated Rust API.
 
 The active React application reads workspace, project, task, assignment, comment, and activity records from the authenticated Rust API backed by PostgreSQL. `client/src/data/demoData.js` remains as an unused legacy sample-data reference and is not the active application data source.
 
-**Included in the integrated collaboration candidate:** calendar editing, filters, attendee invitations and reminders; advanced task filters, subtasks, checklists, labels, dependencies and idempotent recurrence; paginated notifications and task/channel mentions; shared file preview, quotas, content checks, optional malware scanning and audit; daily analytics snapshots and CSV export; team chat, direct messages, pins, edits/deletes, presence, typing, meeting notes and structured action items. Cross-instance workspace change signals use PostgreSQL LISTEN/NOTIFY. The integrated candidate still requires fresh combined-branch checks and is not live on the hosted preview. **Still pending before public release:** configure and test Google/GitHub/Discord OAuth applications and callback URLs, provision a private S3-compatible bucket and credentials, configure ClamAV and require scans, verify the Resend sender domain, complete browser/two-user acceptance and backup/restore tests, approve retention/privacy policies, and add fine-grained per-board authorization.
+**Included in the integrated collaboration candidate:** calendar editing, filters, attendee invitations and reminders; advanced task filters, subtasks, checklists, labels, dependencies and idempotent recurrence; paginated notifications and task/channel mentions; shared file preview, quotas, content checks, optional malware scanning and audit; daily analytics snapshots and CSV export; team chat, direct messages, pins, edits/deletes, presence, typing, meeting notes and structured action items. Cross-instance workspace change signals use PostgreSQL LISTEN/NOTIFY. The integrated candidate still requires fresh combined-branch checks and is not live on the hosted preview. **Still pending before public release:** configure and test Google/GitHub/Discord OAuth applications and callback URLs, provision a private S3-compatible bucket and credentials, configure ClamAV and require scans, verify the Resend sender domain, complete browser/two-user acceptance and backup/restore tests, approve retention/privacy policies, and finish two-account negative tests for the implemented per-board authorization rules.
 
 ## 🎨 UI Design System
 
@@ -281,7 +281,7 @@ The Cal.com reference is an independent visual analysis and is not affiliated wi
 
 - Store passwords using Argon2 password hashing.
 - Keep secrets in environment variables.
-- Authenticate API requests and authorize workspace membership on the server; fine-grained per-board permissions are not implemented yet.
+- Authenticate API requests on the server. The integrated candidate enforces board membership and role checks across board-scoped reads and writes; workspace owners/admins retain elevated access and board viewers are read-only. Two-account negative authorization acceptance remains pending.
 - Validate all incoming request data.
 - Use parameterized SQL queries through SQLx.
 - Keep S3-compatible buckets private and stream file downloads only after workspace authorization.
@@ -312,7 +312,7 @@ AI-assisted tools may be used to understand concepts, explore implementation app
 
 The React client authenticates against the Rust API and loads workspace records from PostgreSQL. Task creation, editing, deletion, assignments, comments, project creation, column management, invitation workflows, and drag-and-drop ordering call protected Axum endpoints; they no longer rely on browser-local demo records. New accounts receive a starter workspace and project board when the workspace endpoint is first loaded. Authenticated WebSocket sessions receive workspace-scoped events after committed mutations, and the frontend reloads the snapshot when remote changes arrive.
 
-**Known release limitations:** browser end-to-end tests and a two-account WebSocket acceptance test have not been completed; invitation links are created for manual sharing and are not emailed; the workspace selector is not yet a functional workspace switcher; fine-grained per-board roles are not implemented. WebSocket events use an in-process broadcast channel, so run one API instance until shared pub/sub is added. The current Render database is a temporary free test database and expires on December 22, 2026; migrate to durable database hosting and configure backups before production use.
+**Known release limitations:** browser end-to-end tests and a two-account WebSocket acceptance test have not been completed; invitation links are created for manual sharing and are not emailed; the workspace selector is not yet a functional workspace switcher; fine-grained per-board roles are enforced in the integrated candidate; two-account negative authorization acceptance remains pending. WebSocket events use an in-process broadcast channel, so run one API instance until shared pub/sub is added. The current Render database is a temporary free test database and expires on December 22, 2026; migrate to durable database hosting and configure backups before production use.
 
 ## 🌐 Hosted Preview
 
