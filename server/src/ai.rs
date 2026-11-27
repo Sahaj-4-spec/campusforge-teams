@@ -771,6 +771,7 @@ struct PulseQuery {
 struct PulseBoard {
     id: Uuid,
     name: String,
+    total_tasks: i64,
 }
 
 #[derive(Debug, FromRow)]
@@ -813,6 +814,7 @@ struct PulseFocusItem {
 
 #[derive(Debug, Serialize)]
 struct PulseMemberWorkload {
+    member_id: String,
     member: String,
     open_tasks: usize,
     estimated_minutes: i64,
@@ -824,9 +826,11 @@ struct PulseMemberWorkload {
 struct PulseBoardHealth {
     board_id: Uuid,
     name: String,
-    health_score: u8,
+    health_score: Option<u8>,
     health_label: &'static str,
     total_tasks: usize,
+    sampled_tasks: usize,
+    coverage_complete: bool,
     completed_tasks: usize,
     overdue_tasks: usize,
     blocked_tasks: usize,
@@ -874,8 +878,15 @@ fn is_done_column(name: &str) -> bool {
 }
 
 fn is_blocked_column(name: &str) -> bool {
-    let lower = name.trim().to_ascii_lowercase();
-    lower.contains("block") || lower.contains("stuck") || lower.contains("on hold")
+    let words: Vec<String> = name
+        .trim()
+        .to_ascii_lowercase()
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_owned)
+        .collect();
+    words.iter().any(|word| word == "blocked" || word == "stuck")
+        || words.windows(2).any(|pair| pair[0] == "on" && pair[1] == "hold")
 }
 
 fn health_label(score: u8) -> &'static str {
@@ -1015,7 +1026,11 @@ async fn project_pulse(
     }
 
     let boards = sqlx::query_as::<_, PulseBoard>(
-        "SELECT b.id, b.name
+        "SELECT b.id, b.name,
+                (SELECT COUNT(*)::bigint
+                   FROM tasks count_task
+                   JOIN lists count_list ON count_list.id = count_task.list_id
+                  WHERE count_list.board_id = b.id) AS total_tasks
            FROM boards b
           WHERE b.workspace_id = $1
             AND ($2::uuid IS NULL OR b.id = $2)
@@ -1048,48 +1063,68 @@ async fn project_pulse(
     let tasks = if board_ids.is_empty() {
         Vec::new()
     } else {
+        let per_board_limit = (MAX_TASKS / boards.len().max(1)).max(1);
         sqlx::query_as::<_, PulseTask>(
-            "SELECT t.id, b.id AS board_id, b.name AS board_name, l.name AS list_name,
-                    t.title, t.priority, t.due_at, t.estimated_minutes, t.updated_at,
+            "WITH authorized_tasks AS (
+               SELECT t.id, b.id AS board_id, b.workspace_id, b.name AS board_name, l.name AS list_name,
+                      t.title, t.priority, t.due_at, t.estimated_minutes, t.updated_at,
+                      ROW_NUMBER() OVER (
+                        PARTITION BY b.id
+                        ORDER BY t.due_at ASC NULLS LAST, t.updated_at DESC, t.id
+                      ) AS sample_rank
+                 FROM tasks t
+                 JOIN lists l ON l.id = t.list_id
+                 JOIN boards b ON b.id = l.board_id
+                WHERE b.workspace_id = $1
+                  AND b.id = ANY($2::uuid[])
+                  AND (
+                    EXISTS (SELECT 1 FROM board_members bm WHERE bm.board_id = b.id AND bm.user_id = $3)
+                    OR EXISTS (SELECT 1 FROM workspace_members wm
+                                WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $3
+                                  AND wm.role IN ('owner', 'admin'))
+                  )
+             )
+             SELECT x.id, x.board_id, x.board_name, x.list_name, x.title, x.priority,
+                    x.due_at, x.estimated_minutes, x.updated_at,
                     COALESCE((
                       SELECT array_agg(ta.user_id::text ORDER BY u.full_name, ta.user_id)
                         FROM task_assignees ta
                         JOIN users u ON u.id = ta.user_id
-                       WHERE ta.task_id = t.id
+                       WHERE ta.task_id = x.id
                          AND EXISTS (
                            SELECT 1 FROM workspace_members wm
-                            WHERE wm.user_id = u.id AND wm.workspace_id = b.workspace_id
+                            WHERE wm.user_id = u.id AND wm.workspace_id = x.workspace_id
                          )
                     ), ARRAY[]::text[]) AS assignee_ids,
                     COALESCE((
                       SELECT array_agg(u.full_name ORDER BY u.full_name, ta.user_id)
                         FROM task_assignees ta
                         JOIN users u ON u.id = ta.user_id
-                       WHERE ta.task_id = t.id
+                       WHERE ta.task_id = x.id
                          AND EXISTS (
                            SELECT 1 FROM workspace_members wm
-                            WHERE wm.user_id = u.id AND wm.workspace_id = b.workspace_id
+                            WHERE wm.user_id = u.id AND wm.workspace_id = x.workspace_id
                          )
                     ), ARRAY[]::text[]) AS assignees
-               FROM tasks t
-               JOIN lists l ON l.id = t.list_id
-               JOIN boards b ON b.id = l.board_id
-              WHERE b.workspace_id = $1
-                AND b.id = ANY($2::uuid[])
-              ORDER BY t.due_at ASC NULLS LAST, t.updated_at DESC
-              LIMIT 5001"
+               FROM authorized_tasks x
+              WHERE x.sample_rank <= $4
+              ORDER BY x.board_name, x.due_at ASC NULLS LAST, x.updated_at DESC"
         )
         .bind(workspace_id)
         .bind(&board_ids)
+        .bind(user_id)
+        .bind(per_board_limit as i64)
         .fetch_all(&state.db)
-        .await
-        .map_err(|error| {
+        .await        .map_err(|error| {
             tracing::error!(%error, "Project Pulse task lookup failed");
             fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not load project health")
         })?
     };
-    let sample_capped = board_sample_capped || tasks.len() > MAX_TASKS;
+    let per_board_limit = (MAX_TASKS / boards.len().max(1)).max(1);
+    let sample_capped = board_sample_capped
+        || boards.iter().any(|board| board.total_tasks > per_board_limit as i64);
     let tasks: Vec<PulseTask> = tasks.into_iter().take(MAX_TASKS).collect();
+    let total_workspace_tasks: usize = boards.iter().map(|board| board.total_tasks.max(0) as usize).sum();
     let now = Utc::now();
     let task_refs: Vec<&PulseTask> = tasks.iter().collect();
     let overall = pulse_counts(&task_refs, &now);
@@ -1098,18 +1133,22 @@ async fn project_pulse(
     for board in &boards {
         let scoped: Vec<&PulseTask> = tasks.iter().filter(|task| task.board_id == board.id).collect();
         let counts = pulse_counts(&scoped, &now);
+        let total_tasks = board.total_tasks.max(0) as usize;
+        let coverage_complete = scoped.len() >= total_tasks;
         board_health.push(PulseBoardHealth {
             board_id: board.id,
-            name: truncate_chars(&board.name, 100),
-            health_score: counts.score,
-            health_label: health_label(counts.score),
-            total_tasks: scoped.len(),
+            name: truncate_chars(&redact_sensitive_text(&board.name), 100),
+            health_score: coverage_complete.then_some(counts.score),
+            health_label: if coverage_complete { health_label(counts.score) } else { "partial" },
+            total_tasks,
+            sampled_tasks: scoped.len(),
+            coverage_complete,
             completed_tasks: counts.completed,
             overdue_tasks: counts.overdue,
             blocked_tasks: counts.blocked,
         });
     }
-    board_health.sort_by(|a, b| a.health_score.cmp(&b.health_score).then_with(|| a.name.cmp(&b.name)));
+    board_health.sort_by(|a, b| a.health_score.unwrap_or(0).cmp(&b.health_score.unwrap_or(0)).then_with(|| a.name.cmp(&b.name)));
 
     let mut focus_queue = Vec::new();
     for task in &tasks {
@@ -1152,7 +1191,10 @@ async fn project_pulse(
                 .or_insert((truncate_chars(&member_name, 100), 0, 0, 0));
             entry.1 += 1;
             if let Some(minutes) = task.estimated_minutes {
-                entry.2 += i64::from(minutes.max(0)) / divisor;
+                let total_minutes = i64::from(minutes.max(0));
+                let base_share = total_minutes / divisor;
+                let remainder = total_minutes % divisor;
+                entry.2 += base_share + i64::from((index as i64) < remainder);
             } else {
                 entry.3 += 1;
             }
@@ -1161,7 +1203,7 @@ async fn project_pulse(
     let average_minutes = if workload_map.is_empty() { 0 } else {
         workload_map.values().map(|value| value.2).sum::<i64>() / workload_map.len() as i64
     };
-    let mut workload: Vec<PulseMemberWorkload> = workload_map.into_values().map(|(member, open_tasks, estimated_minutes, unestimated_tasks)| {
+    let mut workload: Vec<PulseMemberWorkload> = workload_map.into_iter().map(|(member_id, (member, open_tasks, estimated_minutes, unestimated_tasks))| {
         let label = if average_minutes == 0 {
             "not_estimated"
         } else if estimated_minutes > average_minutes.saturating_mul(130) / 100 {
@@ -1171,7 +1213,7 @@ async fn project_pulse(
         } else {
             "balanced"
         };
-        PulseMemberWorkload { member, open_tasks, estimated_minutes, unestimated_tasks, workload: label }
+        PulseMemberWorkload { member_id: member_id, member, open_tasks, estimated_minutes, unestimated_tasks, workload: label }
     }).collect();
     workload.sort_by(|a, b| b.estimated_minutes.cmp(&a.estimated_minutes).then_with(|| a.member.cmp(&b.member)));
 
@@ -1189,7 +1231,7 @@ async fn project_pulse(
         scope: if query.board_id.is_some() { "selected_project" } else { "authorized_workspace_projects" },
         health_score: overall.score,
         health_label: health_label(overall.score),
-        total_tasks: tasks.len(),
+        total_tasks: total_workspace_tasks,
         open_tasks: overall.open,
         completed_tasks: overall.completed,
         overdue_tasks: overall.overdue,
@@ -1220,6 +1262,7 @@ mod pulse_tests {
         assert!(!is_done_column("In Progress"));
         assert!(is_blocked_column("Blocked"));
         assert!(is_blocked_column("On Hold"));
+        assert!(!is_blocked_column("Unblocked"));
         assert!(!is_blocked_column("Review"));
     }
 
