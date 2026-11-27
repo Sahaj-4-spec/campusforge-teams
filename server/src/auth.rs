@@ -645,6 +645,10 @@ mod tests {
         };
         let pool = sqlx::PgPool::connect(&database_url).await
             .expect("test PostgreSQL service should accept connections");
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .expect("board-role integration test schema should be migrated");
         let user_id = uuid::Uuid::new_v4();
         let workspace_id = uuid::Uuid::new_v4();
         let board_id = uuid::Uuid::new_v4();
