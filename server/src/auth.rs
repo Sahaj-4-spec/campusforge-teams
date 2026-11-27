@@ -608,6 +608,61 @@ async fn logout(
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn board_role_lookup_uses_real_workspace_and_board_memberships() {
+        let Ok(database_url) = std::env::var("DATABASE_URL") else {
+            eprintln!("Skipping board role integration test: DATABASE_URL is not configured");
+            return;
+        };
+        let pool = sqlx::PgPool::connect(&database_url).await
+            .expect("test PostgreSQL service should accept connections");
+        let user_id = uuid::Uuid::new_v4();
+        let workspace_id = uuid::Uuid::new_v4();
+        let board_id = uuid::Uuid::new_v4();
+        let email = format!("{}@example.test", uuid::Uuid::new_v4());
+        let provider_user_id = format!("board-role-{}", uuid::Uuid::new_v4());
+
+        let mut tx = pool.begin().await.expect("fixture transaction should start");
+        sqlx::query(
+            "INSERT INTO users(id,email,password_hash,full_name)
+             VALUES($1,$2,NULL,'Board Role Test User')",
+        ).bind(user_id).bind(&email).execute(&mut *tx).await
+            .expect("OAuth fixture user should be inserted");
+        sqlx::query(
+            "INSERT INTO oauth_accounts(provider,provider_user_id,user_id,email)
+             VALUES('google',$1,$2,$3)",
+        ).bind(provider_user_id).bind(user_id).bind(&email).execute(&mut *tx).await
+            .expect("verified provider identity should be attached");
+        sqlx::query("INSERT INTO workspaces(id,name,owner_id) VALUES($1,'Board Role Test',$2)")
+            .bind(workspace_id).bind(user_id).execute(&mut *tx).await
+            .expect("workspace fixture should be inserted");
+        sqlx::query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner')")
+            .bind(workspace_id).bind(user_id).execute(&mut *tx).await
+            .expect("workspace owner membership should be inserted");
+        sqlx::query("INSERT INTO boards(id,workspace_id,name,created_by) VALUES($1,$2,'Role Test',$3)")
+            .bind(board_id).bind(workspace_id).bind(user_id).execute(&mut *tx).await
+            .expect("board fixture should be inserted");
+        sqlx::query("INSERT INTO board_members(board_id,user_id,role) VALUES($1,$2,'admin')")
+            .bind(board_id).bind(user_id).execute(&mut *tx).await
+            .expect("board administrator membership should be inserted");
+        tx.commit().await.expect("board role fixture should commit");
+
+        assert_eq!(board_role(&pool,user_id,workspace_id,board_id).await.unwrap().as_deref(),Some("admin"));
+        sqlx::query("UPDATE board_members SET role='viewer' WHERE board_id=$1 AND user_id=$2")
+            .bind(board_id).bind(user_id).execute(&pool).await
+            .expect("board role should be changeable");
+        let role = board_role(&pool,user_id,workspace_id,board_id).await.unwrap();
+        assert_eq!(role.as_deref(),Some("viewer"));
+        assert!(board_role_allows(role.as_deref(),false));
+        assert!(!board_role_allows(role.as_deref(),true));
+
+        sqlx::query("DELETE FROM workspaces WHERE id=$1").bind(workspace_id).execute(&pool).await
+            .expect("workspace fixture should be removed");
+        sqlx::query("DELETE FROM users WHERE id=$1").bind(user_id).execute(&pool).await
+            .expect("OAuth fixture user should be removed");
+        pool.close().await;
+    }
+
     #[test]
     fn board_roles_allow_viewers_to_read_but_not_write() {
         assert!(board_role_allows(Some("viewer"), false));
