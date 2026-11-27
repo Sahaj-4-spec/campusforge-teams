@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import AuthScreen from "./components/AuthScreen.jsx";
 import AiAssistantPanel from "./components/AiAssistantPanel.jsx";
+import ProjectPulseDashboard from "./components/ProjectPulseDashboard.jsx";
 import {
   authApi, boardApi, clearStoredWorkspaceId, createWorkspaceSocket,
   getStoredWorkspaceId, setStoredWorkspaceId, setWorkspaceSocketBoard,
@@ -708,6 +709,7 @@ export default function App() {
   const [projectDialogReady, setProjectDialogReady] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [aiAssistantOpen, setAiAssistantOpen] = useState(false);
+  const [projectPulseOpen, setProjectPulseOpen] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState(null);
   const [defaultListId, setDefaultListId] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -1582,6 +1584,9 @@ export default function App() {
               <span>Search tasks, projects, and actions</span>
               <kbd>⌘ K</kbd>
             </button>
+            <button className="ai-assistant-trigger pulse-trigger" type="button" onClick={() => setProjectPulseOpen(true)} disabled={demoMode} title={demoMode ? "Project Pulse is available for connected workspaces" : "Open Project Pulse"}>
+              <Activity size={15} /><span>Project Pulse</span>
+            </button>
             <button className="ai-assistant-trigger" type="button" onClick={() => setAiAssistantOpen(true)} disabled={demoMode} title={demoMode ? "AI assistant is available for connected workspaces" : "Open AI project assistant"}>
               <Sparkles size={15} /><span>AI assistant</span>
             </button>
@@ -1686,6 +1691,20 @@ export default function App() {
             tasks={data.tasks}
           />
         </Suspense>
+      )}
+      {projectPulseOpen && (
+        <ProjectPulseDashboard
+          onClose={() => setProjectPulseOpen(false)}
+          boards={data.boards}
+          refreshKey={realtimeVersion}
+          onOpenTask={(taskId) => {
+            const task = data.tasks.find((item) => item.id === taskId);
+            if (task) {
+              setProjectPulseOpen(false);
+              openTask(task);
+            }
+          }}
+        />
       )}
       {aiAssistantOpen && (
         <AiAssistantPanel
