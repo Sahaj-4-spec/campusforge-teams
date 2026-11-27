@@ -46,6 +46,7 @@ async fn applies_all_postgres_migrations_and_creates_collaboration_tables() {
         "public.workspace_analytics_daily",
         "public.task_recurrence_runs",
         "public.workspace_presence",
+        "public.auth_sessions",
     ] {
         let exists: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
             .bind(table)
