@@ -194,8 +194,9 @@ async fn status(
     })
 }
 
-fn rate_limit_key(scope: &str, user_id: Uuid, workspace_id: Uuid) -> String {
-    let digest = Sha256::digest(format!("{scope}:{user_id}:{workspace_id}").as_bytes());
+fn rate_limit_key(scope: &str, user_id: Option<Uuid>, workspace_id: Uuid) -> String {
+    let identity = user_id.map(|value| value.to_string()).unwrap_or_else(|| "workspace".to_owned());
+    let digest = Sha256::digest(format!("{scope}:{identity}:{workspace_id}").as_bytes());
     format!("ai:{}", digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>())
 }
 
@@ -363,7 +364,7 @@ async fn assistant(
     ))?;
 
     let user_limit = state.check_rate_limit(
-        &rate_limit_key("user", user_id, workspace_id),
+        &rate_limit_key("user", Some(user_id), workspace_id),
         10,
         60,
     ).await.map_err(|error| {
@@ -371,7 +372,7 @@ async fn assistant(
         fail(StatusCode::SERVICE_UNAVAILABLE, "AI assistance is temporarily unavailable")
     })?;
     let workspace_limit = state.check_rate_limit(
-        &rate_limit_key("workspace", user_id, workspace_id),
+        &rate_limit_key("workspace", None, workspace_id),
         120,
         3600,
     ).await.map_err(|error| {
@@ -400,7 +401,7 @@ async fn assistant(
     })];
     for turn in &request.history {
         messages.push(json!({
-            "role": turn.role,
+            "role": turn.role.as_str(),
             "content": truncate_chars(&turn.content, 1800),
         }));
     }
@@ -427,7 +428,7 @@ async fn assistant(
         .post(config.endpoint.clone())
         .bearer_auth(&config.api_key)
         .json(&json!({
-            "model": config.model,
+            "model": config.model.as_str(),
             "messages": messages,
             "temperature": 0.2,
             "max_tokens": 1200,
@@ -472,12 +473,16 @@ async fn assistant(
         "Completed read-only CampusForge AI request"
     );
 
+    let cited_sources = sources.into_iter().filter(|source| {
+        answer.contains(&format!("[{}]", source.reference))
+    }).collect();
+
     Ok(Json(AssistantResponse {
         answer: answer.to_owned(),
         mode: request.mode.as_str(),
         model: truncate_chars(&config.model, 100),
         generated_at: Utc::now(),
-        sources,
+        sources: cited_sources,
         usage: UsageSummary {
             prompt_tokens,
             completion_tokens,
