@@ -749,12 +749,12 @@ mod tests {
     fn google_sign_up_requires_a_verified_valid_email() {
         let verified = GoogleProfile {
             sub: "google-subject-123".to_owned(),
-            email: "  Student@Gmail.com  ".to_owned(),
+            email: "  Student@University.edu  ".to_owned(),
             email_verified: true,
             name: None,
             picture: None,
         };
-        assert_eq!(verified_google_email(&verified).unwrap(), "student@gmail.com");
+        assert_eq!(verified_google_email(&verified).unwrap(), "student@university.edu");
 
         let unverified = GoogleProfile {
             email_verified: false,
@@ -786,12 +786,12 @@ mod tests {
                 verified: false,
             },
             GithubEmail {
-                email: "  Primary@Gmail.com ".to_owned(),
+                email: "  Primary@Campus.edu ".to_owned(),
                 primary: true,
                 verified: true,
             },
         ];
-        assert_eq!(verified_github_email(&emails).unwrap(), "primary@gmail.com");
+        assert_eq!(verified_github_email(&emails).unwrap(), "primary@campus.edu");
 
         let no_verified_email = vec![
             GithubEmail {
@@ -810,11 +810,11 @@ mod tests {
             id: "discord-user-123".to_owned(),
             username: "student".to_owned(),
             global_name: None,
-            email: Some(" Student@Gmail.com ".to_owned()),
+            email: Some(" Student@Example.org ".to_owned()),
             verified: Some(true),
             avatar: None,
         };
-        assert_eq!(verified_discord_email(&verified).unwrap(), "student@gmail.com");
+        assert_eq!(verified_discord_email(&verified).unwrap(), "student@example.org");
 
         let unverified = DiscordProfile {
             verified: Some(false),
