@@ -263,41 +263,58 @@ async fn get_workspace(
     .map_err(|cause| internal_error(cause, "Could not load workspace membership"))?;
 
     let boards = sqlx::query_as::<_, BoardRow>(
-        "SELECT id, workspace_id, name, description, created_by, created_at          FROM boards WHERE workspace_id = $1 ORDER BY created_at",
+        "SELECT b.id, b.workspace_id, b.name, b.description, b.created_by, b.created_at
+         FROM boards b JOIN board_members own ON own.board_id=b.id AND own.user_id=$2
+         WHERE b.workspace_id=$1 ORDER BY b.created_at",
     )
     .bind(workspace.id)
+    .bind(user_id)
     .fetch_all(&state.db)
     .await
     .map_err(|cause| internal_error(cause, "Could not load boards"))?;
 
     let board_members = sqlx::query_as::<_, BoardMemberRow>(
-        "SELECT bm.board_id, bm.user_id, bm.role          FROM board_members bm JOIN boards b ON b.id = bm.board_id          WHERE b.workspace_id = $1",
+        "SELECT bm.board_id, bm.user_id, bm.role FROM board_members bm
+         JOIN boards b ON b.id=bm.board_id
+         JOIN board_members own ON own.board_id=b.id AND own.user_id=$2
+         WHERE b.workspace_id=$1",
     )
     .bind(workspace.id)
+    .bind(user_id)
     .fetch_all(&state.db)
     .await
     .map_err(|cause| internal_error(cause, "Could not load board membership"))?;
 
     let lists = sqlx::query_as::<_, ListRow>(
-        "SELECT l.id, l.board_id, l.name, l.position          FROM lists l JOIN boards b ON b.id = l.board_id          WHERE b.workspace_id = $1 ORDER BY l.board_id, l.position",
+        "SELECT l.id, l.board_id, l.name, l.position FROM lists l
+         JOIN boards b ON b.id=l.board_id
+         JOIN board_members own ON own.board_id=b.id AND own.user_id=$2
+         WHERE b.workspace_id=$1 ORDER BY l.board_id,l.position",
     )
     .bind(workspace.id)
+    .bind(user_id)
     .fetch_all(&state.db)
     .await
     .map_err(|cause| internal_error(cause, "Could not load lists"))?;
 
     let tasks = sqlx::query_as::<_, TaskRow>(
-        "SELECT t.id, l.board_id, t.list_id, t.title, COALESCE(t.description, '') AS description,          t.priority, CASE WHEN t.due_at IS NULL THEN NULL          ELSE to_char(t.due_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') END AS due_date,          t.parent_task_id, t.estimated_minutes, t.position, t.created_by, t.created_at, t.updated_at          FROM tasks t JOIN lists l ON l.id = t.list_id          JOIN boards b ON b.id = l.board_id          WHERE b.workspace_id = $1 ORDER BY l.board_id, t.list_id, t.position",
+        "SELECT t.id, l.board_id, t.list_id, t.title, COALESCE(t.description, '') AS description,          t.priority, CASE WHEN t.due_at IS NULL THEN NULL          ELSE to_char(t.due_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') END AS due_date,          t.parent_task_id, t.estimated_minutes, t.position, t.created_by, t.created_at, t.updated_at          FROM tasks t JOIN lists l ON l.id = t.list_id          JOIN boards b ON b.id = l.board_id
+          JOIN board_members own ON own.board_id=b.id AND own.user_id=$2
+          WHERE b.workspace_id = $1 ORDER BY l.board_id, t.list_id, t.position",
     )
     .bind(workspace.id)
+    .bind(user_id)
     .fetch_all(&state.db)
     .await
     .map_err(|cause| internal_error(cause, "Could not load tasks"))?;
 
     let task_assignees = sqlx::query_as::<_, TaskAssigneeRow>(
-        "SELECT ta.task_id, ta.user_id FROM task_assignees ta          JOIN tasks t ON t.id = ta.task_id JOIN lists l ON l.id = t.list_id          JOIN boards b ON b.id = l.board_id WHERE b.workspace_id = $1",
+        "SELECT ta.task_id, ta.user_id FROM task_assignees ta          JOIN tasks t ON t.id = ta.task_id JOIN lists l ON l.id = t.list_id          JOIN boards b ON b.id = l.board_id
+          JOIN board_members own ON own.board_id=b.id AND own.user_id=$2
+          WHERE b.workspace_id = $1",
     )
     .bind(workspace.id)
+    .bind(user_id)
     .fetch_all(&state.db)
     .await
     .map_err(|cause| internal_error(cause, "Could not load task assignees"))?;
@@ -305,18 +322,24 @@ async fn get_workspace(
     let comments = sqlx::query_as::<_, CommentRow>(
         "SELECT c.id, c.task_id, c.author_id, c.parent_comment_id, c.body, c.created_at
          FROM comments c JOIN tasks t ON t.id = c.task_id JOIN lists l ON l.id = t.list_id
-         JOIN boards b ON b.id = l.board_id WHERE b.workspace_id = $1
-         ORDER BY c.created_at",
+         JOIN boards b ON b.id = l.board_id
+         JOIN board_members own ON own.board_id=b.id AND own.user_id=$2
+         WHERE b.workspace_id = $1 ORDER BY c.created_at",
     )
     .bind(workspace.id)
+    .bind(user_id)
     .fetch_all(&state.db)
     .await
     .map_err(|cause| internal_error(cause, "Could not load comments"))?;
 
     let activity_events = sqlx::query_as::<_, ActivityRow>(
-        "SELECT id, board_id, actor_id, event_type,          COALESCE(payload->>'description', event_type) AS description, created_at          FROM activity_events WHERE workspace_id = $1 ORDER BY created_at DESC LIMIT 200",
+        "SELECT a.id, a.board_id, a.actor_id, a.event_type,
+                COALESCE(a.payload->>'description', a.event_type) AS description, a.created_at
+         FROM activity_events a JOIN board_members own ON own.board_id=a.board_id AND own.user_id=$2
+         WHERE a.workspace_id=$1 ORDER BY a.created_at DESC LIMIT 200",
     )
     .bind(workspace.id)
+    .bind(user_id)
     .fetch_all(&state.db)
     .await
     .map_err(|cause| internal_error(cause, "Could not load activity"))?;
@@ -545,7 +568,9 @@ async fn create_task(
 
     let mut tx = state.db.begin().await.map_err(|cause| internal_error(cause, "Could not begin task creation"))?;
     let scope: Option<(Uuid, Uuid)> = sqlx::query_as(
-        "SELECT b.workspace_id, b.id FROM lists l JOIN boards b ON b.id = l.board_id          JOIN workspace_members wm ON wm.workspace_id = b.workspace_id          WHERE l.id = $1 AND wm.user_id = $2",
+        "SELECT b.workspace_id, b.id FROM lists l JOIN boards b ON b.id = l.board_id          JOIN workspace_members wm ON wm.workspace_id = b.workspace_id
+          JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id AND bm.role IN ('admin','member')
+          WHERE l.id = $1 AND wm.user_id = $2",
     )
     .bind(input.list_id)
     .bind(user_id)
@@ -617,6 +642,7 @@ async fn update_task(
         "SELECT b.workspace_id, b.id, t.list_id, t.title, l.name
            FROM tasks t JOIN lists l ON l.id=t.list_id JOIN boards b ON b.id=l.board_id
            JOIN workspace_members wm ON wm.workspace_id=b.workspace_id
+           JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id AND bm.role IN ('admin','member')
           WHERE t.id=$1 AND wm.user_id=$2",
     )
     .bind(task_id)
@@ -776,7 +802,9 @@ async fn delete_task(
 ) -> ApiResult<StatusCode> {
     let mut tx = state.db.begin().await.map_err(|cause| internal_error(cause, "Could not begin task deletion"))?;
     let existing: Option<(Uuid, Uuid, Uuid, String)> = sqlx::query_as(
-        "SELECT b.workspace_id, b.id, t.list_id, t.title FROM tasks t          JOIN lists l ON l.id = t.list_id JOIN boards b ON b.id = l.board_id          JOIN workspace_members wm ON wm.workspace_id = b.workspace_id          WHERE t.id = $1 AND wm.user_id = $2",
+        "SELECT b.workspace_id, b.id, t.list_id, t.title FROM tasks t          JOIN lists l ON l.id = t.list_id JOIN boards b ON b.id = l.board_id          JOIN workspace_members wm ON wm.workspace_id = b.workspace_id
+          JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id AND bm.role IN ('admin','member')
+          WHERE t.id = $1 AND wm.user_id = $2",
     )
     .bind(task_id)
     .bind(user_id)
@@ -819,7 +847,9 @@ async fn add_comment(
 
     let mut tx = state.db.begin().await.map_err(|cause| internal_error(cause, "Could not begin comment"))?;
     let scope: Option<(Uuid, Uuid)> = sqlx::query_as(
-        "SELECT b.workspace_id, b.id FROM tasks t JOIN lists l ON l.id = t.list_id          JOIN boards b ON b.id = l.board_id          JOIN workspace_members wm ON wm.workspace_id = b.workspace_id          WHERE t.id = $1 AND wm.user_id = $2",
+        "SELECT b.workspace_id, b.id FROM tasks t JOIN lists l ON l.id = t.list_id          JOIN boards b ON b.id = l.board_id          JOIN workspace_members wm ON wm.workspace_id = b.workspace_id
+          JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id AND bm.role IN ('admin','member')
+          WHERE t.id = $1 AND wm.user_id = $2",
     )
     .bind(task_id)
     .bind(user_id)
@@ -895,6 +925,7 @@ async fn move_task(
         "SELECT t.list_id, l.board_id, b.workspace_id, l.name, t.title
            FROM tasks t JOIN lists l ON l.id=t.list_id JOIN boards b ON b.id=l.board_id
            JOIN workspace_members wm ON wm.workspace_id=b.workspace_id
+           JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id AND bm.role IN ('admin','member')
           WHERE t.id=$1 AND wm.user_id=$2",
     )
     .bind(task_id)
