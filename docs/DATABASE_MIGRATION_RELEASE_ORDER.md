@@ -49,6 +49,8 @@ Apply migration 0014 only with the matching application binary after the Track A
 
 ## Rollback
 
-Roll back the application to the bridge release, not to a pre-bridge binary. The bridge runner ignores the later migration version while still allowing the database to retain its additive schema and database guard. Do not manually delete migration-history rows or drop the trigger/column as part of an application rollback.
+For migrations 0009–0013, roll back only to an application version that includes the SQLx compatibility bridge, not to a pre-bridge binary. The bridge runner tolerates later additive schema while preserving already-applied database guards. Do not manually delete migration-history rows or drop triggers/columns as part of an application rollback.
+
+**After migration 0014, do not roll back to an authentication binary that does not enforce `auth_sessions`.** Such a binary can verify the JWT signature but will ignore the `jti` session record and therefore cannot enforce logout revocation. Keep a known-good session-aware build as the rollback target. In an emergency where a pre-0014 binary must be used, rotate `JWT_SECRET` before sending traffic to it (which invalidates all existing JWTs), require every user to sign in again, and treat revocation enforcement as unavailable until the session-aware release is restored. Do not run a mixed fleet where only some instances enforce revocation.
 
 If a later change needs a destructive schema contraction, ship it only after the rollback window and older binary support have deliberately ended.
