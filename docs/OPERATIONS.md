@@ -1,6 +1,6 @@
 # CampusForge Teams — Storage and Notification Operations
 
-This guide covers the configurable file storage adapter and optional transactional email delivery added to the collaboration-suite branch. These services are server-side integrations. Do not add their secrets to Vite variables, commit them, or expose them to the browser.
+This guide covers the merged file-storage adapter, transactional email delivery, shared authentication rate limiting, and the Track A server-side session-hardening change. These services are server-side integrations. Do not add their secrets to Vite variables, commit them, or expose them to the browser.
 
 ## 1. File storage
 
@@ -113,7 +113,7 @@ Set `CAMPUSFORGE_ENV=production` only after all production dependencies below ar
 
 This is intentionally fail-closed: do not enable production mode on the current preview service until the S3 bucket/credentials and scanner are provisioned and tested. Configure the production API and a staging API separately.
 
-Before public traffic, also configure an ingress/WAF rate limit for login, OAuth start/callback, and invitation endpoints. The application currently does not provide a shared distributed per-IP rate limiter; do not rely on a process-local limiter when running multiple instances. Ensure the ingress overwrites client-IP forwarding headers and never trusts user-supplied values.
+The API now enforces PostgreSQL-backed fixed-window limits shared across instances: password login is limited to 30 attempts per client IP per 15 minutes and 10 attempts per normalized account email per 15 minutes; OAuth initiation is limited to 30 attempts per client IP per 10 minutes. If PostgreSQL cannot enforce a limit, the affected sign-in action fails closed. This does not replace ingress/WAF protection for OAuth callbacks, invitations, file uploads, or other public endpoints. Before public traffic, configure a trusted edge rate limit, ensure the ingress overwrites client-IP forwarding headers, and ensure the API trusts only headers supplied by that ingress (never client-supplied values).
 
 ### ClamAV scanner configuration
 
@@ -139,3 +139,17 @@ When the require-scan flag is false and no scanner is configured, uploaded files
 
 Before public launch, test clean and infected samples, scanner unavailability, timeouts, quotas during concurrent uploads, interrupted uploads, deletion retries, S3 object lifecycle and restore behavior.
 
+
+
+## 7. Authentication session revocation
+
+The Track A finalization branch introduces migration `0014_revocable_auth_sessions.sql`. When that branch is released:
+
+- Password and OAuth sign-in issue a random session identifier in the JWT `jti` claim and insert the corresponding session ID, user ID, and expiry into PostgreSQL. The raw JWT is not stored.
+- Protected HTTP endpoints require a matching, unexpired, non-revoked row in `auth_sessions`.
+- Logout revokes the current session in PostgreSQL before clearing the browser's HttpOnly cookie.
+- WebSocket handshakes check session activity, and connected sockets re-check the session during their 30-second presence heartbeat. A revoked session is disconnected on the next heartbeat.
+- A scheduled cleanup removes expired/revoked session records after a seven-day retention buffer.
+- Tokens issued by the pre-0014 application do not carry a session ID and will require a fresh sign-in after rollout. Plan that re-authentication as part of the release notice.
+
+Do not apply migration 0014 to a production database until the matching application release has passed CI and its migration rollout/rollback plan is approved. The current Render preview is not an appropriate production database.
