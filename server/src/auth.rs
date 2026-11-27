@@ -558,12 +558,30 @@ async fn logout(
     axum::extract::State(state): axum::extract::State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
-    let token = session_or_bearer_token_from_headers(&headers);
-    if !matches!(token.as_ref(), Some((_, false))) && !frontend_origin_matches(&headers) {
+    let bearer_token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+    let cookie_token = session_token_from_headers(&headers);
+
+    // A request may carry two distinct sessions. Revoke both before clearing the
+    // cookie; a bad bearer must never suppress revocation of a valid cookie.
+    let valid_bearer = bearer_token
+        .and_then(|token| verify_session_token(token, &state.jwt_secret).ok())
+        .is_some();
+    if !valid_bearer && !frontend_origin_matches(&headers) {
         return Err(StatusCode::FORBIDDEN);
     }
 
-    if let Some((token, _)) = token {
+    let mut tokens = Vec::new();
+    if let Some(token) = bearer_token { tokens.push(token.to_owned()); }
+    if let Some(token) = cookie_token {
+        if !tokens.iter().any(|existing| existing == &token) {
+            tokens.push(token);
+        }
+    }
+
+    for token in tokens {
         if let Ok((user_id, _, session_id)) = verify_session_token(&token, &state.jwt_secret) {
             sqlx::query(
                 "UPDATE auth_sessions
@@ -584,14 +602,6 @@ async fn logout(
     let mut response = StatusCode::NO_CONTENT.into_response();
     response.headers_mut().append(header::SET_COOKIE, clear_session_cookie_header());
     Ok(response)
-}
-
-/// Public authentication endpoints; OAuth routes are merged by the application router.
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/register", post(register))
-        .route("/login", post(login))
-        .route("/logout", post(logout))
 }
 
 #[cfg(test)]
