@@ -165,6 +165,55 @@ struct FileContext {
     scan_status: String,
 }
 
+async fn load_authorized_file_metadata(
+    state: &AppState,
+    user_id: Uuid,
+    workspace_id: Uuid,
+    requested_board_id: Option<Uuid>,
+    file_id: Uuid,
+) -> Result<Option<FileContext>, sqlx::Error> {
+    sqlx::query_as::<_, FileContext>(
+        "SELECT wf.id, COALESCE(b.name, 'Workspace') AS board_name,
+                wf.original_name, wf.storage_key, wf.media_type, wf.size_bytes,
+                wf.checksum_sha256, wf.scan_status
+           FROM workspace_files wf
+           LEFT JOIN tasks ft ON ft.id = wf.task_id
+           LEFT JOIN lists fl ON fl.id = ft.list_id
+           LEFT JOIN boards b ON b.id = COALESCE(wf.board_id, fl.board_id)
+                              AND b.workspace_id = wf.workspace_id
+          WHERE wf.id = $1
+            AND (COALESCE(wf.board_id, fl.board_id) IS NULL OR b.id IS NOT NULL)
+            AND wf.workspace_id = $2
+            AND wf.is_deleting = FALSE
+            AND ($4::uuid IS NULL OR COALESCE(wf.board_id, fl.board_id) IS NULL
+                 OR COALESCE(wf.board_id, fl.board_id) = $4)
+            AND EXISTS (SELECT 1 FROM workspace_members workspace_member
+                         WHERE workspace_member.workspace_id = wf.workspace_id
+                           AND workspace_member.user_id = $3)
+            AND (
+              COALESCE(wf.board_id, fl.board_id) IS NULL
+              OR EXISTS (
+                SELECT 1 FROM board_members bm
+                 WHERE bm.board_id = COALESCE(wf.board_id, fl.board_id)
+                   AND bm.user_id = $3
+              )
+              OR EXISTS (
+                SELECT 1 FROM workspace_members wm
+                 WHERE wm.workspace_id = wf.workspace_id
+                   AND wm.user_id = $3
+                   AND wm.role IN ('owner', 'admin')
+              )
+            )"
+    )
+    .bind(file_id)
+    .bind(workspace_id)
+    .bind(user_id)
+    .bind(requested_board_id)
+    .fetch_optional(&state.db)
+    .await
+}
+
+
 #[derive(Debug, Serialize)]
 struct AssistantSource {
     reference: String,
@@ -669,44 +718,9 @@ async fn load_authorized_context(
         if !matches!(mode, AssistantMode::FileSummary) {
             return Err(fail(StatusCode::BAD_REQUEST, "File context is only available in file-summary mode"));
         }
-        let file = sqlx::query_as::<_, FileContext>(
-            "SELECT wf.id, COALESCE(b.name, 'Workspace') AS board_name,
-                    wf.original_name, wf.storage_key, wf.media_type, wf.size_bytes,
-                    wf.checksum_sha256, wf.scan_status
-               FROM workspace_files wf
-               LEFT JOIN tasks ft ON ft.id = wf.task_id
-               LEFT JOIN lists fl ON fl.id = ft.list_id
-               LEFT JOIN boards b ON b.id = COALESCE(wf.board_id, fl.board_id)
-                                  AND b.workspace_id = wf.workspace_id
-              WHERE wf.id = $1
-                AND (COALESCE(wf.board_id, fl.board_id) IS NULL OR b.id IS NOT NULL)
-                AND wf.workspace_id = $2
-                AND wf.is_deleting = FALSE
-                AND ($4::uuid IS NULL OR COALESCE(wf.board_id, fl.board_id) IS NULL
-                     OR COALESCE(wf.board_id, fl.board_id) = $4)
-                AND EXISTS (SELECT 1 FROM workspace_members workspace_member
-                             WHERE workspace_member.workspace_id = wf.workspace_id
-                               AND workspace_member.user_id = $3)
-                AND (
-                  COALESCE(wf.board_id, fl.board_id) IS NULL
-                  OR EXISTS (
-                    SELECT 1 FROM board_members bm
-                     WHERE bm.board_id = COALESCE(wf.board_id, fl.board_id)
-                       AND bm.user_id = $3
-                  )
-                  OR EXISTS (
-                    SELECT 1 FROM workspace_members wm
-                     WHERE wm.workspace_id = wf.workspace_id
-                       AND wm.user_id = $3
-                       AND wm.role IN ('owner', 'admin')
-                  )
-                )"
+        let file = load_authorized_file_metadata(
+            state, user_id, workspace_id, requested_board_id, file_id,
         )
-        .bind(file_id)
-        .bind(workspace_id)
-        .bind(user_id)
-        .bind(requested_board_id)
-        .fetch_optional(&state.db)
         .await
         .map_err(|error| {
             tracing::error!(%error, "AI file context lookup failed");
@@ -2373,180 +2387,85 @@ mod authorization_integration_tests {
             .await?;
         }
 
-        // Board/task reads: a regular member sees only their explicit board; an
-        // owner/admin sees all boards in their workspace; another workspace is isolated.
-        let task_count = |workspace_id: Uuid, user_id: Uuid| {
-            let pool = pool.clone();
-            async move {
-            sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*)::bigint
-                   FROM tasks t
-                   JOIN lists l ON l.id = t.list_id
-                   JOIN boards b ON b.id = l.board_id
-                  WHERE b.workspace_id = $1
-                    AND EXISTS (SELECT 1 FROM workspace_members wm
-                                 WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2)
-                    AND (
-                      EXISTS (SELECT 1 FROM board_members bm WHERE bm.board_id = b.id AND bm.user_id = $2)
-                      OR EXISTS (SELECT 1 FROM workspace_members wm
-                                  WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2
-                                    AND wm.role IN ('owner', 'admin'))
-                    )",
-            )
-            .bind(workspace_id)
-            .bind(user_id)
-            .fetch_one(&pool)
-                .await
-            }
-        };
-        assert_eq!(task_count(workspace_one, member_one).await?, 1);
-        assert_eq!(task_count(workspace_one, owner_one).await?, 2);
-        assert_eq!(task_count(workspace_one, owner_two).await?, 0);
+        // Exercise the same production context loader used by the assistant request handler.
+        let storage = crate::storage::StorageService::from_env()
+            .await
+            .expect("test local storage should initialize");
+        let app_state = AppState::new(
+            pool.clone(),
+            "test-only-ai-context-signing-secret".to_string(),
+            storage,
+        );
 
-        // The meeting-summary and chat-summary predicates permit workspace-level
-        // records but restrict board-linked records to the caller's board role.
-        let meeting_count = |workspace_id: Uuid, board_id: Option<Uuid>, user_id: Uuid| {
-            let pool = pool.clone();
-            async move {
-            sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*)::bigint
-                   FROM meeting_notes mn
-                   LEFT JOIN boards b ON b.id = mn.board_id AND b.workspace_id = mn.workspace_id
-                  WHERE mn.workspace_id = $1
-                    AND EXISTS (SELECT 1 FROM workspace_members wm
-                                 WHERE wm.workspace_id = mn.workspace_id AND wm.user_id = $3)
-                    AND ($2::uuid IS NULL OR mn.board_id IS NULL OR mn.board_id = $2)
-                    AND (mn.board_id IS NULL OR b.id IS NOT NULL)
-                    AND (
-                      mn.board_id IS NULL
-                      OR EXISTS (SELECT 1 FROM board_members bm WHERE bm.board_id = mn.board_id AND bm.user_id = $3)
-                      OR EXISTS (SELECT 1 FROM workspace_members wm
-                                  WHERE wm.workspace_id = mn.workspace_id AND wm.user_id = $3
-                                    AND wm.role IN ('owner', 'admin'))
-                    )",
-            )
-            .bind(workspace_id)
-            .bind(board_id)
-            .bind(user_id)
-            .fetch_one(&pool)
-                .await
-            }
-        };
-        let chat_count = |workspace_id: Uuid, board_id: Option<Uuid>, user_id: Uuid| {
-            let pool = pool.clone();
-            async move {
-            sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*)::bigint
-                   FROM chat_messages cm
-                   LEFT JOIN boards b ON b.id = cm.board_id AND b.workspace_id = cm.workspace_id
-                  WHERE cm.workspace_id = $1
-                    AND cm.conversation_id IS NULL
-                    AND cm.deleted_at IS NULL
-                    AND EXISTS (SELECT 1 FROM workspace_members wm
-                                 WHERE wm.workspace_id = cm.workspace_id AND wm.user_id = $3)
-                    AND ($2::uuid IS NULL OR cm.board_id IS NULL OR cm.board_id = $2)
-                    AND (cm.board_id IS NULL OR b.id IS NOT NULL)
-                    AND (
-                      cm.board_id IS NULL
-                      OR EXISTS (SELECT 1 FROM board_members bm WHERE bm.board_id = cm.board_id AND bm.user_id = $3)
-                      OR EXISTS (SELECT 1 FROM workspace_members wm
-                                  WHERE wm.workspace_id = cm.workspace_id AND wm.user_id = $3
-                                    AND wm.role IN ('owner', 'admin'))
-                    )",
-            )
-            .bind(workspace_id)
-            .bind(board_id)
-            .bind(user_id)
-            .fetch_one(&pool)
-                .await
-            }
-        };
-        assert_eq!(meeting_count(workspace_one, Some(board_one_a), member_one).await?, 2);
-        assert_eq!(meeting_count(workspace_one, None, member_one).await?, 2);
-        assert_eq!(meeting_count(workspace_one, None, owner_one).await?, 3);
-        assert_eq!(meeting_count(workspace_one, None, owner_two).await?, 0);
+        let (member_context, _) = load_authorized_context(
+            &app_state, member_one, workspace_one, None, AssistantMode::Ask, None,
+        ).await.expect("member context should load");
+        let (owner_context, _) = load_authorized_context(
+            &app_state, owner_one, workspace_one, None, AssistantMode::Ask, None,
+        ).await.expect("workspace owner context should load");
+        let (outside_context, _) = load_authorized_context(
+            &app_state, owner_two, workspace_one, None, AssistantMode::Ask, None,
+        ).await.expect("unrelated workspace should return an empty context");
+        assert_eq!(member_context["boards"].as_array().unwrap().len(), 1);
+        assert_eq!(member_context["tasks"].as_array().unwrap().len(), 1);
+        assert_eq!(owner_context["boards"].as_array().unwrap().len(), 2);
+        assert_eq!(owner_context["tasks"].as_array().unwrap().len(), 2);
+        assert_eq!(outside_context["boards"].as_array().unwrap().len(), 0);
+        assert_eq!(outside_context["tasks"].as_array().unwrap().len(), 0);
 
-        let meeting_action_count = |workspace_id: Uuid, note_id: Uuid, user_id: Uuid| {
-            let pool = pool.clone();
-            async move {
-                sqlx::query_scalar::<_, i64>(
-                    "SELECT COUNT(*)::bigint
-                       FROM meeting_note_action_items mai
-                       JOIN meeting_notes mn ON mn.id = mai.meeting_note_id
-                                             AND mn.workspace_id = mai.workspace_id
-                       LEFT JOIN boards b ON b.id = mn.board_id
-                                         AND b.workspace_id = mn.workspace_id
-                      WHERE mai.workspace_id = $1
-                        AND mai.meeting_note_id = $2
-                        AND EXISTS (SELECT 1 FROM workspace_members wm
-                                     WHERE wm.workspace_id = mai.workspace_id AND wm.user_id = $3)
-                        AND (mn.board_id IS NULL OR b.id IS NOT NULL)
-                        AND (
-                          mn.board_id IS NULL
-                          OR EXISTS (SELECT 1 FROM board_members bm
-                                      WHERE bm.board_id = mn.board_id AND bm.user_id = $3)
-                          OR EXISTS (SELECT 1 FROM workspace_members wm
-                                      WHERE wm.workspace_id = mai.workspace_id AND wm.user_id = $3
-                                        AND wm.role IN ('owner', 'admin'))
-                        )",
-                )
-                .bind(workspace_id)
-                .bind(note_id)
-                .bind(user_id)
-                .fetch_one(&pool)
-                .await
-            }
-        };
-        assert_eq!(meeting_action_count(workspace_one, note_one_a, member_one).await?, 1);
-        assert_eq!(meeting_action_count(workspace_one, note_one_b, member_one).await?, 0);
-        assert_eq!(meeting_action_count(workspace_one, note_one_a, owner_two).await?, 0);
+        // A caller from another workspace cannot select an otherwise valid board UUID.
+        let cross_workspace_board = load_authorized_context(
+            &app_state, owner_two, workspace_one, Some(board_one_a), AssistantMode::Ask, None,
+        ).await;
+        assert!(matches!(cross_workspace_board, Err((StatusCode::NOT_FOUND, _))));
 
-        assert_eq!(chat_count(workspace_one, Some(board_one_a), member_one).await?, 2);
-        assert_eq!(chat_count(workspace_one, None, member_one).await?, 2);
-        assert_eq!(chat_count(workspace_one, None, owner_one).await?, 3);
-        assert_eq!(chat_count(workspace_one, None, owner_two).await?, 0);
+        // The real meeting-summary query returns workspace notes plus only accessible board notes.
+        let (member_meetings, _) = load_authorized_context(
+            &app_state, member_one, workspace_one, None, AssistantMode::MeetingSummary, None,
+        ).await.expect("member meeting context should load");
+        let (owner_meetings, _) = load_authorized_context(
+            &app_state, owner_one, workspace_one, None, AssistantMode::MeetingSummary, None,
+        ).await.expect("owner meeting context should load");
+        let (outside_meetings, _) = load_authorized_context(
+            &app_state, owner_two, workspace_one, None, AssistantMode::MeetingSummary, None,
+        ).await.expect("outside meeting context should be empty");
+        assert_eq!(member_meetings["meeting_notes"].as_array().unwrap().len(), 2);
+        assert_eq!(owner_meetings["meeting_notes"].as_array().unwrap().len(), 3);
+        assert_eq!(outside_meetings["meeting_notes"].as_array().unwrap().len(), 0);
+        let member_actions: usize = member_meetings["meeting_notes"].as_array().unwrap()
+            .iter().map(|note| note["structured_action_items"].as_array().unwrap().len()).sum();
+        assert_eq!(member_actions, 1, "member sees action items only in their board note");
 
-        // File context must use the same workspace and board permissions.
-        let file_access = |file_id: Uuid, workspace_id: Uuid, user_id: Uuid| {
-            let pool = pool.clone();
-            async move {
-            sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS (
-                    SELECT 1
-                      FROM workspace_files wf
-                      LEFT JOIN tasks ft ON ft.id = wf.task_id
-                      LEFT JOIN lists fl ON fl.id = ft.list_id
-                      LEFT JOIN boards b ON b.id = COALESCE(wf.board_id, fl.board_id)
-                                  AND b.workspace_id = wf.workspace_id
-                     WHERE wf.id = $1
-                       AND (COALESCE(wf.board_id, fl.board_id) IS NULL OR b.id IS NOT NULL)
-                       AND wf.workspace_id = $2
-                       AND wf.is_deleting = FALSE
-                       AND EXISTS (SELECT 1 FROM workspace_members wm
-                                    WHERE wm.workspace_id = wf.workspace_id AND wm.user_id = $3)
-                       AND (
-                         COALESCE(wf.board_id, fl.board_id) IS NULL
-                         OR EXISTS (SELECT 1 FROM board_members bm
-                                     WHERE bm.board_id = COALESCE(wf.board_id, fl.board_id)
-                                       AND bm.user_id = $3)
-                         OR EXISTS (SELECT 1 FROM workspace_members wm
-                                     WHERE wm.workspace_id = wf.workspace_id AND wm.user_id = $3
-                                       AND wm.role IN ('owner', 'admin'))
-                       )
-                )",
-            )
-            .bind(file_id)
-            .bind(workspace_id)
-            .bind(user_id)
-            .fetch_one(&pool)
-                .await
-            }
-        };
-        assert!(file_access(file_one_a, workspace_one, member_one).await?);
-        assert!(!file_access(file_one_b, workspace_one, member_one).await?);
-        assert!(file_access(file_one_workspace, workspace_one, member_one).await?);
-        assert!(file_access(file_one_b, workspace_one, owner_one).await?);
-        assert!(!file_access(file_two, workspace_one, owner_one).await?);
+        // The real chat-summary query excludes direct messages/deleted messages and applies board scope.
+        let (member_chat, _) = load_authorized_context(
+            &app_state, member_one, workspace_one, None, AssistantMode::ChatSummary, None,
+        ).await.expect("member chat context should load");
+        let (owner_chat, _) = load_authorized_context(
+            &app_state, owner_one, workspace_one, None, AssistantMode::ChatSummary, None,
+        ).await.expect("owner chat context should load");
+        let (outside_chat, _) = load_authorized_context(
+            &app_state, owner_two, workspace_one, None, AssistantMode::ChatSummary, None,
+        ).await.expect("outside chat context should be empty");
+        assert_eq!(member_chat["shared_messages"].as_array().unwrap().len(), 2);
+        assert_eq!(owner_chat["shared_messages"].as_array().unwrap().len(), 3);
+        assert_eq!(outside_chat["shared_messages"].as_array().unwrap().len(), 0);
+
+        // The exact production file-authorization query is exposed as a helper and tested directly.
+        assert!(load_authorized_file_metadata(
+            &app_state, member_one, workspace_one, None, file_one_a,
+        ).await.expect("file access query should succeed").is_some());
+        assert!(load_authorized_file_metadata(
+            &app_state, member_one, workspace_one, None, file_one_b,
+        ).await.expect("file access query should succeed").is_none());
+        assert!(load_authorized_file_metadata(
+            &app_state, member_one, workspace_one, None, file_one_workspace,
+        ).await.expect("file access query should succeed").is_some());
+        assert!(load_authorized_file_metadata(
+            &app_state, owner_one, workspace_one, None, file_one_b,
+        ).await.expect("file access query should succeed").is_some());
+        assert!(load_authorized_file_metadata(
+            &app_state, owner_one, workspace_one, None, file_two,
+        ).await.expect("file access query should succeed").is_none());
 
         Ok(())
     }
