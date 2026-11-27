@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::FromRow;
-use std::{env, sync::OnceLock, time::Duration as StdDuration};
+use std::{env, net::{IpAddr, SocketAddr}, sync::OnceLock, time::Duration as StdDuration};
 use uuid::Uuid;
 
 use crate::{auth::WorkspaceUser, state::AppState};
@@ -144,6 +144,62 @@ fn env_enabled(name: &str) -> bool {
 
 /// Restrict provider URLs to HTTPS. Plain HTTP is allowed only for loopback
 /// development endpoints. Redirects are disabled on the HTTP client as well.
+fn is_forbidden_provider_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let octets = v4.octets();
+            v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_multicast()
+                || v4.is_documentation()
+                || octets[0] == 0
+                || (octets[0] == 100 && (octets[1] & 0b1100_0000) == 64)
+                || (octets[0] == 192 && octets[1] == 0 && octets[2] == 0)
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+                || v6.to_ipv4_mapped().is_some_and(|v4| is_forbidden_provider_ip(IpAddr::V4(v4)))
+        }
+    }
+}
+
+async fn resolve_provider_addresses(host: &str, port: u16) -> Result<Vec<SocketAddr>, ()> {
+    let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|_| ())?
+        .collect();
+    if addresses.is_empty() {
+        return Err(());
+    }
+
+    let is_loopback_name = host.eq_ignore_ascii_case("localhost");
+    let is_loopback_literal = host.parse::<IpAddr>().map(|ip| ip.is_loopback()).unwrap_or(false);
+    let allow_loopback = is_loopback_name || is_loopback_literal;
+    let is_production = env::var("CAMPUSFORGE_ENV")
+        .ok()
+        .is_some_and(|value| value.eq_ignore_ascii_case("production"));
+
+    if (allow_loopback && is_production)
+        || addresses.iter().any(|address| {
+            if allow_loopback {
+                !address.ip().is_loopback()
+            } else {
+                is_forbidden_provider_ip(address.ip())
+            }
+        })
+    {
+        return Err(());
+    }
+    Ok(addresses)
+}
+
 fn completion_url(base_url: &str) -> Option<Url> {
     let mut url = Url::parse(base_url.trim()).ok()?;
     let host = url.host_str()?;
@@ -228,7 +284,7 @@ fn privacy_patterns() -> &'static [(Regex, &'static str)] {
     static PATTERNS: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
     PATTERNS.get_or_init(|| vec![
         (Regex::new(r"(?s)-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----.*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----").expect("valid private-key pattern"), "[REDACTED_PRIVATE_KEY]"),
-        (Regex::new(r"(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?)://[^\s""'<>]+").expect("valid database URL pattern"), "[REDACTED_DATABASE_URL]"),
+        (Regex::new(r#"(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?)://[^\s"'<>]+"#).expect("valid database URL pattern"), "[REDACTED_DATABASE_URL]"),
         (Regex::new(r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]{16,}={0,2}").expect("valid bearer-token pattern"), "[REDACTED_BEARER_TOKEN]"),
         (Regex::new(r"(?i)\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b").expect("valid API-key pattern"), "[REDACTED_API_KEY]"),
         (Regex::new(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b").expect("valid JWT pattern"), "[REDACTED_TOKEN]"),
@@ -514,9 +570,18 @@ async fn assistant(
         ),
     }));
 
+    // Resolve once, reject private/metadata destinations, then pin the HTTP
+    // client to the validated addresses to prevent DNS rebinding between check and use.
+    let provider_host = config.endpoint.host_str()
+        .ok_or_else(|| fail(StatusCode::SERVICE_UNAVAILABLE, "AI provider host is invalid"))?;
+    let provider_port = config.endpoint.port_or_known_default().unwrap_or(443);
+    let resolved_addresses = resolve_provider_addresses(provider_host, provider_port).await
+        .map_err(|_| fail(StatusCode::SERVICE_UNAVAILABLE, "AI provider destination is not permitted"))?;
+
     let client = Client::builder()
         .timeout(StdDuration::from_secs(45))
         .redirect(Policy::none())
+        .resolve_to_addrs(provider_host, &resolved_addresses)
         .build()
         .map_err(|error| {
             tracing::error!(%error, "Could not initialize AI provider client");
@@ -1061,6 +1126,16 @@ pub fn router() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_destination_filter_blocks_private_metadata_and_loopback() {
+        assert!(is_forbidden_provider_ip("10.0.0.8".parse().unwrap()));
+        assert!(is_forbidden_provider_ip("169.254.169.254".parse().unwrap()));
+        assert!(is_forbidden_provider_ip("192.168.1.10".parse().unwrap()));
+        assert!(is_forbidden_provider_ip("::1".parse().unwrap()));
+        assert!(!is_forbidden_provider_ip("1.1.1.1".parse().unwrap()));
+        assert!(!is_forbidden_provider_ip("2606:4700:4700::1111".parse().unwrap()));
+    }
 
     #[test]
     fn privacy_shield_redacts_credentials_and_personal_email() {
