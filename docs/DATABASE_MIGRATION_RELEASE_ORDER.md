@@ -57,3 +57,6 @@ If a later change needs a destructive schema contraction, ship it only after the
 
 
 The connected Neon `campusforge_app` database currently records successful SQLx migration versions 1–14. Version 14 is `ai_action_proposals`; it must not be renamed or replaced. Session revocation is version 15. Apply 0015 only with a matching application release after fresh integrated CI, database backup verification, and a restore/rollback plan. The existing legacy `neondb` database is separate and was preserved.
+
+
+SQLx calculates migration checksums with SHA-384 (48 bytes). The Neon `campusforge_app` journal was initially populated with 32-byte SHA-256 digests, which caused the API's `MigrateError::VersionMismatch(1)` at startup. The journal entries 0001–0014 were corrected using the exact SQL source and SQLx descriptions; migration files and application data were not modified. Verify 48-byte checksums before applying migration 0015.
