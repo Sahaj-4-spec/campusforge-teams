@@ -110,7 +110,7 @@ The existing application remains the system of record:
 - `GET /api/ai/status` — authenticated workspace status and supported modes.
 - `POST /api/ai/assistant` — authenticated read-only request.
 - `GET /api/ai/insights` — authenticated, provider-independent Project Pulse dashboard data. Accepts an optional `board_id` query parameter and applies the same board-member or workspace owner/admin scope as assistant context reads.
-- `GET /api/ai/files` — authenticated, permission-filtered list of clean, supported text files (max 128 KB) that are eligible for AI document summaries. Accepts an optional `board_id` and returns only file identifiers and display metadata, never storage keys or object URLs.
+- `GET /api/ai/files` — authenticated, permission-filtered list of clean, supported text files (max 128 KB) that are eligible for AI document summaries. Accepts an optional `board_id` and returns only file identifiers and display metadata, never storage keys or object URLs. It is limited to 30 requests per user per minute and 300 per workspace per hour.
 
 Example request:
 
