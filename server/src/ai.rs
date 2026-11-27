@@ -1672,7 +1672,12 @@ async fn project_pulse(
             blocked_tasks: counts.blocked,
         });
     }
-    board_health.sort_by(|a, b| a.health_score.unwrap_or(0).cmp(&b.health_score.unwrap_or(0)).then_with(|| a.name.cmp(&b.name)));
+    // Keep incomplete boards after scored boards; missing coverage is not a zero health score.
+    board_health.sort_by(|a, b| {
+        a.health_score.unwrap_or(u8::MAX)
+            .cmp(&b.health_score.unwrap_or(u8::MAX))
+            .then_with(|| a.name.cmp(&b.name))
+    });
 
     let mut focus_queue = Vec::new();
     for task in &tasks {
