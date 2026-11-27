@@ -29,7 +29,7 @@ The AI assistant remains disabled by default. Provider calls require an explicit
 ### Database
 
 - Neon project: `neon-rose-book`; branch: `main`; application database: `campusforge_app`.
-- SQLx journal versions 0001–0014 were verified successful; version 14 is `ai_action_proposals`.
+- SQLx journal versions 0001–0014 were verified successful; version 14 is `ai_action_proposals`. Candidate migrations 0015 (session revocation) and 0016 (board-scoped notifications) are pending.
 - AI proposal and audit tables are present.
 - The session-revocation table `auth_sessions` is not yet present. Candidate migration `0015_revocable_auth_sessions.sql` adds it; do not rename or overwrite version 14.
 - The legacy `neondb` database was preserved. The new `campusforge_app` database contained no user/proposal rows at the last check.
@@ -50,7 +50,7 @@ SQLx stores SHA-384 migration checksums (48 bytes). The initial manual journal h
 1. Keep `0014_ai_action_proposals.sql` unchanged; it is already recorded in Neon SQLx migration history.
 2. Run the candidate through integrated CI and review.
 3. Take/verify a database backup and run the session migration in a controlled release window.
-4. Apply `0015_revocable_auth_sessions.sql` with the matching session-aware API binary.
+4. Apply `0015_revocable_auth_sessions.sql`, then `0016_notification_board_scope.sql`, with the matching integrated API binary.
 5. Verify password login, all configured OAuth providers, Bearer and cookie session revocation, WebSocket closure after revocation, and cleanup behavior.
 6. Do not roll back to a binary that ignores `auth_sessions` after migration 0015 has been applied. Follow the rollback procedure in [Database migration release order](DATABASE_MIGRATION_RELEASE_ORDER.md).
 
@@ -65,6 +65,7 @@ JWTs issued before session migration 0015 do not contain `jti`; users will need 
 | Integrated CI/security | **Pending** | Fresh checks on the integrated candidate, including frontend tests/build, Rust checks/tests, migration smoke test, dependency audit and CodeQL. |
 | Neon schema 0001–0014 | **Verified** | SQLx journal success and AI proposal tables present. |
 | Neon migration 0015 | **Pending** | Apply after candidate checks and backup/restore sign-off; verify `auth_sessions`. |
+| Neon migration 0016 | **Pending** | Apply immediately after 0015; verify notification board scope and index. |
 | Database backups/restore | **Not verified** | Configure retention/PITR and complete a restore into an isolated environment. |
 | Google/GitHub/Discord OAuth | **Not configured/verified** | Supply client IDs/secrets, register exact HTTPS callback URLs, and pass verified-email sign-up tests for each provider. |
 | Private object storage | **Startup I/O verified; policy review pending** | The surviving preview API startup log reports a private S3-compatible bucket (`campusforge-private-uploads`, `us-east-1`) and successful PUT/GET/DELETE verification. Still verify bucket ACL/IAM scope, encryption, lifecycle/versioning, backups and restoration. |
@@ -74,7 +75,7 @@ JWTs issued before session migration 0015 do not contain `jti`; users will need 
 | Two-account authorization | **Pending** | Test member/viewer/admin boundaries, board visibility, invitations, files, chat/DM isolation, comments, calendar and task mutations. |
 | Browser/mobile/accessibility | **Pending** | Test supported browsers and real mobile devices, keyboard, screen reader, focus, contrast and error/empty/loading states. |
 | Privacy and retention | **Pending** | Approve policies for personal data, files, messages, meeting notes, AI provider processing, export and deletion. |
-| Fine-grained authorization | **Enforced in candidate; acceptance pending** | Project snapshots, task mutations, advanced task actions, files, calendar, chat, meeting notes, analytics and AI proposals now check board membership/roles; viewers are read-only. Database-backed board-role tests and two-account end-to-end negative tests must pass before release. Workspace-level channels remain workspace-scoped. |
+| Fine-grained authorization | **Enforced in candidate; acceptance pending** | Project snapshots, task mutations, advanced task actions, files, calendar, chat, meeting notes, analytics, AI proposals and task/board notifications check board membership/roles; viewers are read-only. Database-backed board-role tests and two-account end-to-end negative tests must pass before release. Workspace-level channels remain workspace-scoped. |
 | Account recovery/provider linking | **Not complete** | Add or document supported recovery and secure account-linking paths before broad launch. |
 | Production hosting | **Not provisioned** | Replace preview/test services with an appropriately sized production environment, domain, monitoring and operational runbooks. |
 | Production release | **Withheld** | No merge to `main`, Blueprint sync or deployment without explicit release authorization. |
@@ -88,3 +89,6 @@ JWTs issued before session migration 0015 do not contain `jti`; users will need 
 **Production release:** **Not approved / not deployed**.
 
 The candidate can be considered release-ready only after every applicable checklist item has verifiable evidence and the release owner authorizes merge/deployment. Do not describe the application as production-ready before those gates pass.
+
+
+The notification authorization change is migration 0016. Until that migration and the matching application are deployed together, do not switch the running API to a build that expects `notifications.board_id`.
