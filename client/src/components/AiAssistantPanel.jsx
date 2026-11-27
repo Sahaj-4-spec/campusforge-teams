@@ -170,7 +170,7 @@ export default function AiAssistantPanel({ onClose, boards = [], activeBoardId =
               <span className="ai-panel-subtitle"><span className={enabled ? "ai-status-dot active" : "ai-status-dot"} /> {enabled ? "Connected · Read-only mode" : "Not configured on this environment"}</span>
             </div>
           </div>
-          <button className="ai-close-button" type="button" onClick={onClose} aria-label="Close AI assistant" disabled={loading}><X size={19} /></button>
+          <button className="ai-close-button" type="button" onClick={onClose} aria-label="Close AI assistant" disabled={loading || !privacyAcknowledged}><X size={19} /></button>
         </header>
 
         <div className="ai-panel-controls">
@@ -273,7 +273,7 @@ export default function AiAssistantPanel({ onClose, boards = [], activeBoardId =
               placeholder={!enabled ? "AI is unavailable until server configuration is complete" : !privacyAcknowledged ? "Acknowledge the data-sharing notice to begin…" : "Ask about tasks, priorities, or project risks…"}
               rows={2}
               maxLength={2000}
-              disabled={!enabled || loading}
+              disabled={!enabled || !privacyAcknowledged || loading}
               aria-label="Ask the CampusForge assistant"
             />
             <button className="ai-send-button" type="button" onClick={() => submitPrompt()} disabled={!enabled || !privacyAcknowledged || loading || !prompt.trim()} aria-label="Send prompt">
