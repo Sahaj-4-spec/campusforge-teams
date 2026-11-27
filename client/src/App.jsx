@@ -726,6 +726,7 @@ export default function App() {
   useEffect(() => {
     function handleGlobalShortcut(event) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k" && isAuthenticated) {
+        if (projectPulseOpen || aiAssistantOpen) return;
         event.preventDefault();
         setCommandPaletteOpen((open) => !open);
       }
@@ -733,7 +734,7 @@ export default function App() {
     }
     window.addEventListener("keydown", handleGlobalShortcut);
     return () => window.removeEventListener("keydown", handleGlobalShortcut);
-  }, [isAuthenticated]);
+  }, [isAuthenticated, projectPulseOpen, aiAssistantOpen]);
 
   useEffect(() => {
     if (!mobileMenuOpen) return undefined;
@@ -1702,6 +1703,8 @@ export default function App() {
             if (task) {
               setProjectPulseOpen(false);
               openTask(task);
+            } else {
+              setNotice("This task is not in your current workspace snapshot. Refresh the workspace and try again.");
             }
           }}
         />
