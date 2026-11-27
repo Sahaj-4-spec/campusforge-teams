@@ -234,6 +234,7 @@ export default function AiAssistantPanel({ onClose, boards = [], activeBoardId =
                 if (nextBoardId === boardId) return;
                 conversationGeneration.current += 1;
                 setBoardId(nextBoardId);
+                setPrivacyAcknowledged(false);
                 setMessages([]);
                 setPrompt("");
                 setError("");
@@ -313,7 +314,7 @@ export default function AiAssistantPanel({ onClose, boards = [], activeBoardId =
           {enabled && (
             <label className="ai-data-consent">
               <input type="checkbox" checked={privacyAcknowledged} onChange={(event) => setPrivacyAcknowledged(event.target.checked)} />
-              <span>I understand that my prompt, recent conversation, and authorized project context will be sent to the configured AI provider. Changing projects starts a fresh conversation.</span>
+              <span>I understand that my prompt, recent conversation, and authorized project context will be sent to the configured AI provider. Changing projects starts a fresh conversation and requires a new acknowledgement.</span>
             </label>
           )}
           <div className="ai-composer-wrap">
