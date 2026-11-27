@@ -1077,6 +1077,121 @@ async fn assistant(
 }
 
 
+#[derive(Debug, Serialize, FromRow)]
+struct AiFileOption {
+    id: Uuid,
+    board_id: Option<Uuid>,
+    original_name: String,
+    media_type: String,
+    size_bytes: i64,
+}
+
+async fn ai_files_list(
+    State(state): State<AppState>,
+    WorkspaceUser(user_id, workspace_id): WorkspaceUser,
+    Query(query): Query<PulseQuery>,
+) -> ApiResult<Json<Vec<AiFileOption>>> {
+    let user_allowed = state.check_rate_limit(
+        &rate_limit_key("ai-files-user", Some(user_id), workspace_id),
+        30,
+        60,
+    ).await.map_err(|error| {
+        tracing::error!(%error, "Could not enforce AI file-list user rate limit");
+        fail(StatusCode::SERVICE_UNAVAILABLE, "AI file list is temporarily unavailable")
+    })?;
+    if !user_allowed {
+        return Err(fail(StatusCode::TOO_MANY_REQUESTS, "AI file-list refresh limit reached"));
+    }
+    let workspace_allowed = state.check_rate_limit(
+        &rate_limit_key("ai-files-workspace", None, workspace_id),
+        300,
+        3600,
+    ).await.map_err(|error| {
+        tracing::error!(%error, "Could not enforce AI file-list workspace rate limit");
+        fail(StatusCode::SERVICE_UNAVAILABLE, "AI file list is temporarily unavailable")
+    })?;
+    if !workspace_allowed {
+        return Err(fail(StatusCode::TOO_MANY_REQUESTS, "AI file-list workspace limit reached"));
+    }
+
+    if let Some(board_id) = query.board_id {
+        let allowed = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (
+                SELECT 1 FROM boards b
+                 WHERE b.id = $1 AND b.workspace_id = $2
+                   AND EXISTS (SELECT 1 FROM workspace_members wm
+                                WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $3)
+                   AND (
+                     EXISTS (SELECT 1 FROM board_members bm WHERE bm.board_id = b.id AND bm.user_id = $3)
+                     OR EXISTS (SELECT 1 FROM workspace_members wm
+                                 WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $3
+                                   AND wm.role IN ('owner', 'admin'))
+                   )
+            )"
+        )
+        .bind(board_id)
+        .bind(workspace_id)
+        .bind(user_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "AI file-list board authorization failed");
+            fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not verify file-list project access")
+        })?;
+        if !allowed {
+            return Err(fail(StatusCode::NOT_FOUND, "The selected project was not found or is not accessible"));
+        }
+    }
+
+    let files = sqlx::query_as::<_, AiFileOption>(
+        "SELECT wf.id, COALESCE(wf.board_id, fl.board_id) AS board_id,
+                wf.original_name, wf.media_type, wf.size_bytes
+           FROM workspace_files wf
+           LEFT JOIN tasks ft ON ft.id = wf.task_id
+           LEFT JOIN lists fl ON fl.id = ft.list_id
+           LEFT JOIN boards b ON b.id = COALESCE(wf.board_id, fl.board_id)
+                              AND b.workspace_id = wf.workspace_id
+          WHERE wf.workspace_id = $1
+            AND wf.is_deleting = FALSE
+            AND wf.scan_status = 'clean'
+            AND wf.size_bytes BETWEEN 1 AND 131072
+            AND wf.media_type = ANY($2::text[])
+            AND EXISTS (SELECT 1 FROM workspace_members wm
+                         WHERE wm.workspace_id = wf.workspace_id AND wm.user_id = $3)
+            AND (COALESCE(wf.board_id, fl.board_id) IS NULL OR b.id IS NOT NULL)
+            AND (
+              COALESCE(wf.board_id, fl.board_id) IS NULL
+              OR EXISTS (SELECT 1 FROM board_members bm
+                          WHERE bm.board_id = COALESCE(wf.board_id, fl.board_id)
+                            AND bm.user_id = $3)
+              OR EXISTS (SELECT 1 FROM workspace_members wm
+                          WHERE wm.workspace_id = wf.workspace_id AND wm.user_id = $3
+                            AND wm.role IN ('owner', 'admin'))
+            )
+            AND ($4::uuid IS NULL OR COALESCE(wf.board_id, fl.board_id) IS NULL
+                 OR COALESCE(wf.board_id, fl.board_id) = $4)
+          ORDER BY wf.created_at DESC
+          LIMIT 100"
+    )
+    .bind(workspace_id)
+    .bind(vec![
+        "text/plain", "text/markdown", "text/csv", "text/tab-separated-values",
+        "text/xml", "application/xml", "application/json", "application/yaml",
+        "text/yaml", "application/toml", "text/javascript", "application/javascript",
+        "text/typescript", "text/css", "text/x-python", "text/x-rust",
+    ])
+    .bind(user_id)
+    .bind(query.board_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "AI file-list lookup failed");
+        fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not load eligible project documents")
+    })?;
+
+    Ok(Json(files))
+}
+
 #[derive(Debug, Deserialize)]
 struct PulseQuery {
     board_id: Option<Uuid>,
@@ -1655,6 +1770,7 @@ pub fn router() -> Router<AppState> {
         .route("/ai/status", get(status))
         .route("/ai/assistant", post(assistant))
         .route("/ai/insights", get(project_pulse))
+        .route("/ai/files", get(ai_files_list))
 }
 
 #[cfg(test)]
