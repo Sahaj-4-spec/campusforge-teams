@@ -48,7 +48,7 @@ This branch adds database-backed session revocation:
 6. A background cleanup removes expired/revoked records after a seven-day retention buffer.
 7. The PostgreSQL migration smoke test asserts that `auth_sessions` is present.
 
-**Review state:** This branch has not yet completed its GitHub Actions validation/code review at the time this document is created. Do not call this hardening merged or released until branch CI and review pass. Existing 24-hour JWTs issued before migration 0014 lack a `jti`; after rollout, users must authenticate again.
+**Review state:** Latest GitHub Actions CI and Security workflows passed on 27 November 2026 (Rust backend check, frontend build, dependency audit, and CodeQL). Human code review and runtime session-revocation acceptance against PostgreSQL remain pending. Do not call this hardening merged or released until review and runtime acceptance pass. Existing 24-hour JWTs issued before migration 0014 lack a `jti`; after rollout, users must authenticate again.
 
 ## 4. Final acceptance checklist
 
@@ -60,7 +60,7 @@ Status labels describe what can be verified from the repository alone. “Not ve
 | Main CI/security baseline | **Passed on reviewed HEAD** | Latest recorded CI and security runs passed on 24 Nov 2026; re-run on finalization branch before merge. |
 | Session revocation | **Branch implementation pending CI/review** | Verify login, OAuth login, logout revocation, rejection of revoked sessions, WebSocket closure, and cleanup against PostgreSQL. |
 | Deployed API/database revision | **Not verified** | Record the currently running API commit and exact `_sqlx_migrations` versions before any database rollout. |
-| Durable Neon PostgreSQL | **Not verified** | Configure production connection/pooling, least-privilege credentials, region, connection limits, backups/PITR, and a successful restore drill. |
+| Dedicated CampusForge Neon PostgreSQL | **Blocked by account scope / not provisioned** | The connected Neon organization is Vercel-managed and rejected direct project creation. Its sole existing project has a different application schema (`account`, `board`, `card`, etc.) and was deliberately not reused. Provision a separate CampusForge project through the authorized Vercel-managed Neon integration/account, then configure pooled `DATABASE_URL`, least-privilege credentials, region, connection limits, backups/PITR, and a successful restore drill. |
 | OAuth provider applications | **Not verified** | Configure Google, GitHub, and Discord client IDs/secrets, exact HTTPS callbacks, consent/branding, and verified-email behavior in the real provider consoles. |
 | Private file object storage | **Not verified** | Provision the private S3-compatible bucket, encryption, least-privilege keys, lifecycle, backup, and object/database reconciliation; confirm the API's actual PUT/GET/DELETE verification. |
 | Malware scanning | **Not verified** | Run a reachable ClamAV service; enable mandatory scanning; prove clean files are available and infected/unscanned files are blocked. |
@@ -77,7 +77,7 @@ Status labels describe what can be verified from the repository alone. “Not ve
 
 ## 5. Current preview warning
 
-The README identifies the current Render preview as a test environment backed by a temporary free PostgreSQL database with a documented expiry of **22 December 2026**. It is not a production database or durability guarantee. Verify the live services and database directly before any release; files in GitHub do not prove that the hosted database has those migrations or that the running app matches source HEAD.
+The README identifies the current Render preview as a test environment backed by a temporary free PostgreSQL database with a documented expiry of **22 December 2026**. It is not a production database or durability guarantee. The only connected Neon project inspected during this review belongs to a different application, so it was left untouched; direct creation of a dedicated CampusForge project was blocked because the Neon organization is managed by Vercel. Provision the intended project through that managed integration before moving the app. Verify the live services and database directly before any release; files in GitHub do not prove that the hosted database has the required migrations or that the running app matches source HEAD.
 
 Because `render.yaml` uses commit-triggered auto-deploy from `main`, keep finalization work on its branch and do not merge it until the release is deliberately authorized. Do not change hosting resources or trigger a deployment as part of this checklist.
 
