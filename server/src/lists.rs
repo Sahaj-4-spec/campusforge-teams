@@ -78,6 +78,7 @@ async fn create_list(
     let scope: Option<(Uuid, String)> = sqlx::query_as(
         "SELECT b.workspace_id, wm.role FROM boards b
          JOIN workspace_members wm ON wm.workspace_id = b.workspace_id
+         JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id AND bm.role='admin'
          WHERE b.id = $1 AND wm.user_id = $2
          FOR UPDATE OF b",
     )
@@ -130,8 +131,7 @@ async fn update_list(
     let scope: Option<(Uuid, Uuid, String, String)> = sqlx::query_as(
         "SELECT b.workspace_id, b.id, wm.role, l.name FROM lists l
          JOIN boards b ON b.id = l.board_id
-         JOIN workspace_members wm ON wm.workspace_id = b.workspace_id
-         WHERE l.id = $1 AND wm.user_id = $2
+         update list
          FOR UPDATE OF b, l",
     )
     .bind(list_id)
