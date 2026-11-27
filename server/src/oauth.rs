@@ -496,7 +496,7 @@ fn verified_github_email(emails: &[GithubEmail]) -> Result<String, &'static str>
 }
 
 fn verified_discord_email(profile: &DiscordProfile) -> Result<String, &'static str> {
-    if profile.verified != Some(true) {
+    if profile.verified != Some(true) || profile.id.trim().is_empty() {
         return Err("Use a Discord account with a verified email address.");
     }
     let email = profile.email.as_deref()
@@ -821,6 +821,12 @@ mod tests {
             ..verified
         };
         assert!(verified_discord_email(&unverified).is_err());
+
+        let missing_subject = DiscordProfile {
+            id: "  ".to_owned(),
+            ..verified
+        };
+        assert!(verified_discord_email(&missing_subject).is_err());
 
         let unknown_verification = DiscordProfile {
             verified: None,
