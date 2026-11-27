@@ -541,9 +541,13 @@ async fn calendar_delete(
         .map_err(|error|internal(error,"Could not verify calendar delete permission"))? {
         return Err(fail(StatusCode::FORBIDDEN,"Only the event creator or a workspace admin can delete this event"));
     }
-    let result = sqlx::query("DELETE FROM calendar_events WHERE id=$1 AND workspace_id=$2")
+    let result = sqlx::query(
+        "DELETE FROM calendar_events
+          WHERE id=$1 AND workspace_id=$2 AND board_id IS NOT DISTINCT FROM $3",
+    )
         .bind(event_id)
         .bind(workspace_id)
+        .bind(board_id)
         .execute(&state.db)
         .await
         .map_err(|error| internal(error, "Could not delete calendar event"))?;
@@ -1346,10 +1350,15 @@ async fn meeting_note_delete(
     let Some((creator,board_id))=note else { return Err(fail(StatusCode::NOT_FOUND,"Meeting notes not found")); };
     if let Some(board_id)=board_id { board_write_access(&state,user_id,board_id,workspace_id).await?; }
     if creator!=user_id { return Err(fail(StatusCode::FORBIDDEN,"Only the meeting notes creator can delete them")); }
-    let result = sqlx::query("DELETE FROM meeting_notes WHERE id=$1 AND workspace_id=$2 AND created_by=$3")
+    let result = sqlx::query(
+        "DELETE FROM meeting_notes
+          WHERE id=$1 AND workspace_id=$2 AND created_by=$3
+            AND board_id IS NOT DISTINCT FROM $4",
+    )
         .bind(note_id)
         .bind(workspace_id)
         .bind(user_id)
+        .bind(board_id)
         .execute(&state.db)
         .await
         .map_err(|error| internal(error, "Could not delete meeting notes"))?;
