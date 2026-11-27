@@ -2,7 +2,7 @@
 
 **Document status:** Architecture decisions for the merged Track A non-AI implementation plus the finalization branch.  
 **Status date:** 27 November 2026.  
-**Release status:** PRs #12, #20–#21, and #23–#37 are merged into `main`. The latest recorded main CI/security workflows passed on 24 November. The hosted Render preview may lag this source code and is not a production release. The session-revocation hardening described in ADR-016 is on `track-a/final-session-hardening-docs` and awaits branch CI/review. No deployment is authorized.
+**Release status:** PRs #12, #20–#21, and #23–#37 are merged into `main`. The latest recorded main CI/security workflows passed on 24 November. The hosted Render preview may lag this source code and is not a production release. The session-revocation hardening described in ADR-016 is on `track-a/final-session-hardening-docs` and has passed branch CI/Security; independent review and runtime session acceptance remain pending. No deployment is authorized.
 
 ## 1. Product direction
 
