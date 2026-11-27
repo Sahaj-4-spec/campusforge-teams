@@ -20,7 +20,7 @@ function MetricCard({ label, value, detail, icon: Icon, tone = "neutral" }) {
   );
 }
 
-export default function ProjectPulseDashboard({ onClose, boards = [], onOpenTask, refreshKey = 0 }) {
+export default function ProjectPulseDashboard({ onClose, boards = [], onOpenTask }) {
   const [boardId, setBoardId] = useState("");
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -87,7 +87,7 @@ export default function ProjectPulseDashboard({ onClose, boards = [], onOpenTask
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [boardId, refreshKey, refreshCounter]);
+  }, [boardId, refreshCounter]);
 
   const closeOnBackdrop = (event) => {
     if (event.target === event.currentTarget) onClose();
@@ -128,7 +128,7 @@ export default function ProjectPulseDashboard({ onClose, boards = [], onOpenTask
               {boards.map((board) => <option key={board.id} value={board.id}>{board.name}</option>)}
             </select>
           </label>
-          <span className="pulse-live-note"><span /> Calculated from live workspace records</span>
+          <span className="pulse-live-note"><span /> Calculated from current workspace records · refresh to update</span>
         </div>
 
         <div className="pulse-content" aria-live="polite">
