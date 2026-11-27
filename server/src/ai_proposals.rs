@@ -493,6 +493,12 @@ async fn apply_proposal(
     check_proposal_rate_limit(&state, user_id, workspace_id, "write", 10).await?;
     let mut tx = state.db.begin().await
         .map_err(|cause| internal_error(cause, "Could not begin proposal approval"))?;
+    // Serializable isolation prevents a concurrent board/task write from slipping
+    // between the drift check and the approved task inserts.
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+        .execute(&mut *tx)
+        .await
+        .map_err(|cause| internal_error(cause, "Could not establish safe proposal approval isolation"))?;
 
     let row = sqlx::query_as::<_, ProposalRow>(
         "SELECT id, board_id, target_list_id, created_by, status,
@@ -806,7 +812,8 @@ mod tests {
 
     #[test]
     fn rejects_empty_and_oversized_proposals() {
-        assert!(validate_tasks(&mut []).is_err());
+        let mut empty: Vec<ProposedTask> = Vec::new();
+        assert!(validate_tasks(&mut empty).is_err());
         let mut tasks = vec![task(); 9];
         assert!(validate_tasks(&mut tasks).is_err());
     }
