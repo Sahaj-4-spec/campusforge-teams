@@ -611,6 +611,41 @@ async fn notifications_list(
                      WHERE i.id=n.resource_id AND i.workspace_id=n.workspace_id
                        AND u.id=$1 AND i.revoked_at IS NULL AND i.expires_at>NOW()
                 ))
+                OR (
+                    n.board_id IS NULL AND (
+                        (
+                            n.notification_type IN ('calendar_invitation','calendar_reminder')
+                            AND n.resource_type='calendar_event'
+                            AND EXISTS (
+                                SELECT 1 FROM calendar_events e
+                                JOIN calendar_event_attendees a ON a.event_id=e.id
+                                 WHERE e.id=n.resource_id AND e.workspace_id=n.workspace_id
+                                   AND e.board_id IS NULL AND a.user_id=$1
+                                   AND a.response <> 'declined'
+                            )
+                        )
+                        OR (
+                            n.notification_type='task_assigned'
+                            AND n.resource_type='meeting_action_item'
+                            AND EXISTS (
+                                SELECT 1 FROM meeting_note_action_items ai
+                                JOIN meeting_notes mn ON mn.id=ai.meeting_note_id
+                                 WHERE ai.id=n.resource_id AND ai.workspace_id=n.workspace_id
+                                   AND ai.assigned_to=$1 AND mn.board_id IS NULL
+                            )
+                        )
+                        OR (
+                            n.notification_type='mention'
+                            AND n.resource_type='chat_message'
+                            AND EXISTS (
+                                SELECT 1 FROM chat_messages cm
+                                 WHERE cm.id=n.resource_id AND cm.workspace_id=n.workspace_id
+                                   AND cm.board_id IS NULL AND cm.conversation_id IS NULL
+                                   AND cm.deleted_at IS NULL
+                            )
+                        )
+                    )
+                )
            )
            AND ($2::timestamptz IS NULL OR n.created_at<$2)
            AND COALESCE((
@@ -645,6 +680,41 @@ async fn notifications_list(
                      WHERE i.id=n.resource_id AND i.workspace_id=n.workspace_id
                        AND u.id=$1 AND i.revoked_at IS NULL AND i.expires_at>NOW()
                 ))
+                OR (
+                    n.board_id IS NULL AND (
+                        (
+                            n.notification_type IN ('calendar_invitation','calendar_reminder')
+                            AND n.resource_type='calendar_event'
+                            AND EXISTS (
+                                SELECT 1 FROM calendar_events e
+                                JOIN calendar_event_attendees a ON a.event_id=e.id
+                                 WHERE e.id=n.resource_id AND e.workspace_id=n.workspace_id
+                                   AND e.board_id IS NULL AND a.user_id=$1
+                                   AND a.response <> 'declined'
+                            )
+                        )
+                        OR (
+                            n.notification_type='task_assigned'
+                            AND n.resource_type='meeting_action_item'
+                            AND EXISTS (
+                                SELECT 1 FROM meeting_note_action_items ai
+                                JOIN meeting_notes mn ON mn.id=ai.meeting_note_id
+                                 WHERE ai.id=n.resource_id AND ai.workspace_id=n.workspace_id
+                                   AND ai.assigned_to=$1 AND mn.board_id IS NULL
+                            )
+                        )
+                        OR (
+                            n.notification_type='mention'
+                            AND n.resource_type='chat_message'
+                            AND EXISTS (
+                                SELECT 1 FROM chat_messages cm
+                                 WHERE cm.id=n.resource_id AND cm.workspace_id=n.workspace_id
+                                   AND cm.board_id IS NULL AND cm.conversation_id IS NULL
+                                   AND cm.deleted_at IS NULL
+                            )
+                        )
+                    )
+                )
            )
            AND COALESCE((
                 SELECT np.in_app_enabled
@@ -691,6 +761,41 @@ async fn notification_read(
                      WHERE i.id=n.resource_id AND i.workspace_id=n.workspace_id AND u.id=$2
                        AND i.revoked_at IS NULL AND i.expires_at>NOW()
                 ))
+                OR (
+                    n.board_id IS NULL AND (
+                        (
+                            n.notification_type IN ('calendar_invitation','calendar_reminder')
+                            AND n.resource_type='calendar_event'
+                            AND EXISTS (
+                                SELECT 1 FROM calendar_events e
+                                JOIN calendar_event_attendees a ON a.event_id=e.id
+                                 WHERE e.id=n.resource_id AND e.workspace_id=n.workspace_id
+                                   AND e.board_id IS NULL AND a.user_id=$2
+                                   AND a.response <> 'declined'
+                            )
+                        )
+                        OR (
+                            n.notification_type='task_assigned'
+                            AND n.resource_type='meeting_action_item'
+                            AND EXISTS (
+                                SELECT 1 FROM meeting_note_action_items ai
+                                JOIN meeting_notes mn ON mn.id=ai.meeting_note_id
+                                 WHERE ai.id=n.resource_id AND ai.workspace_id=n.workspace_id
+                                   AND ai.assigned_to=$2 AND mn.board_id IS NULL
+                            )
+                        )
+                        OR (
+                            n.notification_type='mention'
+                            AND n.resource_type='chat_message'
+                            AND EXISTS (
+                                SELECT 1 FROM chat_messages cm
+                                 WHERE cm.id=n.resource_id AND cm.workspace_id=n.workspace_id
+                                   AND cm.board_id IS NULL AND cm.conversation_id IS NULL
+                                   AND cm.deleted_at IS NULL
+                            )
+                        )
+                    )
+                )
             )
             AND COALESCE((
                 SELECT np.in_app_enabled FROM notification_preferences np
@@ -731,6 +836,41 @@ async fn notifications_read_all(
                      WHERE i.id=n.resource_id AND i.workspace_id=n.workspace_id AND u.id=$1
                        AND i.revoked_at IS NULL AND i.expires_at>NOW()
                 ))
+                OR (
+                    n.board_id IS NULL AND (
+                        (
+                            n.notification_type IN ('calendar_invitation','calendar_reminder')
+                            AND n.resource_type='calendar_event'
+                            AND EXISTS (
+                                SELECT 1 FROM calendar_events e
+                                JOIN calendar_event_attendees a ON a.event_id=e.id
+                                 WHERE e.id=n.resource_id AND e.workspace_id=n.workspace_id
+                                   AND e.board_id IS NULL AND a.user_id=$1
+                                   AND a.response <> 'declined'
+                            )
+                        )
+                        OR (
+                            n.notification_type='task_assigned'
+                            AND n.resource_type='meeting_action_item'
+                            AND EXISTS (
+                                SELECT 1 FROM meeting_note_action_items ai
+                                JOIN meeting_notes mn ON mn.id=ai.meeting_note_id
+                                 WHERE ai.id=n.resource_id AND ai.workspace_id=n.workspace_id
+                                   AND ai.assigned_to=$1 AND mn.board_id IS NULL
+                            )
+                        )
+                        OR (
+                            n.notification_type='mention'
+                            AND n.resource_type='chat_message'
+                            AND EXISTS (
+                                SELECT 1 FROM chat_messages cm
+                                 WHERE cm.id=n.resource_id AND cm.workspace_id=n.workspace_id
+                                   AND cm.board_id IS NULL AND cm.conversation_id IS NULL
+                                   AND cm.deleted_at IS NULL
+                            )
+                        )
+                    )
+                )
             )
             AND COALESCE((
                 SELECT np.in_app_enabled FROM notification_preferences np
