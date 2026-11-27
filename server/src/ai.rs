@@ -732,6 +732,7 @@ struct PulseTask {
     due_at: Option<DateTime<Utc>>,
     estimated_minutes: Option<i32>,
     updated_at: DateTime<Utc>,
+    assignee_ids: Vec<String>,
     assignees: Vec<String>,
 }
 
@@ -999,7 +1000,17 @@ async fn project_pulse(
             "SELECT t.id, b.id AS board_id, b.name AS board_name, l.name AS list_name,
                     t.title, t.priority, t.due_at, t.estimated_minutes, t.updated_at,
                     COALESCE((
-                      SELECT array_agg(DISTINCT u.full_name ORDER BY u.full_name)
+                      SELECT array_agg(ta.user_id::text ORDER BY u.full_name, ta.user_id)
+                        FROM task_assignees ta
+                        JOIN users u ON u.id = ta.user_id
+                       WHERE ta.task_id = t.id
+                         AND EXISTS (
+                           SELECT 1 FROM workspace_members wm
+                            WHERE wm.user_id = u.id AND wm.workspace_id = b.workspace_id
+                         )
+                    ), ARRAY[]::text[]) AS assignee_ids,
+                    COALESCE((
+                      SELECT array_agg(u.full_name ORDER BY u.full_name, ta.user_id)
                         FROM task_assignees ta
                         JOIN users u ON u.id = ta.user_id
                        WHERE ta.task_id = t.id
@@ -1071,31 +1082,34 @@ async fn project_pulse(
     focus_queue.truncate(5);
 
     // Split estimated effort evenly for tasks with multiple assignees to avoid double-counting.
-    let mut workload_map: std::collections::HashMap<String, (usize, i64, usize)> = std::collections::HashMap::new();
+    // Key by immutable user ID, not display name: two teammates may share a name.
+    let mut workload_map: std::collections::HashMap<String, (String, usize, i64, usize)> = std::collections::HashMap::new();
     let mut unassigned_tasks = 0usize;
     let mut unassigned_estimated_minutes = 0i64;
     for task in &tasks {
         if is_done_column(&task.list_name) { continue; }
         if task.assignees.is_empty() {
             unassigned_tasks += 1;
-            unassigned_estimated_minutes += i64::from(task.estimated_minutes.unwrap_or(0));
+            unassigned_estimated_minutes += i64::from(task.estimated_minutes.unwrap_or(0).max(0));
             continue;
         }
-        let divisor = task.assignees.len() as i64;
-        for member in &task.assignees {
-            let entry = workload_map.entry(truncate_chars(member, 100)).or_insert((0, 0, 0));
-            entry.0 += 1;
+        let divisor = task.assignee_ids.len() as i64;
+        for (index, member_id) in task.assignee_ids.iter().enumerate() {
+            let member_name = task.assignees.get(index).cloned().unwrap_or_else(|| "Workspace member".to_string());
+            let entry = workload_map.entry(member_id.clone())
+                .or_insert((truncate_chars(&member_name, 100), 0, 0, 0));
+            entry.1 += 1;
             if let Some(minutes) = task.estimated_minutes {
-                entry.1 += i64::from(minutes.max(0)) / divisor;
+                entry.2 += i64::from(minutes.max(0)) / divisor;
             } else {
-                entry.2 += 1;
+                entry.3 += 1;
             }
         }
     }
     let average_minutes = if workload_map.is_empty() { 0 } else {
-        workload_map.values().map(|value| value.1).sum::<i64>() / workload_map.len() as i64
+        workload_map.values().map(|value| value.2).sum::<i64>() / workload_map.len() as i64
     };
-    let mut workload: Vec<PulseMemberWorkload> = workload_map.into_iter().map(|(member, (open_tasks, estimated_minutes, unestimated_tasks))| {
+    let mut workload: Vec<PulseMemberWorkload> = workload_map.into_values().map(|(member, open_tasks, estimated_minutes, unestimated_tasks)| {
         let label = if average_minutes == 0 {
             "not_estimated"
         } else if estimated_minutes > average_minutes.saturating_mul(130) / 100 {
