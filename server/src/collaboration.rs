@@ -554,7 +554,7 @@ async fn calendar_delete(
     if result.rows_affected() == 0 {
         return Err(fail(StatusCode::NOT_FOUND, "Calendar event not found"));
     }
-    state.publish_workspace_event(workspace_id, None, "calendar_event_deleted", "deleted a calendar event");
+    state.publish_workspace_event(workspace_id, board_id, "calendar_event_deleted", "deleted a calendar event");
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1365,7 +1365,7 @@ async fn meeting_note_delete(
     if result.rows_affected() == 0 {
         return Err(fail(StatusCode::NOT_FOUND, "Meeting notes not found or you did not create them"));
     }
-    state.publish_workspace_event(workspace_id, None, "meeting_notes_deleted", "deleted meeting notes");
+    state.publish_workspace_event(workspace_id, board_id, "meeting_notes_deleted", "deleted meeting notes");
     Ok(StatusCode::NO_CONTENT)
 }
 
