@@ -3219,3 +3219,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 
 .pulse-partial { color:#9a7a3b; font-size:10px; font-weight:800; text-transform:uppercase; }
 .pulse-board-track i.pulse-board-track-partial { background:repeating-linear-gradient(135deg,#d7c9a8 0,#d7c9a8 4px,#f2ead9 4px,#f2ead9 8px); }
+
+.ai-proposal-target { margin-left:auto; }
+.ai-proposal-actions { display:flex; align-items:center; flex-wrap:wrap; gap:9px; margin-top:10px; }
+.ai-proposal-create { display:inline-flex; align-items:center; justify-content:center; gap:6px; min-height:30px; padding:0 10px; border:1px solid #dcd8f7; border-radius:8px; color:#5b51bf; background:#f6f4ff; font-size:10px; font-weight:750; }
+.ai-proposal-create:hover:not(:disabled) { border-color:#bdb5ef; background:#eeebff; }
+.ai-proposal-create:disabled { cursor:not-allowed; opacity:.65; }
+.ai-proposal-error { color:#ae4d58; font-size:9px; }
+@media (max-width:760px) {
+  .ai-proposal-target { width:100%; margin-left:0; }
+  .ai-proposal-target select { width:100%; }
+}
