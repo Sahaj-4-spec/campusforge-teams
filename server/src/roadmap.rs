@@ -54,9 +54,29 @@ pub(crate) async fn create_notification_in_transaction(
     sqlx::query(
         "WITH inserted AS (
             INSERT INTO notifications
-                (workspace_id, recipient_user_id, actor_user_id, notification_type,
+                (workspace_id, board_id, recipient_user_id, actor_user_id, notification_type,
                  title, body, resource_type, resource_id, dedupe_key)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+            VALUES (
+                $1,
+                CASE
+                    WHEN $7 = 'calendar_event' THEN (
+                        SELECT e.board_id FROM calendar_events e
+                         WHERE e.id=$8 AND e.workspace_id=$1
+                    )
+                    WHEN $7 = 'meeting_action_item' THEN (
+                        SELECT mn.board_id
+                          FROM meeting_note_action_items ai
+                          JOIN meeting_notes mn ON mn.id=ai.meeting_note_id
+                         WHERE ai.id=$8 AND ai.workspace_id=$1 AND mn.workspace_id=$1
+                    )
+                    WHEN $7 = 'chat_message' THEN (
+                        SELECT cm.board_id FROM chat_messages cm
+                         WHERE cm.id=$8 AND cm.workspace_id=$1 AND cm.conversation_id IS NULL
+                    )
+                    ELSE NULL::uuid
+                END,
+                $2,$3,$4,$5,$6,$7,$8,$9
+            )
             ON CONFLICT (dedupe_key) DO NOTHING
             RETURNING id, recipient_user_id
          )
