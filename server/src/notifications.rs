@@ -209,7 +209,7 @@ async fn send_one(
                        AND i.revoked_at IS NULL AND i.expires_at>NOW() AND i.accepted_at IS NULL
                 ))
                 OR (
-                    n.board_id IS NULL AND (
+                    n.board_id IS NULL AND wm.user_id IS NOT NULL AND (
                         (
                             n.notification_type IN ('calendar_invitation','calendar_reminder')
                             AND n.resource_type='calendar_event'
