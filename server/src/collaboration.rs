@@ -254,7 +254,8 @@ async fn calendar_list(
                 OR (all_day=FALSE AND start_at < $5 AND end_at > $4)
            )
            AND ($6::uuid IS NULL OR board_id=$6)
-           AND (board_id IS NULL OR EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id=calendar_events.board_id AND bm.user_id=$9))
+           AND (board_id IS NULL OR EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id=calendar_events.board_id AND bm.user_id=$9)
+                OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=calendar_events.workspace_id AND wm.user_id=$9 AND wm.role IN ('owner','admin')))
            AND ($7::text IS NULL OR event_type=$7)
            AND ($8::uuid IS NULL OR EXISTS(
                 SELECT 1 FROM calendar_event_attendees a WHERE a.event_id=calendar_events.id AND a.user_id=$8
@@ -281,7 +282,8 @@ async fn calendar_list(
          JOIN boards b ON b.id = l.board_id
          WHERE b.workspace_id = $1 AND t.due_at >= $2 AND t.due_at < $3
            AND ($4::uuid IS NULL OR b.id=$4)
-           AND EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id=b.id AND bm.user_id=$5)
+           AND (EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id=b.id AND bm.user_id=$5)
+                OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=b.workspace_id AND wm.user_id=$5 AND wm.role IN ('owner','admin')))
          ORDER BY t.due_at",
     )
     .bind(workspace_id)
@@ -817,8 +819,10 @@ async fn files_list(
         "SELECT id, workspace_id, board_id, task_id, uploaded_by, original_name, media_type,
                 size_bytes, checksum_sha256, scan_status, created_at
          FROM workspace_files wf WHERE workspace_id=$1 AND is_deleting=FALSE
-           AND (board_id IS NULL OR EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id=wf.board_id AND bm.user_id=$2))
-           AND (task_id IS NULL OR EXISTS(SELECT 1 FROM tasks t JOIN lists l ON l.id=t.list_id JOIN board_members bm ON bm.board_id=l.board_id WHERE t.id=wf.task_id AND bm.user_id=$2))
+           AND (board_id IS NULL OR EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id=wf.board_id AND bm.user_id=$2)
+             OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=wf.workspace_id AND wm.user_id=$2 AND wm.role IN ('owner','admin')))
+           AND (task_id IS NULL OR EXISTS(SELECT 1 FROM tasks t JOIN lists l ON l.id=t.list_id JOIN board_members bm ON bm.board_id=l.board_id WHERE t.id=wf.task_id AND bm.user_id=$2)
+             OR EXISTS(SELECT 1 FROM tasks t JOIN lists l ON l.id=t.list_id JOIN boards b ON b.id=l.board_id JOIN workspace_members wm ON wm.workspace_id=b.workspace_id WHERE t.id=wf.task_id AND wm.user_id=$2 AND wm.role IN ('owner','admin')))
          ORDER BY created_at DESC",
     )
     .bind(workspace_id)
@@ -1245,7 +1249,8 @@ async fn meeting_notes_list(
         "SELECT id, workspace_id, board_id, created_by, title, meeting_at, attendees,
                 agenda, notes, action_items, created_at, updated_at
          FROM meeting_notes mn WHERE workspace_id=$1
-           AND (board_id IS NULL OR EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id=mn.board_id AND bm.user_id=$2))
+           AND (board_id IS NULL OR EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id=mn.board_id AND bm.user_id=$2)
+             OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=mn.workspace_id AND wm.user_id=$2 AND wm.role IN ('owner','admin')))
          ORDER BY meeting_at DESC NULLS LAST, created_at DESC",
     )
     .bind(workspace_id)
@@ -1368,7 +1373,8 @@ async fn analytics(
          FROM tasks t
          JOIN lists l ON l.id=t.list_id
          JOIN boards b ON b.id=l.board_id
-         WHERE b.workspace_id=$1 AND EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id=b.id AND bm.user_id=$2)",
+         WHERE b.workspace_id=$1 AND (EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id=b.id AND bm.user_id=$2)
+           OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=b.workspace_id AND wm.user_id=$2 AND wm.role IN ('owner','admin')))",
     )
     .bind(workspace_id)
     .bind(user_id)
@@ -1386,7 +1392,8 @@ async fn analytics(
          LEFT JOIN tasks t ON t.id=ta.task_id
          LEFT JOIN lists l ON l.id=t.list_id
          LEFT JOIN boards b ON b.id=l.board_id AND b.workspace_id=wm.workspace_id
-          AND EXISTS(SELECT 1 FROM board_members own WHERE own.board_id=b.id AND own.user_id=$2)
+          AND (EXISTS(SELECT 1 FROM board_members own WHERE own.board_id=b.id AND own.user_id=$2)
+               OR wm.role IN ('owner','admin'))
          WHERE wm.workspace_id=$1
          GROUP BY u.id, u.full_name ORDER BY u.full_name",
     )
@@ -1399,10 +1406,12 @@ async fn analytics(
     let project_rows = sqlx::query_as::<_, (Uuid, String, i64, i64)>(
         "SELECT b.id, b.name, COUNT(t.id)::bigint,
            COUNT(t.id) FILTER (WHERE lower(l.name) IN ('done','complete','completed'))::bigint
-         FROM boards b JOIN board_members own ON own.board_id=b.id AND own.user_id=$2
+         FROM boards b
          LEFT JOIN lists l ON l.board_id=b.id
          LEFT JOIN tasks t ON t.list_id=l.id
-         WHERE b.workspace_id=$1 GROUP BY b.id,b.name ORDER BY b.name",
+         WHERE b.workspace_id=$1 AND (EXISTS(SELECT 1 FROM board_members own WHERE own.board_id=b.id AND own.user_id=$2)
+           OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=b.workspace_id AND wm.user_id=$2 AND wm.role IN ('owner','admin')))
+         GROUP BY b.id,b.name ORDER BY b.name",
     )
     .bind(workspace_id)
     .bind(user_id)
