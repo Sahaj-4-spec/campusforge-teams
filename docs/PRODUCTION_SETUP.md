@@ -82,11 +82,11 @@ The API intentionally refuses production startup when remote storage or mandator
 
 ## 7. Database release order
 
-The Neon `campusforge_app` database currently has SQLx migrations 0001–0014 recorded successfully. Migration 0014 is the AI proposal/audit schema and must not be edited or renumbered. Migration 0015 adds revocable authentication sessions. Migration 0016 adds board scope to notifications so task titles/descriptions cannot reach workspace members who do not have board access.
+The Neon `campusforge_app` database currently has SQLx migrations 0001–0014 recorded successfully. Migration 0014 is the AI proposal/audit schema and must not be edited or renumbered. Migration 0015 adds revocable authentication sessions. Migration 0016 adds board scope to notifications so task titles/descriptions cannot reach workspace members who do not have board access. Migration 0017 preserves proposal history when an unused target column is deleted.
 
 1. Verify SQLx SHA-384 migration journal checksums and a database backup.
 2. Pass the integrated CI and security workflows.
-3. Apply migration 0015, then migration 0016, with the matching integrated API release.
+3. Apply migrations 0015, 0016, then 0017, with the matching integrated API release.
 4. Verify password login, Google/GitHub/Discord sign-in, cookie and bearer logout, session revocation, WebSocket termination and old-token reauthentication.
 5. Complete isolated database restore and two-account authorization tests.
 
