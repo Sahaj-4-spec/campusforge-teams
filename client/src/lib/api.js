@@ -104,7 +104,12 @@ export const aiApi = {
   status: () => request("/api/ai/status"),
   ask: (values) => request("/api/ai/assistant", { method: "POST", body: values }),
   insights: (boardId = null) => request("/api/ai/insights" + (boardId ? "?board_id=" + encodeURIComponent(boardId) : "")),
-  files: (boardId = null) => request("/api/ai/files" + (boardId ? "?board_id=" + encodeURIComponent(boardId) : ""))
+  files: (boardId = null) => request("/api/ai/files" + (boardId ? "?board_id=" + encodeURIComponent(boardId) : "")),
+  proposals: () => request("/api/ai/proposals"),
+  proposalAudit: () => request("/api/ai/proposals/audit"),
+  createProposal: (values) => request("/api/ai/proposals", { method: "POST", body: values }),
+  applyProposal: (proposalId) => request("/api/ai/proposals/" + encodeURIComponent(proposalId) + "/apply", { method: "POST", body: {} }),
+  rejectProposal: (proposalId) => request("/api/ai/proposals/" + encodeURIComponent(proposalId) + "/reject", { method: "POST", body: {} })
 };
 
 export const workspaceApi = {
