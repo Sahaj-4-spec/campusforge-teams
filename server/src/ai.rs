@@ -2243,6 +2243,20 @@ mod authorization_integration_tests {
             .await?;
         }
 
+        let meeting_action_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO meeting_note_action_items
+                (id, meeting_note_id, workspace_id, title, assigned_to, is_done, position, created_by)
+             VALUES ($1, $2, $3, 'Prepare the demo', $4, FALSE, 1, $5)",
+        )
+        .bind(meeting_action_id)
+        .bind(note_one_a)
+        .bind(workspace_one)
+        .bind(member_one)
+        .bind(owner_one)
+        .execute(&pool)
+        .await?;
+
         for (id, workspace_id, board_id, author, body) in [
             (chat_one_a, workspace_one, Some(board_one_a), owner_one, "Project A message"),
             (chat_one_b, workspace_one, Some(board_one_b), owner_one, "Project B message"),
@@ -2261,6 +2275,49 @@ mod authorization_integration_tests {
             .execute(&pool)
             .await?;
         }
+
+        let (participant_low, participant_high) = if owner_one < member_one {
+            (owner_one, member_one)
+        } else {
+            (member_one, owner_one)
+        };
+        let conversation_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO chat_conversations
+                (id, workspace_id, participant_low, participant_high, created_by)
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(conversation_id)
+        .bind(workspace_one)
+        .bind(participant_low)
+        .bind(participant_high)
+        .bind(owner_one)
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO chat_messages
+                (id, workspace_id, board_id, author_id, body, conversation_id)
+             VALUES ($1, $2, NULL, $3, 'Private direct message', $4)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(workspace_one)
+        .bind(member_one)
+        .bind(conversation_id)
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO chat_messages
+                (id, workspace_id, board_id, author_id, body, deleted_at)
+             VALUES ($1, $2, $3, $4, 'This message was deleted', NOW())",
+        )
+        .bind(Uuid::new_v4())
+        .bind(workspace_one)
+        .bind(board_one_a)
+        .bind(owner_one)
+        .execute(&pool)
+        .await?;
 
         for (id, workspace_id, board_id, uploader, name) in [
             (file_one_a, workspace_one, Some(board_one_a), owner_one, "project-a.md"),
@@ -2350,6 +2407,7 @@ mod authorization_integration_tests {
                    LEFT JOIN boards b ON b.id = cm.board_id AND b.workspace_id = cm.workspace_id
                   WHERE cm.workspace_id = $1
                     AND cm.conversation_id IS NULL
+                    AND cm.deleted_at IS NULL
                     AND EXISTS (SELECT 1 FROM workspace_members wm
                                  WHERE wm.workspace_id = cm.workspace_id AND wm.user_id = $3)
                     AND ($2::uuid IS NULL OR cm.board_id IS NULL OR cm.board_id = $2)
@@ -2372,6 +2430,41 @@ mod authorization_integration_tests {
         assert_eq!(meeting_count(workspace_one, None, member_one).await?, 2);
         assert_eq!(meeting_count(workspace_one, None, owner_one).await?, 3);
         assert_eq!(meeting_count(workspace_one, None, owner_two).await?, 0);
+
+        let meeting_action_count = |workspace_id: Uuid, note_id: Uuid, user_id: Uuid| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*)::bigint
+                       FROM meeting_note_action_items mai
+                       JOIN meeting_notes mn ON mn.id = mai.meeting_note_id
+                                             AND mn.workspace_id = mai.workspace_id
+                       LEFT JOIN boards b ON b.id = mn.board_id
+                                         AND b.workspace_id = mn.workspace_id
+                      WHERE mai.workspace_id = $1
+                        AND mai.meeting_note_id = $2
+                        AND EXISTS (SELECT 1 FROM workspace_members wm
+                                     WHERE wm.workspace_id = mai.workspace_id AND wm.user_id = $3)
+                        AND (mn.board_id IS NULL OR b.id IS NOT NULL)
+                        AND (
+                          mn.board_id IS NULL
+                          OR EXISTS (SELECT 1 FROM board_members bm
+                                      WHERE bm.board_id = mn.board_id AND bm.user_id = $3)
+                          OR EXISTS (SELECT 1 FROM workspace_members wm
+                                      WHERE wm.workspace_id = mai.workspace_id AND wm.user_id = $3
+                                        AND wm.role IN ('owner', 'admin'))
+                        )",
+                )
+                .bind(workspace_id)
+                .bind(note_id)
+                .bind(user_id)
+                .fetch_one(&pool)
+            }
+        };
+        assert_eq!(meeting_action_count(workspace_one, note_one_a, member_one).await?, 1);
+        assert_eq!(meeting_action_count(workspace_one, note_one_b, member_one).await?, 0);
+        assert_eq!(meeting_action_count(workspace_one, note_one_a, owner_two).await?, 0);
+
         assert_eq!(chat_count(workspace_one, Some(board_one_a), member_one).await?, 2);
         assert_eq!(chat_count(workspace_one, None, member_one).await?, 2);
         assert_eq!(chat_count(workspace_one, None, owner_one).await?, 3);
