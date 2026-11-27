@@ -606,7 +606,7 @@ async fn assistant(
         })?;
 
     let started = std::time::Instant::now();
-    let response = client
+    let mut response = client
         .post(config.endpoint.clone())
         .bearer_auth(&config.api_key)
         .json(&json!({
