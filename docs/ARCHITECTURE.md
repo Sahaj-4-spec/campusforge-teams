@@ -55,7 +55,7 @@ The collaboration-suite migration adds:
 | chat_messages | Workspace-wide or project-specific message history |
 | meeting_notes | Meeting title, time, attendees, agenda, notes and action items |
 
-The schema is applied through ordered SQLx migrations in `server/migrations/`. The Neon `campusforge_app` database has successful journal entries 0001–0014; 0014 is the durable AI proposal/audit schema. The integrated candidate adds 0015 for revocable authentication sessions. Never edit an applied migration; add a new migration instead.
+The schema is applied through ordered SQLx migrations in `server/migrations/`. The Neon `campusforge_app` database has successful journal entries 0001–0014; 0014 is the durable AI proposal/audit schema. The integrated candidate adds 0015 for revocable sessions and 0016 for board-scoped notification authorization. Never edit an applied migration; add a new migration instead.
 
 ## 4. Feature architecture decisions
 
@@ -181,11 +181,11 @@ PostgreSQL is the source of truth. Mutations use SQLx; recurrence, reminder, ana
 - Do not enable email delivery without opt-in, unsubscribe, retry, and provider configuration.
 - Do not send unauthorized workspace data to future AI services.
 - Define backups, retention, export, and deletion before public launch.
-- Fine-grained per-board/channel authorization is a known permission-hardening gap. PostgreSQL LISTEN/NOTIFY is implemented for cross-instance workspace update signals; presence, typing, and other ephemeral connection state still require operational multi-instance verification.
+- The integrated candidate enforces per-board roles for project data, task mutations, advanced task actions, files, calendar, chat, meeting notes, analytics, AI proposals, and activity notifications. Workspace owners/admins retain elevated access; board viewers are read-only. Two-account negative authorization tests remain required. PostgreSQL LISTEN/NOTIFY is implemented for cross-instance workspace update signals; presence, typing, and other ephemeral connection state still require operational multi-instance verification.
 
 ## 7. Deployment decision
 
-Track A's baseline product and migrations 0001–0013 are on `main`. The integrated candidate combines those with Track B's migration 0014 for AI proposal persistence and Track A's migration 0015 for revocable sessions. The Neon `campusforge_app` database has successful migration journal entries through version 14. The integrated candidate still needs its own CI and runtime acceptance.
+Track A's baseline product and migrations 0001–0013 are on `main`. The integrated candidate combines those with Track B's migration 0014 for AI proposal persistence, Track A's migration 0015 for revocable sessions, and migration 0016 for board-scoped notification authorization. The Neon `campusforge_app` database has successful migration journal entries through version 14. Migrations 0015 and 0016 remain pending integrated CI and runtime acceptance.
 
 The repository's Render Blueprint tracks `main` and uses commit-triggered auto-deploy. Therefore, do not merge the integrated candidate to `main` or alter production infrastructure until the user explicitly authorizes release. The live preview is a test environment; verify its deployed source revision and database migration state before any rollout. A migration file in source control does not prove that a hosted database has applied it.
 
