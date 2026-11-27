@@ -1157,7 +1157,58 @@ mod pulse_tests {
         assert_eq!(health_label(78), "watch");
         assert_eq!(health_label(60), "at_risk");
         assert_eq!(health_label(20), "critical");
+        #[test]
+    fn project_pulse_counts_multiple_risk_signals() {
+        let now = Utc::now();
+        let task = PulseTask {
+            id: Uuid::new_v4(),
+            board_id: Uuid::new_v4(),
+            board_name: "Launch".to_string(),
+            list_name: "Blocked".to_string(),
+            title: "Unowned urgent release task".to_string(),
+            priority: "urgent".to_string(),
+            due_at: Some(now.clone() - chrono::Duration::days(2)),
+            estimated_minutes: None,
+            updated_at: now.clone() - chrono::Duration::days(8),
+            assignees: Vec::new(),
+        };
+        let counts = pulse_counts(&[&task], &now);
+        assert_eq!(counts.open, 1);
+        assert_eq!(counts.completed, 0);
+        assert_eq!(counts.overdue, 1);
+        assert_eq!(counts.blocked, 1);
+        assert_eq!(counts.unassigned_urgent, 1);
+        assert_eq!(counts.stale, 1);
+        assert_eq!(counts.unestimated, 1);
+        assert_eq!(counts.score, 69);
     }
+
+    #[test]
+    fn completed_tasks_do_not_inflate_open_risk_counts() {
+        let now = Utc::now();
+        let task = PulseTask {
+            id: Uuid::new_v4(),
+            board_id: Uuid::new_v4(),
+            board_name: "Launch".to_string(),
+            list_name: "Done".to_string(),
+            title: "Delivered task".to_string(),
+            priority: "urgent".to_string(),
+            due_at: Some(now.clone() - chrono::Duration::days(10)),
+            estimated_minutes: None,
+            updated_at: now.clone() - chrono::Duration::days(30),
+            assignees: Vec::new(),
+        };
+        let counts = pulse_counts(&[&task], &now);
+        assert_eq!(counts.completed, 1);
+        assert_eq!(counts.open, 0);
+        assert_eq!(counts.overdue, 0);
+        assert_eq!(counts.blocked, 0);
+        assert_eq!(counts.unassigned_urgent, 0);
+        assert_eq!(counts.stale, 0);
+        assert_eq!(counts.unestimated, 0);
+        assert_eq!(counts.score, 100);
+    }
+}
 }
 
 pub fn router() -> Router<AppState> {
