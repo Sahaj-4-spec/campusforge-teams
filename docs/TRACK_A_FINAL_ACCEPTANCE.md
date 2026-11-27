@@ -74,7 +74,7 @@ JWTs issued before session migration 0015 do not contain `jti`; users will need 
 | Two-account authorization | **Pending** | Test member/viewer/admin boundaries, board visibility, invitations, files, chat/DM isolation, comments, calendar and task mutations. |
 | Browser/mobile/accessibility | **Pending** | Test supported browsers and real mobile devices, keyboard, screen reader, focus, contrast and error/empty/loading states. |
 | Privacy and retention | **Pending** | Approve policies for personal data, files, messages, meeting notes, AI provider processing, export and deletion. |
-| Fine-grained authorization | **Known gap to verify** | Complete per-board/channel permission hardening and negative access tests. |
+| Fine-grained authorization | **Enforced in candidate; acceptance pending** | Project snapshots, task mutations, advanced task actions, files, calendar, chat, meeting notes, analytics and AI proposals now check board membership/roles; viewers are read-only. Database-backed board-role tests and two-account end-to-end negative tests must pass before release. Workspace-level channels remain workspace-scoped. |
 | Account recovery/provider linking | **Not complete** | Add or document supported recovery and secure account-linking paths before broad launch. |
 | Production hosting | **Not provisioned** | Replace preview/test services with an appropriately sized production environment, domain, monitoring and operational runbooks. |
 | Production release | **Withheld** | No merge to `main`, Blueprint sync or deployment without explicit release authorization. |
