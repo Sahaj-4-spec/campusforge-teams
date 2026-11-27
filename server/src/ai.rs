@@ -2082,7 +2082,9 @@ mod authorization_integration_tests {
 
         // Board/task reads: a regular member sees only their explicit board; an
         // owner/admin sees all boards in their workspace; another workspace is isolated.
-        let task_count = |workspace_id: Uuid, user_id: Uuid| async move {
+        let task_count = |workspace_id: Uuid, user_id: Uuid| {
+            let pool = pool.clone();
+            async move {
             sqlx::query_scalar::<_, i64>(
                 "SELECT COUNT(*)::bigint
                    FROM tasks t
@@ -2101,6 +2103,7 @@ mod authorization_integration_tests {
             .bind(workspace_id)
             .bind(user_id)
             .fetch_one(&pool)
+            }
         };
         assert_eq!(task_count(workspace_one, member_one).await?, 1);
         assert_eq!(task_count(workspace_one, owner_one).await?, 2);
@@ -2108,7 +2111,9 @@ mod authorization_integration_tests {
 
         // The meeting-summary and chat-summary predicates permit workspace-level
         // records but restrict board-linked records to the caller's board role.
-        let meeting_count = |workspace_id: Uuid, board_id: Option<Uuid>, user_id: Uuid| async move {
+        let meeting_count = |workspace_id: Uuid, board_id: Option<Uuid>, user_id: Uuid| {
+            let pool = pool.clone();
+            async move {
             sqlx::query_scalar::<_, i64>(
                 "SELECT COUNT(*)::bigint
                    FROM meeting_notes mn
@@ -2130,8 +2135,11 @@ mod authorization_integration_tests {
             .bind(board_id)
             .bind(user_id)
             .fetch_one(&pool)
+            }
         };
-        let chat_count = |workspace_id: Uuid, board_id: Option<Uuid>, user_id: Uuid| async move {
+        let chat_count = |workspace_id: Uuid, board_id: Option<Uuid>, user_id: Uuid| {
+            let pool = pool.clone();
+            async move {
             sqlx::query_scalar::<_, i64>(
                 "SELECT COUNT(*)::bigint
                    FROM chat_messages cm
@@ -2153,6 +2161,7 @@ mod authorization_integration_tests {
             .bind(board_id)
             .bind(user_id)
             .fetch_one(&pool)
+            }
         };
         assert_eq!(meeting_count(workspace_one, Some(board_one_a), member_one).await?, 2);
         assert_eq!(meeting_count(workspace_one, None, member_one).await?, 2);
@@ -2164,7 +2173,9 @@ mod authorization_integration_tests {
         assert_eq!(chat_count(workspace_one, None, owner_two).await?, 0);
 
         // File context must use the same workspace and board permissions.
-        let file_access = |file_id: Uuid, workspace_id: Uuid, user_id: Uuid| async move {
+        let file_access = |file_id: Uuid, workspace_id: Uuid, user_id: Uuid| {
+            let pool = pool.clone();
+            async move {
             sqlx::query_scalar::<_, bool>(
                 "SELECT EXISTS (
                     SELECT 1
@@ -2194,6 +2205,7 @@ mod authorization_integration_tests {
             .bind(workspace_id)
             .bind(user_id)
             .fetch_one(&pool)
+            }
         };
         assert!(file_access(file_one_a, workspace_one, member_one).await?);
         assert!(!file_access(file_one_b, workspace_one, member_one).await?);
@@ -2204,5 +2216,3 @@ mod authorization_integration_tests {
         Ok(())
     }
 }
-}
-
