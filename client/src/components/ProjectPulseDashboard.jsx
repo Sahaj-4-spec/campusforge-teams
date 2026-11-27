@@ -139,8 +139,8 @@ export default function ProjectPulseDashboard({ onClose, boards = [], onOpenTask
           ) : data ? (
             <>
               <section className="pulse-overview">
-                <div className={"pulse-score pulse-score-" + scoreTone(data.health_score)}>
-                  <div className="pulse-score-ring"><strong>{data.health_score}</strong><span>/100</span></div>
+                <div className={"pulse-score pulse-score-" + (data.health_score == null ? "partial" : scoreTone(data.health_score))}>
+                  <div className="pulse-score-ring"><strong>{data.health_score ?? "—"}</strong><span>{data.health_score == null ? "partial" : "/100"}</span></div>
                   <div><span className="pulse-section-kicker">PROJECT HEALTH</span><h3>{humanize(data.health_label)}</h3><p>{data.open_tasks} open tasks sampled · {data.completed_tasks} completed in sample · {data.total_tasks == null ? "workspace total unavailable at board cap" : data.total_tasks + " total tasks"}</p></div>
                 </div>
                 <div className="pulse-overview-note">
