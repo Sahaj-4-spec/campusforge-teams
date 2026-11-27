@@ -95,6 +95,7 @@ export default function AiAssistantPanel({ onClose, boards = [], activeBoardId =
   const [error, setError] = useState("");
   const endRef = useRef(null);
   const panelRef = useRef(null);
+  const conversationGeneration = useRef(0);
   const onCloseRef = useRef(onClose);
   const loadingRef = useRef(loading);
   onCloseRef.current = onClose;
@@ -163,6 +164,7 @@ export default function AiAssistantPanel({ onClose, boards = [], activeBoardId =
   async function submitPrompt(value = prompt) {
     const content = value.trim();
     if (!content || loading || !status?.enabled || !privacyAcknowledged) return;
+    const requestGeneration = conversationGeneration.current;
     const history = messages.slice(-8).map(({ role, content: messageContent }) => ({
       role,
       content: messageContent.slice(0, 1800)
@@ -176,8 +178,10 @@ export default function AiAssistantPanel({ onClose, boards = [], activeBoardId =
         prompt: content,
         mode,
         board_id: boardId || null,
+        acknowledged_data_sharing: privacyAcknowledged,
         history
       });
+      if (requestGeneration !== conversationGeneration.current) return;
       setMessages((current) => [...current, {
         role: "assistant",
         content: result.answer,
@@ -187,9 +191,11 @@ export default function AiAssistantPanel({ onClose, boards = [], activeBoardId =
         usage: result.usage
       }]);
     } catch (requestError) {
-      setError(requestError.message || "The assistant could not complete this request.");
+      if (requestGeneration === conversationGeneration.current) {
+        setError(requestError.message || "The assistant could not complete this request.");
+      }
     } finally {
-      setLoading(false);
+      if (requestGeneration === conversationGeneration.current) setLoading(false);
     }
   }
 
@@ -220,7 +226,20 @@ export default function AiAssistantPanel({ onClose, boards = [], activeBoardId =
           </div>
           <label className="ai-scope-select">
             <span>Context</span>
-            <select aria-label="Choose project context" value={boardId} onChange={(event) => setBoardId(event.target.value)}>
+            <select
+              aria-label="Choose project context"
+              value={boardId}
+              onChange={(event) => {
+                const nextBoardId = event.target.value;
+                if (nextBoardId === boardId) return;
+                conversationGeneration.current += 1;
+                setBoardId(nextBoardId);
+                setMessages([]);
+                setPrompt("");
+                setError("");
+                setLoading(false);
+              }}
+            >
               <option value="">All accessible projects</option>
               {boards.map((board) => <option key={board.id} value={board.id}>{board.name}</option>)}
             </select>
@@ -294,7 +313,7 @@ export default function AiAssistantPanel({ onClose, boards = [], activeBoardId =
           {enabled && (
             <label className="ai-data-consent">
               <input type="checkbox" checked={privacyAcknowledged} onChange={(event) => setPrivacyAcknowledged(event.target.checked)} />
-              <span>I understand that my prompt and authorized board/task context will be sent to the AI provider configured for this workspace.</span>
+              <span>I understand that my prompt, recent conversation, and authorized project context will be sent to the configured AI provider. Changing projects starts a fresh conversation.</span>
             </label>
           )}
           <div className="ai-composer-wrap">
