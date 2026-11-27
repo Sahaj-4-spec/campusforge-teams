@@ -1318,7 +1318,7 @@ async fn meeting_note_update(
     let result = sqlx::query(
         "UPDATE meeting_notes SET board_id=$1, title=$2, meeting_at=$3, attendees=$4,
             agenda=$5, notes=$6, action_items=$7, updated_at=NOW()
-         WHERE id=$8 AND workspace_id=$9",
+         WHERE id=$8 AND workspace_id=$9 AND board_id IS NOT DISTINCT FROM $10",
     )
     .bind(input.board_id)
     .bind(input.title.trim())
@@ -1329,6 +1329,7 @@ async fn meeting_note_update(
     .bind(input.action_items.as_deref().unwrap_or(""))
     .bind(note_id)
     .bind(workspace_id)
+    .bind(existing_board_id)
     .execute(&state.db)
     .await
     .map_err(|error| internal(error, "Could not update meeting notes"))?;
