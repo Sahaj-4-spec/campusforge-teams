@@ -513,6 +513,15 @@ async fn login(
     Ok(response)
 }
 
+fn session_or_bearer_token_from_headers(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::to_owned)
+        .or_else(|| session_token_from_headers(headers))
+}
+
 async fn logout(
     axum::extract::State(state): axum::extract::State<AppState>,
     headers: HeaderMap,
@@ -521,7 +530,7 @@ async fn logout(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    if let Some(token) = session_token_from_headers(&headers) {
+    if let Some(token) = session_or_bearer_token_from_headers(&headers) {
         if let Ok((user_id, _, session_id)) = verify_session_token(&token, &state.jwt_secret) {
             sqlx::query(
                 "UPDATE auth_sessions
@@ -555,6 +564,24 @@ pub fn router() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn logout_resolves_bearer_tokens_and_cookie_sessions() {
+        let mut bearer_headers = HeaderMap::new();
+        bearer_headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer bearer-token"));
+        bearer_headers.insert(header::COOKIE, HeaderValue::from_static("campusforge_session=cookie-token"));
+        assert_eq!(
+            session_or_bearer_token_from_headers(&bearer_headers).as_deref(),
+            Some("bearer-token")
+        );
+
+        let mut cookie_headers = HeaderMap::new();
+        cookie_headers.insert(header::COOKIE, HeaderValue::from_static("campusforge_session=cookie-token"));
+        assert_eq!(
+            session_or_bearer_token_from_headers(&cookie_headers).as_deref(),
+            Some("cookie-token")
+        );
+    }
 
     #[test]
     fn issued_hs256_token_verifies_user_and_expiration() {
