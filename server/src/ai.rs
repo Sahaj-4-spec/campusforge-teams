@@ -1096,14 +1096,15 @@ async fn assistant(
         return Err(fail(StatusCode::BAD_GATEWAY, "The AI provider response exceeded the allowed size"));
     }
 
-    // Never return credential-like material even if a provider echoes it back.
-    let sanitized_answer = redact_sensitive_text(raw_answer);
+    // Task-plan JSON must be parsed before redacting decoded string values:
+    // text-level redaction can corrupt escaped JSON quotes. The validator applies
+    // redaction to every accepted field after parsing.
     let (answer, proposal_references) = if matches!(request.mode, AssistantMode::TaskBreakdown) {
-        let (normalized, references) = validate_task_breakdown(&sanitized_answer, &sources)
+        let (normalized, references) = validate_task_breakdown(raw_answer, &sources)
             .ok_or_else(|| fail(StatusCode::BAD_GATEWAY, "The AI provider returned an invalid task proposal"))?;
         (normalized, Some(references))
     } else {
-        (sanitized_answer, None)
+        (redact_sensitive_text(raw_answer), None)
     };
 
     let prompt_tokens = payload.pointer("/usage/prompt_tokens").and_then(Value::as_u64);
@@ -1698,12 +1699,14 @@ async fn project_pulse(
             recommendation,
         });
     }
-    focus_queue.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.due_at.cmp(&b.due_at)));
+    focus_queue.sort_by(|a, b| b.score.cmp(&a.score)
+        .then_with(|| a.due_at.is_none().cmp(&b.due_at.is_none()))
+        .then_with(|| a.due_at.cmp(&b.due_at)));
     focus_queue.truncate(5);
 
     // Split estimated effort evenly for tasks with multiple assignees to avoid double-counting.
     // Key by immutable user ID, not display name: two teammates may share a name.
-    let mut workload_map: std::collections::HashMap<String, (String, usize, i64, usize)> = std::collections::HashMap::new();
+    let mut workload_map: std::collections::HashMap<String, (String, usize, i64, usize, usize)> = std::collections::HashMap::new();
     let mut unassigned_tasks = 0usize;
     let mut unassigned_estimated_minutes = 0i64;
     for task in &tasks {
@@ -1717,9 +1720,10 @@ async fn project_pulse(
         for (index, member_id) in task.assignee_ids.iter().enumerate() {
             let member_name = task.assignees.get(index).cloned().unwrap_or_else(|| "Workspace member".to_string());
             let entry = workload_map.entry(member_id.clone())
-                .or_insert((truncate_chars(&member_name, 100), 0, 0, 0));
+                .or_insert((truncate_chars(&member_name, 100), 0, 0, 0, 0));
             entry.1 += 1;
             if let Some(minutes) = task.estimated_minutes {
+                entry.4 += 1;
                 let total_minutes = i64::from(minutes.max(0));
                 let base_share = total_minutes / divisor;
                 let remainder = total_minutes % divisor;
@@ -1732,9 +1736,13 @@ async fn project_pulse(
     let average_minutes = if workload_map.is_empty() { 0 } else {
         workload_map.values().map(|value| value.2).sum::<i64>() / workload_map.len() as i64
     };
-    let mut workload: Vec<PulseMemberWorkload> = workload_map.into_iter().map(|(member_id, (member, open_tasks, estimated_minutes, unestimated_tasks))| {
-        let label = if average_minutes == 0 {
+    let mut workload: Vec<PulseMemberWorkload> = workload_map.into_iter().map(|(member_id, (member, open_tasks, estimated_minutes, unestimated_tasks, estimated_tasks))| {
+        let label = if estimated_tasks == 0 {
             "not_estimated"
+        } else if average_minutes == 0 && estimated_minutes > 0 {
+            "above_average"
+        } else if average_minutes == 0 {
+            "balanced"
         } else if estimated_minutes > average_minutes.saturating_mul(130) / 100 {
             "above_average"
         } else if estimated_minutes < average_minutes.saturating_mul(70) / 100 {
