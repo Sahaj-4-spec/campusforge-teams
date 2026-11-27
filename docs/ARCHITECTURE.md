@@ -1,13 +1,14 @@
 # CampusForge Teams — Architecture and Project Decisions
 
-**Document status:** Selected technology decisions and current draft-branch implementation notes.  
-**Release status:** The collaboration-suite implementation is on draft PR #12. It is not merged into the main branch or deployed. Some items remain local-development-only or incomplete.
+**Document status:** Architecture decisions for the merged Track A non-AI implementation plus the finalization branch.  
+**Status date:** 27 November 2026.  
+**Release status:** PRs #12, #20–#21, and #23–#37 are merged into `main`. The latest recorded main CI/security workflows passed on 24 November. The hosted Render preview may lag this source code and is not a production release. The session-revocation hardening described in ADR-016 is on `track-a/final-session-hardening-docs` and awaits branch CI/review. No deployment is authorized.
 
 ## 1. Product direction
 
 CampusForge Teams is a shared collaboration workspace for student teams. Its existing foundation contains accounts, workspaces, members, project boards, lists, tasks, assignees, comments, invitations, activity history, and workspace-scoped WebSocket updates.
 
-The collaboration-suite branch adds:
+The merged Track A implementation includes:
 1. Team calendar and deadline planner.
 2. Advanced tasks and subtasks.
 3. Smart notification centre.
@@ -15,7 +16,7 @@ The collaboration-suite branch adds:
 5. Team productivity analytics.
 6. Team chat and meeting notes.
 
-AI project assistance remains an approved future roadmap item. Delivery status and remaining work are recorded in docs/ROADMAP.md.
+AI project assistance is explicitly excluded from Track A. Do not add AI functionality to this delivery. Delivery status and remaining work are recorded in docs/ROADMAP.md and docs/TRACK_A_FINAL_ACCEPTANCE.md.
 
 ## 2. Current architecture decisions
 
@@ -26,7 +27,7 @@ AI project assistance remains an approved future roadmap item. Delivery status a
 | Backend | Rust + Axum | Typed asynchronous HTTP and WebSocket API |
 | Database | PostgreSQL | System of record for workspace/product data |
 | Database access | SQLx | Parameterized SQL, pooling, migrations |
-| Authentication | Argon2 and signed JWT sessions; Google, GitHub, Discord OAuth on the social-auth feature branch | Provider secrets remain server-side |
+| Authentication | Argon2 verification for existing password accounts; provider-verified Google, GitHub, and Discord sign-up; HttpOnly JWT cookies | Provider secrets remain server-side; Track A finalization adds PostgreSQL-backed session revocation |
 | Real-time transport | Native Axum WebSockets | Not Socket.IO |
 | File bytes | Storage adapter with local-development and S3-compatible backends | Production S3 bucket, credentials/IAM role, backups and malware scanning still require setup |
 | Version control | GitHub | Branch-based work, draft PRs, CI |
@@ -54,7 +55,7 @@ The collaboration-suite migration adds:
 | chat_messages | Workspace-wide or project-specific message history |
 | meeting_notes | Meeting title, time, attendees, agenda, notes and action items |
 
-The new SQL migration is server/migrations/0004_collaboration_suite.sql.
+The schema is applied through ordered SQLx migrations in `server/migrations/` (0001–0013 on `main`; migration 0014 is added by the Track A finalization branch). Never edit a migration that has already been applied; add a new migration instead.
 
 ## 4. Feature architecture decisions
 
@@ -62,7 +63,7 @@ The new SQL migration is server/migrations/0004_collaboration_suite.sql.
 
 **Decision:** Extend existing tasks rather than introducing a separate task database.
 
-The draft branch supports:
+The merged Track A implementation supports:
 - Parent task references and subtask creation, with a database trigger enforcing same-project parent/child scope and rejecting hierarchy cycles.
 - Ordered checklist items with completion state.
 - Workspace labels and task-label assignments.
@@ -77,7 +78,7 @@ Important invariants:
 - Subtask completion does not automatically complete its parent.
 - Recurrence creates a new task occurrence rather than resetting the completed task.
 
-Remaining validation: database-level hierarchy scope enforcement, recursive parent-cycle protection, concurrent recurrence idempotency, and browser regression coverage.
+Database triggers enforce same-project hierarchy scope and cycle rules; recurrence generation uses a PostgreSQL idempotency ledger. Release acceptance still needs multi-worker/concurrent retry tests with realistic PostgreSQL data and browser regression coverage.
 
 ### ADR-006 — Team calendar and deadline planner
 
@@ -90,9 +91,9 @@ calendar_events stores:
 - time_zone and all_day.
 - created/updated timestamps.
 
-Draft UI/API supports month, week, and day views; task deadline display; and creating/deleting meeting, milestone, exam, submission, and focus-block events.
+The merged UI/API supports month, week, and day views; task deadlines; event create/edit/reschedule/delete; type/project/attendee filters; all-day date/time-zone handling; attendee invitations/responses; and deduplicated reminders.
 
-Remaining: attendee links, full rescheduling/editor controls, time-zone/daylight-saving acceptance tests, richer filters, and reminder settings.
+Remaining acceptance: two-user attendee invitation/reminder tests and timezone/daylight-saving boundary tests for supported regions. External Google/Outlook calendar synchronization is outside Track A.
 
 ### ADR-007 — Smart notification centre
 
@@ -102,7 +103,7 @@ notifications stores workspace and recipient, optional actor, type/title/body, r
 
 notification_preferences stores in-app and email flags by user/category. Email stays disabled.
 
-Draft implementation includes:
+The merged implementation includes:
 - Inbox and unread count.
 - Mark-one/read-all behavior.
 - Per-category in-app and email preferences.
@@ -110,7 +111,7 @@ Draft implementation includes:
 - Background reminders for assigned tasks due within 24 hours and tasks that have recently become overdue.
 - A PostgreSQL email outbox, optional Resend API sender, notification-specific idempotency key, and retry/backoff. The sender is inactive until RESEND_API_KEY and EMAIL_FROM are configured.
 
-Remaining: verify the sender domain and provider account, test actual delivery and bounce handling, add mentions, invitation-specific recipients, pagination, retention controls, and unsubscribe/suppression policy.
+Remaining external setup: verify the Resend account and sender domain, configure SPF/DKIM/DMARC, test delivery/bounce handling, and approve suppression, unsubscribe, privacy, and retention policies. Mentions, invitation notifications, and cursor pagination are implemented.
 
 ### ADR-008 — Shared files and documents
 
@@ -118,7 +119,7 @@ Remaining: verify the sender domain and provider account, test actual delivery a
 
 workspace_files stores workspace, optional board/task attachment, uploader, original name, opaque server-generated storage key, media type, size, SHA-256 checksum, and timestamp.
 
-Draft implementation includes an authenticated workspace file listing, upload, download, and uploader-only delete route, with a 10 MB request limit, extension allowlist, normalized content types, and safe download headers. A storage adapter supports local-development disk and an S3-compatible backend using AWS Signature Version 4 over Reqwest. Transfers are server-mediated; the bucket remains private and the API checks authorization before reading/deleting an object.
+The merged implementation includes authenticated workspace/project/task file listing, upload, download, preview, and deletion, with a 10 MB request limit, extension allowlist, signature checks, safe headers, quotas/reservations, audit events, and durable object-deletion cleanup. A storage adapter supports local-development disk and an S3-compatible backend using AWS Signature Version 4 over Reqwest. Transfers are server-mediated; the bucket remains private and the API checks authorization before reading/deleting an object.
 
 **Production blocker:** The S3 adapter is code-complete but no private bucket/credentials are configured. Before public use, provision and verify the chosen private bucket, IAM policy, encryption, backups/versioning, retention/deletion, malware scanning, quotas, object/database reconciliation, and restore procedures. A client-provided storage key/URL is never an authorization credential.
 
@@ -180,15 +181,15 @@ PostgreSQL is the source of truth. Mutations use SQLx; recurrence, reminder, ana
 - Do not enable email delivery without opt-in, unsubscribe, retry, and provider configuration.
 - Do not send unauthorized workspace data to future AI services.
 - Define backups, retention, export, and deletion before public launch.
-- Fine-grained per-board authorization and shared WebSocket pub/sub are known scale/security gaps.
+- Fine-grained per-board/channel authorization is a known permission-hardening gap. PostgreSQL LISTEN/NOTIFY is implemented for cross-instance workspace update signals; presence, typing, and other ephemeral connection state still require operational multi-instance verification.
 
 ## 7. Deployment decision
 
-PR #12's collaboration suite is merged into main. Provider-verified sign-up and the remaining non-AI enhancements are in draft PR #21, which stacks the PR #19 changes. PR #20 is the SQLx rollback-compatibility prerequisite.
+The non-AI Track A implementation is merged into `main`. PR #20's SQLx rollback bridge was merged before PR #21 introduced migrations 0009 and 0010; subsequent migrations are also committed on main. PR #37 adds shared PostgreSQL-backed authentication request limits.
 
-Release order: deploy PR #20 first, then PR #21. After PR #21, configure provider OAuth applications, private S3-compatible storage, ClamAV (with scan enforcement), Resend sender-domain credentials, backups, retention and privacy controls. Complete browser/two-user acceptance tests before public release. The existing Render preview has not been updated by these changes.
+The repository's Render Blueprint tracks `main` and uses commit-triggered auto-deploy. Therefore, do not merge this finalization branch to `main` or alter production infrastructure until the user explicitly authorizes release. The live preview is a test environment; verify its deployed source revision and database migration state before any rollout. A migration file in source control does not prove that a hosted database has applied it.
 
-Operational configuration instructions are in docs/OPERATIONS.md. No merge or deployment should happen until the user explicitly authorizes release.
+Before public release, configure provider OAuth applications and callbacks, durable Neon PostgreSQL, private Neon Object Storage, ClamAV with scan enforcement, Resend sender-domain credentials, trusted ingress/WAF controls, backups and restore procedures, privacy/retention policies, and two-account/browser/accessibility acceptance. See [Track A Final Acceptance](TRACK_A_FINAL_ACCEPTANCE.md) and [Operations](OPERATIONS.md).
 
 ### ADR-012 — Calendar attendees, time zones and reminders
 
@@ -206,3 +207,18 @@ Operational configuration instructions are in docs/OPERATIONS.md. No merge or de
 
 **Decision:** Shared workspace changes may be relayed to workspace members, but direct-message signals carry a recipient user ID and are filtered at the WebSocket connection. Direct-message body content is never put in workspace broadcast payloads.
 
+
+
+### ADR-016 — Revocable server-side authentication sessions
+
+**Decision:** Keep browser authentication in an HttpOnly JWT cookie, but make each JWT reference a database-recorded session ID through its `jti` claim. Never store the raw JWT in PostgreSQL.
+
+- The finalization branch adds `auth_sessions` with a UUID session ID, owning user, expiry, and optional revocation timestamp.
+- Password and OAuth sign-in persist a session row before returning the session cookie.
+- Protected HTTP requests require a matching session row that is not revoked and has not expired.
+- Logout revokes the corresponding row before clearing the cookie.
+- WebSocket handshakes validate the row, and active connections re-check it during their 30-second heartbeat.
+- A background cleanup removes expired/revoked rows after a seven-day buffer.
+- JWTs issued before this migration have no `jti` and must be renewed by signing in again after rollout.
+
+Migration 0014 and its application changes are in `track-a/final-session-hardening-docs`; they remain subject to branch CI/review and have not been merged or deployed.
