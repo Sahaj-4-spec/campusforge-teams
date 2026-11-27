@@ -673,7 +673,7 @@ async fn update_task(
            FROM tasks t JOIN lists l ON l.id=t.list_id JOIN boards b ON b.id=l.board_id
            JOIN workspace_members wm ON wm.workspace_id=b.workspace_id
            LEFT JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id
-          WHERE t.id=$1 AND wm.user_id=$2 AND (bm.role IN ('admin','member') OR wm.role IN ('owner','admin')) AND (bm.role IN ('admin','member') OR wm.role IN ('owner','admin'))",
+          WHERE t.id=$1 AND wm.user_id=$2 AND (bm.role IN ('admin','member') OR wm.role IN ('owner','admin'))",
     )
     .bind(task_id)
     .bind(user_id)
@@ -956,7 +956,7 @@ async fn move_task(
            FROM tasks t JOIN lists l ON l.id=t.list_id JOIN boards b ON b.id=l.board_id
            JOIN workspace_members wm ON wm.workspace_id=b.workspace_id
            LEFT JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id
-          WHERE t.id=$1 AND wm.user_id=$2 AND (bm.role IN ('admin','member') OR wm.role IN ('owner','admin')) AND (bm.role IN ('admin','member') OR wm.role IN ('owner','admin'))",
+          WHERE t.id=$1 AND wm.user_id=$2 AND (bm.role IN ('admin','member') OR wm.role IN ('owner','admin'))",
     )
     .bind(task_id)
     .bind(user_id)
