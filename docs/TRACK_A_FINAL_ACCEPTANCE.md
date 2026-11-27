@@ -48,7 +48,7 @@ This branch adds database-backed session revocation:
 6. A background cleanup removes expired/revoked records after a seven-day retention buffer.
 7. The PostgreSQL migration smoke test asserts that `auth_sessions` is present.
 
-**Review state:** Latest GitHub Actions CI and Security workflows passed on 27 November 2026 (Rust backend check and unit tests, frontend build, dependency audit, and CodeQL). A follow-up patch now ensures Bearer-token sessions are revoked by logout and rejects malformed provider email addresses; the follow-up checks must complete before merge. Independent maintainer review and runtime session-revocation acceptance against PostgreSQL remain pending. Do not call this hardening merged or released until review and runtime acceptance pass. Existing 24-hour JWTs issued before migration 0014 lack a `jti`; after rollout, users must authenticate again.
+**Review state:** Latest GitHub Actions CI and Security workflows passed on 27 November 2026 (Rust backend check and unit tests, frontend build, dependency audit, and CodeQL). The verified head includes Bearer-token session revocation on logout, the cookie Origin check, malformed-email rejection, non-empty Discord subject validation, and non-Gmail verified-email regression tests. Independent maintainer review and runtime session-revocation acceptance against PostgreSQL remain pending. Do not call this hardening merged or released until review and runtime acceptance pass. Existing 24-hour JWTs issued before migration 0014 lack a `jti`; after rollout, users must authenticate again.
 
 ## 4. Final acceptance checklist
 
@@ -58,7 +58,7 @@ Status labels describe what can be verified from the repository alone. “Not ve
 |---|---|---|
 | Non-AI core feature implementation | **Merged** | PRs #12, #20–#21, and #23–#37 are in `main`. |
 | Main CI/security baseline | **Passed on reviewed HEAD** | Latest recorded CI and security runs passed on 24 Nov 2026; re-run on finalization branch before merge. |
-| Session revocation | **CI passed; follow-up checks pending** | Verify login, OAuth login, cookie and Bearer logout revocation, rejection of revoked sessions, WebSocket closure, and cleanup against PostgreSQL. |
+| Session revocation | **CI/Security passed; runtime acceptance pending** | Independently review the code and verify login, OAuth login, cookie and Bearer logout revocation, rejection of revoked sessions, WebSocket closure, and cleanup against PostgreSQL. |
 | Deployed API/database revision | **Not verified** | Record the currently running API commit and exact `_sqlx_migrations` versions before any database rollout. |
 | Dedicated CampusForge Neon PostgreSQL | **Blocked by account scope / not provisioned** | The connected Neon organization is Vercel-managed and rejected direct project creation. Its sole existing project has a different application schema (`account`, `board`, `card`, etc.) and was deliberately not reused. Provision a separate CampusForge project through the authorized Vercel-managed Neon integration/account, then configure pooled `DATABASE_URL`, least-privilege credentials, region, connection limits, backups/PITR, and a successful restore drill. |
 | OAuth provider applications | **Not verified** | Configure Google, GitHub, and Discord client IDs/secrets, exact HTTPS callbacks, consent/branding, and verified-email behavior in the real provider consoles. |
@@ -88,4 +88,4 @@ Because `render.yaml` uses commit-triggered auto-deploy from `main`, keep finali
 **Track A release:** **not approved / not deployed**.  
 **Track B:** **not started**.
 
-Track A may be called full and final only after the branch hardening, independent review, and every required acceptance gate in Section 4 are evidenced. Track B must remain paused until that sign-off is complete.
+Track A may be called full and final only after the branch hardening passes independent review and runtime validation and every required acceptance gate in Section 4 is evidenced. Track B must remain paused until that sign-off is complete.
