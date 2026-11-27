@@ -48,7 +48,7 @@ Implemented in PR #19 and included in PR #21:
 - Google uses the `email_verified` claim, GitHub uses the verified email list, and Discord uses its verified-email flag.
 - Existing email/password accounts can continue to log in; password-only registration returns `403 Forbidden`.
 - Shared PostgreSQL-backed fixed-window limits protect password login by client IP and normalized email, and OAuth initiation by client IP.
-- The Track A finalization branch adds server-recorded JWT session IDs, active-session checks on protected API requests, logout revocation, WebSocket revalidation, and scheduled session cleanup. It is pending branch CI/review and is not yet in `main`.
+- The integrated candidate adds server-recorded JWT session IDs, active-session checks on protected API requests, logout revocation, WebSocket revalidation, and scheduled session cleanup. Its combined CI and PostgreSQL runtime acceptance remain pending.
 - OAuth state is one-time, hashed in PostgreSQL, and bound to a short-lived HttpOnly browser cookie.
 - Provider identities are not silently linked to existing accounts solely because the email matches.
 - PostgreSQL records `email_verified_at`; migration 0009 includes database-side guards so password-only user inserts from old API instances are rejected.
