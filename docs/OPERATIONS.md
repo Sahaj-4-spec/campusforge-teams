@@ -143,7 +143,7 @@ Before public launch, test clean and infected samples, scanner unavailability, t
 
 ## 7. Authentication session revocation
 
-The integrated candidate keeps migration 0015 for AI proposal persistence and adds migration `0015_revocable_auth_sessions.sql`. When the integrated session-aware release is approved:
+The integrated candidate keeps migration 0014 for AI proposal persistence and adds migration `0015_revocable_auth_sessions.sql`. When the integrated session-aware release is approved:
 
 - Password and OAuth sign-in issue a random session identifier in the JWT `jti` claim and insert the corresponding session ID, user ID, and expiry into PostgreSQL. The raw JWT is not stored.
 - Protected HTTP endpoints require a matching, unexpired, non-revoked row in `auth_sessions`.
