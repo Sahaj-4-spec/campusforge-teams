@@ -23,7 +23,7 @@ The non-AI feature implementation described in Phases 1–8 is merged into `main
 
 PR #19 was closed without merging; its verified-provider sign-up implementation was included in PR #21. PR #20 and #21 are no longer pending. The historical order remains important: the SQLx compatibility bridge was merged before the provider-sign-up migrations were introduced.
 
-The latest recorded CI and security workflows for main commit `2b0c5bf` passed on 24 November 2026. Those checks cover the frontend production build and unit regressions, Rust checks/tests, PostgreSQL migration smoke tests, dependency audit, and CodeQL. Browser-based two-account acceptance, accessibility review, backup/restore exercises, and production integration tests are separate release gates.
+The latest recorded CI and security workflows for main commit `2b0c5bf` passed on 24 November 2026. The separate Track A/Track B component PRs also reported green frontend build, Rust, dependency and CodeQL checks. Draft PR #41 now runs the integrated checks; its CI state is tracked separately and must pass before merge. Browser-based two-account acceptance, accessibility review, backup/restore exercises, and production integration tests are separate release gates.
 
 The integrated candidate `release/campusforge-integrated-candidate` combines the Track A session-revocation code with Track B assistant and proposal approval work. Migration 0014 is the AI proposal/audit migration already present in Neon; revocable sessions are migration 0015. The separate feature branches have green component checks, but the integrated candidate still needs fresh CI and runtime PostgreSQL session-revocation acceptance. Pre-0015 JWTs lack a session ID and require fresh sign-in after rollout.
 
