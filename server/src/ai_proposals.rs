@@ -86,7 +86,7 @@ struct CreateProposalRequest {
 struct ProposalRow {
     id: Uuid,
     board_id: Uuid,
-    target_list_id: Uuid,
+    target_list_id: Option<Uuid>,
     created_by: Uuid,
     status: String,
     tasks_json: String,
@@ -102,7 +102,7 @@ struct ProposalRow {
 struct ProposalView {
     id: Uuid,
     board_id: Uuid,
-    target_list_id: Uuid,
+    target_list_id: Option<Uuid>,
     created_by: Uuid,
     status: String,
     tasks: Vec<ProposedTask>,
@@ -555,6 +555,10 @@ async fn apply_proposal(
         return Err(fail(StatusCode::CONFLICT, "This proposal has expired and cannot be applied"));
     }
 
+    let target_list_id = row.target_list_id.ok_or_else(|| {
+        fail(StatusCode::CONFLICT, "The target column no longer exists")
+    })?;
+
     let current_fingerprint = board_fingerprint(&mut tx, workspace_id, row.board_id).await
         .map_err(|cause| internal_error(cause, "Could not recheck current project state"))?;
     if current_fingerprint != row.source_fingerprint {
@@ -599,7 +603,7 @@ async fn apply_proposal(
     let list_exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM lists WHERE id = $1 AND board_id = $2)",
     )
-    .bind(row.target_list_id)
+    .bind(target_list_id)
     .bind(row.board_id)
     .fetch_one(&mut *tx)
     .await
@@ -610,7 +614,7 @@ async fn apply_proposal(
 
     // Serialize proposal task inserts with other inserts into the same list.
     sqlx::query("SELECT id FROM lists WHERE id = $1 FOR UPDATE")
-        .bind(row.target_list_id)
+        .bind(target_list_id)
         .fetch_optional(&mut *tx)
         .await
         .map_err(|cause| internal_error(cause, "Could not lock the destination column"))?;
@@ -637,7 +641,7 @@ async fn apply_proposal(
     let mut next_position: i32 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(position), -1) + 1 FROM tasks WHERE list_id = $1",
     )
-    .bind(row.target_list_id)
+    .bind(target_list_id)
     .fetch_one(&mut *tx)
     .await
     .map_err(|cause| internal_error(cause, "Could not allocate task positions"))?;
@@ -650,7 +654,7 @@ async fn apply_proposal(
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
              RETURNING id",
         )
-        .bind(row.target_list_id)
+        .bind(target_list_id)
         .bind(&task.title)
         .bind(&task.description)
         .bind(&task.priority)
