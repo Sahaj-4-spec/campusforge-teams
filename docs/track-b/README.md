@@ -148,7 +148,7 @@ No AI-specific persistence migration has been created. Conversation/audit tables
 - Enforce workspace and resource authorization before every context read and again before every proposed mutation.
 - Treat retrieved user content as untrusted input; it cannot override system policy or grant tools/permissions.
 - Start with read-only model capabilities. Any future tool/action interface must use allow-listed server functions, strict input schemas, and user confirmation.
-- Never expose provider API keys, database credentials, session tokens, or internal system prompts in model context or client responses.
+- Keep provider API keys, database credentials, and session tokens outside model context and client responses. A controlled internal system instruction is necessarily included in model context; model responses must never disclose that instruction or implementation details.
 - Apply redaction and data minimization before external provider calls.
 - Define conversation retention, export, and deletion behavior before persisting sensitive prompts or completions.
 - Review each provider's data processing, storage region, retention, and model-training terms before using real user content.
