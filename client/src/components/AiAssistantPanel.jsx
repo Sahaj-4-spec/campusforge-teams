@@ -5,6 +5,7 @@ import {
   BookOpen,
   BrainCircuit,
   CheckCircle2,
+  CalendarDays,
   CircleHelp,
   Clock3,
   FileText,
@@ -12,6 +13,7 @@ import {
   LoaderCircle,
   LockKeyhole,
   MessageSquare,
+  MessagesSquare,
   Send,
   ShieldCheck,
   Sparkles,
@@ -24,7 +26,9 @@ const MODES = [
   { id: "ask", label: "Ask", icon: MessageSquare },
   { id: "summary", label: "Summary", icon: FileText },
   { id: "task_breakdown", label: "Task plan", icon: Target },
-  { id: "risk_review", label: "Risk review", icon: ShieldCheck }
+  { id: "risk_review", label: "Risk review", icon: ShieldCheck },
+  { id: "meeting_summary", label: "Meeting notes", icon: CalendarDays },
+  { id: "chat_summary", label: "Team chat", icon: MessagesSquare }
 ];
 
 const STARTERS = [
@@ -118,7 +122,7 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
   const [privacyAcknowledged, setPrivacyAcknowledged] = useState(false);
   const [mode, setMode] = useState("ask");
   const [boardId, setBoardId] = useState(activeBoardId || "");
-  const initialTargetBoardId = activeBoardId || activeBoardId || boards[0]?.id;
+  const initialTargetBoardId = activeBoardId || boards[0]?.id;
   const [proposalListId, setProposalListId] = useState(
     lists.find((list) => list.board_id === initialTargetBoardId && /^(to do|todo)$/i.test(list.name))?.id
       || lists.find((list) => list.board_id === initialTargetBoardId)?.id
@@ -388,7 +392,7 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
           {enabled && (
             <label className="ai-data-consent">
               <input type="checkbox" checked={privacyAcknowledged} onChange={(event) => setPrivacyAcknowledged(event.target.checked)} />
-              <span>I understand that my prompt, recent conversation, and authorized project context will be sent to the configured AI provider. Changing projects starts a fresh conversation and requires a new acknowledgement.</span>
+              <span>I understand that my prompt, recent conversation, and the records selected by the chosen mode (projects/tasks, meeting notes, or shared-channel messages) will be sent to the configured AI provider. Changing projects starts a fresh conversation and requires a new acknowledgement.</span>
             </label>
           )}
           <div className="ai-composer-wrap">
@@ -401,7 +405,7 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
                   submitPrompt();
                 }
               }}
-              placeholder={!enabled ? "AI is unavailable until server configuration is complete" : !privacyAcknowledged ? "Acknowledge the data-sharing notice to begin…" : "Ask about tasks, priorities, or project risks…"}
+              placeholder={!enabled ? "AI is unavailable until server configuration is complete" : !privacyAcknowledged ? "Acknowledge the data-sharing notice to begin…" : mode === "meeting_summary" ? "Summarize the latest meeting notes and decisions…" : mode === "chat_summary" ? "Summarize recent shared-channel decisions and action items…" : "Ask about tasks, priorities, or project risks…"}
               rows={2}
               maxLength={2000}
               disabled={!enabled || !privacyAcknowledged || loading}
