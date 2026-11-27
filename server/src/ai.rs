@@ -1177,7 +1177,9 @@ mod pulse_tests {
         assert_eq!(health_label(78), "watch");
         assert_eq!(health_label(60), "at_risk");
         assert_eq!(health_label(20), "critical");
-        #[test]
+    }
+
+    #[test]
     fn project_pulse_counts_multiple_risk_signals() {
         let now = Utc::now();
         let task = PulseTask {
@@ -1190,6 +1192,7 @@ mod pulse_tests {
             due_at: Some(now.clone() - chrono::Duration::days(2)),
             estimated_minutes: None,
             updated_at: now.clone() - chrono::Duration::days(8),
+            assignee_ids: Vec::new(),
             assignees: Vec::new(),
         };
         let counts = pulse_counts(&[&task], &now);
@@ -1216,6 +1219,7 @@ mod pulse_tests {
             due_at: Some(now.clone() - chrono::Duration::days(10)),
             estimated_minutes: None,
             updated_at: now.clone() - chrono::Duration::days(30),
+            assignee_ids: Vec::new(),
             assignees: Vec::new(),
         };
         let counts = pulse_counts(&[&task], &now);
@@ -1228,7 +1232,6 @@ mod pulse_tests {
         assert_eq!(counts.unestimated, 0);
         assert_eq!(counts.score, 100);
     }
-}
 }
 
 pub fn router() -> Router<AppState> {
