@@ -264,8 +264,13 @@ async fn get_workspace(
 
     let boards = sqlx::query_as::<_, BoardRow>(
         "SELECT b.id, b.workspace_id, b.name, b.description, b.created_by, b.created_at
-         FROM boards b JOIN board_members own ON own.board_id=b.id AND own.user_id=$2
-         WHERE b.workspace_id=$1 ORDER BY b.created_at",
+         FROM boards b
+         JOIN workspace_members viewer ON viewer.workspace_id=b.workspace_id AND viewer.user_id=$2
+         WHERE b.workspace_id=$1
+           AND (viewer.role IN ('owner','admin') OR EXISTS (
+             SELECT 1 FROM board_members own WHERE own.board_id=b.id AND own.user_id=$2
+           ))
+         ORDER BY b.created_at",
     )
     .bind(workspace.id)
     .bind(user_id)
@@ -276,8 +281,11 @@ async fn get_workspace(
     let board_members = sqlx::query_as::<_, BoardMemberRow>(
         "SELECT bm.board_id, bm.user_id, bm.role FROM board_members bm
          JOIN boards b ON b.id=bm.board_id
-         JOIN board_members own ON own.board_id=b.id AND own.user_id=$2
-         WHERE b.workspace_id=$1",
+         JOIN workspace_members viewer ON viewer.workspace_id=b.workspace_id AND viewer.user_id=$2
+         WHERE b.workspace_id=$1
+           AND (viewer.role IN ('owner','admin') OR EXISTS (
+             SELECT 1 FROM board_members own WHERE own.board_id=b.id AND own.user_id=$2
+           ))",
     )
     .bind(workspace.id)
     .bind(user_id)
@@ -288,8 +296,12 @@ async fn get_workspace(
     let lists = sqlx::query_as::<_, ListRow>(
         "SELECT l.id, l.board_id, l.name, l.position FROM lists l
          JOIN boards b ON b.id=l.board_id
-         JOIN board_members own ON own.board_id=b.id AND own.user_id=$2
-         WHERE b.workspace_id=$1 ORDER BY l.board_id,l.position",
+         JOIN workspace_members viewer ON viewer.workspace_id=b.workspace_id AND viewer.user_id=$2
+         WHERE b.workspace_id=$1
+           AND (viewer.role IN ('owner','admin') OR EXISTS (
+             SELECT 1 FROM board_members own WHERE own.board_id=b.id AND own.user_id=$2
+           ))
+         ORDER BY l.board_id,l.position",
     )
     .bind(workspace.id)
     .bind(user_id)
@@ -299,8 +311,12 @@ async fn get_workspace(
 
     let tasks = sqlx::query_as::<_, TaskRow>(
         "SELECT t.id, l.board_id, t.list_id, t.title, COALESCE(t.description, '') AS description,          t.priority, CASE WHEN t.due_at IS NULL THEN NULL          ELSE to_char(t.due_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') END AS due_date,          t.parent_task_id, t.estimated_minutes, t.position, t.created_by, t.created_at, t.updated_at          FROM tasks t JOIN lists l ON l.id = t.list_id          JOIN boards b ON b.id = l.board_id
-          JOIN board_members own ON own.board_id=b.id AND own.user_id=$2
-          WHERE b.workspace_id = $1 ORDER BY l.board_id, t.list_id, t.position",
+          JOIN workspace_members viewer ON viewer.workspace_id=b.workspace_id AND viewer.user_id=$2
+          WHERE b.workspace_id = $1
+            AND (viewer.role IN ('owner','admin') OR EXISTS (
+              SELECT 1 FROM board_members own WHERE own.board_id=b.id AND own.user_id=$2
+            ))
+          ORDER BY l.board_id, t.list_id, t.position",
     )
     .bind(workspace.id)
     .bind(user_id)
@@ -310,8 +326,11 @@ async fn get_workspace(
 
     let task_assignees = sqlx::query_as::<_, TaskAssigneeRow>(
         "SELECT ta.task_id, ta.user_id FROM task_assignees ta          JOIN tasks t ON t.id = ta.task_id JOIN lists l ON l.id = t.list_id          JOIN boards b ON b.id = l.board_id
-          JOIN board_members own ON own.board_id=b.id AND own.user_id=$2
-          WHERE b.workspace_id = $1",
+          JOIN workspace_members viewer ON viewer.workspace_id=b.workspace_id AND viewer.user_id=$2
+          WHERE b.workspace_id = $1
+            AND (viewer.role IN ('owner','admin') OR EXISTS (
+              SELECT 1 FROM board_members own WHERE own.board_id=b.id AND own.user_id=$2
+            ))",
     )
     .bind(workspace.id)
     .bind(user_id)
@@ -323,8 +342,12 @@ async fn get_workspace(
         "SELECT c.id, c.task_id, c.author_id, c.parent_comment_id, c.body, c.created_at
          FROM comments c JOIN tasks t ON t.id = c.task_id JOIN lists l ON l.id = t.list_id
          JOIN boards b ON b.id = l.board_id
-         JOIN board_members own ON own.board_id=b.id AND own.user_id=$2
-         WHERE b.workspace_id = $1 ORDER BY c.created_at",
+         JOIN workspace_members viewer ON viewer.workspace_id=b.workspace_id AND viewer.user_id=$2
+         WHERE b.workspace_id = $1
+           AND (viewer.role IN ('owner','admin') OR EXISTS (
+             SELECT 1 FROM board_members own WHERE own.board_id=b.id AND own.user_id=$2
+           ))
+         ORDER BY c.created_at",
     )
     .bind(workspace.id)
     .bind(user_id)
@@ -337,7 +360,12 @@ async fn get_workspace(
                 COALESCE(a.payload->>'description', a.event_type) AS description, a.created_at
          FROM activity_events a
          LEFT JOIN board_members own ON own.board_id=a.board_id AND own.user_id=$2
-         WHERE a.workspace_id=$1 AND (a.board_id IS NULL OR own.user_id IS NOT NULL)
+         WHERE a.workspace_id=$1
+           AND (a.board_id IS NULL OR own.user_id IS NOT NULL OR EXISTS (
+             SELECT 1 FROM workspace_members viewer
+              WHERE viewer.workspace_id=a.workspace_id AND viewer.user_id=$2
+                AND viewer.role IN ('owner','admin')
+           ))
          ORDER BY a.created_at DESC LIMIT 200",
     )
     .bind(workspace.id)
