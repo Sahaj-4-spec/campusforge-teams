@@ -175,10 +175,19 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
 
   useEffect(() => {
     const targetBoardId = boardId || activeBoardId || boards[0]?.id;
-    const nextList = lists.find((list) => list.board_id === targetBoardId && /^(to do|todo)$/i.test(list.name))
-      || lists.find((list) => list.board_id === targetBoardId)
-      || lists[0];
-    setProposalListId(nextList?.id || "");
+    const scopedLists = boardId
+      ? lists.filter((list) => list.board_id === boardId)
+      : lists;
+    const preferredLists = targetBoardId
+      ? scopedLists.filter((list) => list.board_id === targetBoardId)
+      : scopedLists;
+    const nextList = preferredLists.find((list) => /^(to do|todo)$/i.test(list.name))
+      || preferredLists[0]
+      || scopedLists.find((list) => /^(to do|todo)$/i.test(list.name))
+      || scopedLists[0];
+    setProposalListId((current) => scopedLists.some((list) => list.id === current)
+      ? current
+      : (nextList?.id || ""));
   }, [boardId, activeBoardId, lists, boards]);
 
   useEffect(() => {
@@ -305,8 +314,9 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
   }
 
   async function createProposedTask(task) {
-    if (!proposalListId) {
-      throw new Error("Choose a project column before creating proposed tasks.");
+    const selectedList = lists.find((list) => list.id === proposalListId);
+    if (!selectedList || (boardId && selectedList.board_id !== boardId)) {
+      throw new Error("Choose a project column from the selected project before creating proposed tasks.");
     }
     await taskApi.create({
       title: String(task.title).trim(),
