@@ -530,7 +530,8 @@ async fn add_activity(
         "task_updated" => "Task updated",
         _ => "Workspace update",
     };
-    let resource_type = if task_id.is_some() { "task" } else { "project" };
+    let resource_type = if task_id.is_some() { "task" } else { "board" };
+    let resource_id = task_id.unwrap_or(board_id);
     sqlx::query(
         "WITH recipient_preferences AS (
             SELECT wm.workspace_id, wm.user_id,
@@ -538,18 +539,29 @@ async fn add_activity(
                    COALESCE(np.email_enabled, FALSE) AS email_enabled
               FROM workspace_members wm
               LEFT JOIN notification_preferences np
-                ON np.user_id = wm.user_id AND np.notification_type = $3
-             WHERE wm.workspace_id = $1 AND wm.user_id <> $2
+                ON np.user_id = wm.user_id AND np.notification_type = $4
+             WHERE wm.workspace_id = $1 AND wm.user_id <> $3
                AND (COALESCE(np.in_app_enabled, TRUE) OR COALESCE(np.email_enabled, FALSE))
-               AND ($3 <> 'task_assigned' OR EXISTS (
+               AND EXISTS (
+                    SELECT 1 FROM boards b
+                     WHERE b.id = $2 AND b.workspace_id = wm.workspace_id
+                       AND (
+                            wm.role IN ('owner','admin')
+                            OR EXISTS (
+                                SELECT 1 FROM board_members bm
+                                 WHERE bm.board_id=b.id AND bm.user_id=wm.user_id
+                            )
+                       )
+               )
+               AND ($4 <> 'task_assigned' OR EXISTS (
                     SELECT 1 FROM task_assignees ta
-                     WHERE ta.task_id=$7 AND ta.user_id=wm.user_id
+                     WHERE ta.task_id=$8 AND ta.user_id=wm.user_id
                ))
          ),
          inserted_notifications AS (
             INSERT INTO notifications
-                (workspace_id, recipient_user_id, actor_user_id, notification_type, title, body, resource_type, resource_id)
-            SELECT rp.workspace_id, rp.user_id, $2, $3, $4, $5, $6, $7
+                (workspace_id, board_id, recipient_user_id, actor_user_id, notification_type, title, body, resource_type, resource_id)
+            SELECT rp.workspace_id, $2, rp.user_id, $3, $4, $5, $6, $7, $8
               FROM recipient_preferences rp
             RETURNING id, recipient_user_id
          )
@@ -561,12 +573,13 @@ async fn add_activity(
          ON CONFLICT (notification_id) DO NOTHING",
     )
     .bind(workspace_id)
+    .bind(board_id)
     .bind(actor_id)
     .bind(notification_type)
     .bind(title)
     .bind(&description)
     .bind(resource_type)
-    .bind(task_id)
+    .bind(resource_id)
     .execute(&mut **tx)
     .await?;
     Ok(())
