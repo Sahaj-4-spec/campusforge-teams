@@ -389,7 +389,8 @@ impl StorageService {
                     .send().await
                     .map_err(|error| format!("S3 download request failed: {error}"))?;
                 if !response.status().is_success() {
-                    return Err(s3_error(response, "download").await);
+                    // Do not buffer an untrusted S3 error body on a bounded-read path.
+                    return Err(format!("S3 download returned HTTP {}", response.status()));
                 }
                 if response.content_length().is_some_and(|length| length > max_bytes as u64) {
                     return Err("Stored object exceeds the allowed read size".to_string());
