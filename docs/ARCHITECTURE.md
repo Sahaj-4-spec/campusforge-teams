@@ -1,8 +1,8 @@
 # CampusForge Teams — Architecture and Project Decisions
 
 **Document status:** Architecture decisions for the merged Track A non-AI implementation plus the finalization branch.  
-**Status date:** 27 November 2026.  
-**Release status:** PRs #12, #20–#21, and #23–#37 are merged into `main`. The latest recorded main CI/security workflows passed on 24 November. The hosted Render preview may lag this source code and is not a production release. The session-revocation hardening described in ADR-016 is on `track-a/final-session-hardening-docs` and has passed branch CI/Security on 27 November 2026; independent review and runtime PostgreSQL session acceptance remain pending. No deployment is authorized.
+**Status date:** 28 November 2026.  
+**Release status:** `release/campusforge-integrated-candidate` consolidates the current `main` source with Track A session hardening and Track B AI assistant/proposal work. It is a review candidate, not `main`; PRs #38–#40 remain separate draft PRs. The combined branch must pass fresh CI and runtime migration/session checks before review. Render currently hosts preview/test services; the API's latest environment update started a rollout that was still reported `update_in_progress` at the last check. No production deployment or merge is authorized.
 
 ## 1. Product direction
 
@@ -16,7 +16,7 @@ The merged Track A implementation includes:
 5. Team productivity analytics.
 6. Team chat and meeting notes.
 
-AI project assistance is explicitly excluded from Track A. Do not add AI functionality to this delivery. Delivery status and remaining work are recorded in docs/ROADMAP.md and docs/TRACK_A_FINAL_ACCEPTANCE.md.
+AI project assistance is a separately scoped, optional Track B capability. The integrated candidate includes a feature-flagged read-only assistant, Project Pulse insights, and human-approved task proposals. The feature remains disabled until an administrator configures a supported provider and completes privacy, retention, and cost reviews. Delivery status and acceptance gates are recorded in docs/ROADMAP.md, docs/track-b/README.md, and docs/TRACK_A_FINAL_ACCEPTANCE.md.
 
 ## 2. Current architecture decisions
 
@@ -55,7 +55,7 @@ The collaboration-suite migration adds:
 | chat_messages | Workspace-wide or project-specific message history |
 | meeting_notes | Meeting title, time, attendees, agenda, notes and action items |
 
-The schema is applied through ordered SQLx migrations in `server/migrations/` (0001–0013 on `main`; migration 0014 is added by the Track A finalization branch). Never edit a migration that has already been applied; add a new migration instead.
+The schema is applied through ordered SQLx migrations in `server/migrations/`. The Neon `campusforge_app` database has successful journal entries 0001–0014; 0014 is the durable AI proposal/audit schema. The integrated candidate adds 0015 for revocable authentication sessions. Never edit an applied migration; add a new migration instead.
 
 ## 4. Feature architecture decisions
 
@@ -125,9 +125,9 @@ The merged implementation includes authenticated workspace/project/task file lis
 
 ### ADR-009 — AI project assistant
 
-**Decision:** Explicitly excluded from the current delivery.
+**Decision:** Excluded from the Track A baseline; separately implemented behind Track B feature controls.
 
-No AI assistant, AI provider integration, AI-generated tasks, AI-generated summaries or model-driven project actions are being implemented in this release. Revisit only as a separately approved product scope and architecture decision.
+AI assistant and model-driven project support are excluded from the Track A baseline. Track B is separately scoped and optional; the current integrated candidate adds a feature-flagged assistant and human-approved proposal flow, with no autonomous mutations.
 
 ### ADR-010 — Team productivity analytics
 
@@ -221,4 +221,4 @@ Before public release, configure provider OAuth applications and callbacks, dura
 - A background cleanup removes expired/revoked rows after a seven-day buffer.
 - JWTs issued before this migration have no `jti` and must be renewed by signing in again after rollout.
 
-Migration 0014 and its application changes are in `track-a/final-session-hardening-docs`; they remain subject to branch CI/review and have not been merged or deployed.
+Migration 0015 and its application changes are in `release/campusforge-integrated-candidate`; it is not yet merged into `main` or live on the hosted service. The feature-flagged Track B assistant remains disabled until provider and privacy controls are approved.
