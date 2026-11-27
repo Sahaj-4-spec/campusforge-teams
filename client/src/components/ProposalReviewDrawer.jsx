@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { CheckCircle2, Clock3, FileCheck2, LoaderCircle, X } from "lucide-react";
 
 function prettyDate(value) {
@@ -22,6 +23,47 @@ export default function ProposalReviewDrawer({
 }) {
   const selected = proposals.find((item) => item.id === selectedProposalId) || null;
   const pendingCount = proposals.filter((item) => item.status === "pending").length;
+  const dialogRef = useRef(null);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return undefined;
+    const previousFocus = document.activeElement;
+    const dialog = dialogRef.current;
+    const selector = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    const items = () => Array.from(dialog?.querySelectorAll(selector) || [])
+      .filter((item) => item.getClientRects().length > 0);
+    (items()[0] || dialog)?.focus();
+
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!working) onClose?.();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = items();
+      if (!focusable.length) {
+        event.preventDefault();
+        dialog?.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !dialog?.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !dialog?.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
+    };
+  }, [onClose, working]);
 
   return (
     <div
@@ -31,7 +73,7 @@ export default function ProposalReviewDrawer({
         if (event.target === event.currentTarget && !working) onClose?.();
       }}
     >
-      <section className="ai-proposal-review-panel" role="dialog" aria-modal="true" aria-labelledby="ai-proposal-review-title">
+      <section ref={dialogRef} className="ai-proposal-review-panel" role="dialog" tabIndex={-1} aria-modal="true" aria-labelledby="ai-proposal-review-title">
         <header className="ai-proposal-review-header">
           <div>
             <p className="eyebrow">HUMAN APPROVAL</p>
