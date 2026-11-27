@@ -61,7 +61,7 @@ JWTs issued before session migration 0015 do not contain `jti`; users will need 
 | Area | Status | Required evidence |
 |---|---|---|
 | Track A application source | **Implemented in candidate** | Candidate includes the current Track A source and session hardening. |
-| Track B assistant/proposals | **Implemented; disabled by default** | Provider configuration, privacy/retention review, spend limits, data-sharing acknowledgement and proposal authorization acceptance. |
+| Track B assistant/proposals | **Implemented; disabled by default** | Provider configuration, privacy/retention review, spend limits, data-sharing acknowledgement and proposal authorization acceptance. Project Pulse is also separately disabled by default through API and frontend flags. |
 | Integrated CI/security | **Pending** | Fresh checks on the integrated candidate, including frontend tests/build, Rust checks/tests, migration smoke test, dependency audit and CodeQL. |
 | Neon schema 0001–0014 | **Verified** | SQLx journal success and AI proposal tables present. |
 | Neon migration 0015 | **Pending** | Apply after candidate checks and backup/restore sign-off; verify `auth_sessions`. |
