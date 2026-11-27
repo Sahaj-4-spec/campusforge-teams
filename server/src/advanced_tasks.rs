@@ -281,7 +281,7 @@ async fn subtask_update(
             .bind(destination).bind(position).bind(subtask_id).execute(&mut *tx).await
             .map_err(|error| internal(error, "Could not update subtask status"))?;
     }
-    sqlx::query("UPDATE tasks SET title=COALESCE($1,title), updated_at=NOW() WHERE id=$2")
+    sqlx::query("UPDATE tasks SET title=COALESCE($1,c.title), updated_at=NOW() WHERE id=$2")
         .bind(title).bind(subtask_id).execute(&mut *tx).await
         .map_err(|error| internal(error, "Could not update subtask"))?;
     tx.commit().await.map_err(|error| internal(error, "Could not save subtask"))?;
