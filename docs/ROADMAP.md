@@ -6,14 +6,30 @@ CampusForge Teams is a project and collaboration workspace for student teams and
 
 **AI project assistance is explicitly excluded from this delivery.** No AI assistant, AI provider integration, or AI-generated project action is part of the current scope.
 
-## Delivery status
+## Delivery status — 27 November 2026
 
-- **PR #12 — collaboration suite:** merged into `main`. It delivered the team calendar, advanced task controls, notification centre, shared files, productivity analytics, chat, and meeting notes.
-- **PR #19 — provider-verified sign-up:** contains the Google, GitHub, and Discord-only self-service account creation policy while retaining email/password login for existing accounts.
-- **PR #20 — SQLx rollback bridge:** must be merged and deployed before the provider-sign-up migration is applied.
-- **PR #21 — non-AI roadmap completion:** bundles the PR #19 provider sign-up change with the remaining non-AI collaboration enhancements described below. It is a draft implementation branch and is not deployed.
+The non-AI feature implementation described in Phases 1–8 is merged into `main`. The release history is:
 
-**Release sequence:** merge and deploy PR #20 first; then merge and deploy PR #21. PR #21 contains the provider-verified sign-up changes from PR #19, so PR #19 is superseded by the combined PR #21 change set. Do not deploy PR #21 before the PR #20 migration-runner compatibility release is active on every API instance.
+- **PR #12:** collaboration suite — merged.
+- **PR #20:** SQLx rollback-compatible migration runner — merged.
+- **PR #21:** provider-verified sign-up plus remaining non-AI collaboration roadmap features — merged.
+- **PR #23:** live board presence, active card editing indicators, and threaded task discussion — merged.
+- **PR #24:** owner-only workspace teammate role editing — merged.
+- **PR #26:** encrypted personal Save Locker — merged.
+- **PR #30:** optimistic Kanban drag-and-drop with rollback — merged.
+- **PR #32–#34:** auth/Kanban UI polish, command palette/performance, and mobile navigation — merged.
+- **PR #35–#36:** Neon database/object-storage verification and fail-closed production startup guards — merged.
+- **PR #37:** shared PostgreSQL-backed rate limits for password login and OAuth initiation — merged.
+
+PR #19 was closed without merging; its verified-provider sign-up implementation was included in PR #21. PR #20 and #21 are no longer pending. The historical order remains important: the SQLx compatibility bridge was merged before the provider-sign-up migrations were introduced.
+
+The latest recorded CI and security workflows for main commit `2b0c5bf` passed on 24 November 2026. Those checks cover the frontend production build and unit regressions, Rust checks/tests, PostgreSQL migration smoke tests, dependency audit, and CodeQL. Browser-based two-account acceptance, accessibility review, backup/restore exercises, and production integration tests are separate release gates.
+
+The Track A finalization branch `track-a/final-session-hardening-docs` adds migration `0014_revocable_auth_sessions.sql` and wires server-side session IDs into password login, OAuth login, protected API authentication, logout, and WebSocket heartbeat validation. This branch is not yet merged; wait for its CI and code review. Legacy JWTs issued before this change do not contain a session ID and will require users to sign in again after the hardening branch is released.
+
+**Hosting status:** the Render preview and API are test services. The repository's `render.yaml` currently tracks `main` with commit-triggered auto-deploy. Therefore, do not merge finalization changes to `main` until the user explicitly authorizes the corresponding deployment and the external production gates below are met. The current source branch being complete does not prove that the deployed database or services have been upgraded.
+
+**External release gates:** configure production Google/GitHub/Discord OAuth applications and exact HTTPS callbacks; migrate to durable Neon PostgreSQL and verify row counts, backups, and restoration; provision private Neon Object Storage; configure a private ClamAV service and require clean scans; verify Resend sender-domain authentication and delivery; configure trusted ingress/WAF controls; finish two-user/browser/accessibility tests; approve privacy, data-retention, export, and deletion policies; and close the documented per-board/channel authorization and account-recovery gaps.
 
 ## Phase 1 — Core workspaces and project boards
 
@@ -31,6 +47,8 @@ Implemented in PR #19 and included in PR #21:
 - A new account is created only after the provider response confirms its email is verified.
 - Google uses the `email_verified` claim, GitHub uses the verified email list, and Discord uses its verified-email flag.
 - Existing email/password accounts can continue to log in; password-only registration returns `403 Forbidden`.
+- Shared PostgreSQL-backed fixed-window limits protect password login by client IP and normalized email, and OAuth initiation by client IP.
+- The Track A finalization branch adds server-recorded JWT session IDs, active-session checks on protected API requests, logout revocation, WebSocket revalidation, and scheduled session cleanup. It is pending branch CI/review and is not yet in `main`.
 - OAuth state is one-time, hashed in PostgreSQL, and bound to a short-lived HttpOnly browser cookie.
 - Provider identities are not silently linked to existing accounts solely because the email matches.
 - PostgreSQL records `email_verified_at`; migration 0009 includes database-side guards so password-only user inserts from old API instances are rejected.
@@ -152,10 +170,15 @@ The following items are intentionally not part of the current delivery:
 - Email jobs require explicit opt-in.
 - Private direct-message events are sent only to the intended participant.
 - Database changes are additive and versioned. Never edit applied migrations.
-- Use PR #20's SQLx migration runner compatibility release before applying migration 0009 and newer schema versions.
-- Run the PostgreSQL-backed migration tests, frontend build, Rust tests, dependency audit and CodeQL on the final PR head.
+- PR #20's SQLx migration runner compatibility release is already merged before migrations 0009–0013. Preserve its rollback-compatible behavior for future additive migrations.
+- Run the PostgreSQL-backed migration tests, frontend build, Rust tests, dependency audit and CodeQL on the final Track A hardening PR head.
 - Complete browser, accessibility, multi-user, backup/restore and operational acceptance tests before public release.
+- Confirm that production ingress overwrites trusted client-IP headers. Application login/OAuth limits are now PostgreSQL-backed (login: 30 per IP/15 minutes and 10 per normalized email/15 minutes; OAuth initiation: 30 per IP/10 minutes), but this is not a substitute for perimeter/WAF protection.
 
 ## Deployment gate
 
-The non-AI completion work is in draft PR #21 and has not been merged or deployed. Render remains unchanged. Before release, verify provider OAuth applications, the private S3 bucket, ClamAV, Resend, database backups, retention, privacy, and the two-user acceptance tests. Deploy only in the order described above and only after the user explicitly authorizes release.
+The non-AI implementation is merged into `main`; production deployment is still withheld. The current Render preview uses a temporary free PostgreSQL database (documented expiry: 22 December 2026) and must not be treated as durable production storage. Check the actual deployed migration version before any release; source migrations being present in GitHub does not mean they have been applied to the running database.
+
+The Track A finalization branch adds migration 0014 for revocable sessions and must pass CI/review before release. Because `render.yaml` uses commit-triggered auto-deploy from `main`, do not merge it to `main` until the user has explicitly authorized the release and the production configuration is prepared. No deployment is authorized by the roadmap or this branch.
+
+The release owner must sign off every item in [Track A Final Acceptance](TRACK_A_FINAL_ACCEPTANCE.md): durable database and restore drill, private object storage, mandatory malware scanning, OAuth, email delivery, edge protection, privacy/retention, two-account end-to-end tests, accessibility, and operational monitoring. The AI project assistant remains excluded from Track A.
