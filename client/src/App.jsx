@@ -1584,10 +1584,10 @@ export default function App() {
               <span>Search tasks, projects, and actions</span>
               <kbd>⌘ K</kbd>
             </button>
-            <button className="ai-assistant-trigger pulse-trigger" type="button" onClick={() => setProjectPulseOpen(true)} disabled={demoMode} title={demoMode ? "Project Pulse is available for connected workspaces" : "Open Project Pulse"}>
+            <button className="ai-assistant-trigger pulse-trigger" type="button" onClick={() => setProjectPulseOpen(true)} aria-haspopup="dialog" aria-expanded={projectPulseOpen} disabled={demoMode} title={demoMode ? "Project Pulse is available for connected workspaces" : "Open Project Pulse"}>
               <Activity size={15} /><span>Project Pulse</span>
             </button>
-            <button className="ai-assistant-trigger" type="button" onClick={() => setAiAssistantOpen(true)} disabled={demoMode} title={demoMode ? "AI assistant is available for connected workspaces" : "Open AI project assistant"}>
+            <button className="ai-assistant-trigger" type="button" onClick={() => setAiAssistantOpen(true)} aria-haspopup="dialog" aria-expanded={aiAssistantOpen} disabled={demoMode} title={demoMode ? "AI assistant is available for connected workspaces" : "Open AI project assistant"}>
               <Sparkles size={15} /><span>AI assistant</span>
             </button>
             <button className="icon-button notification-button" type="button" aria-label={"Notifications" + (unreadNotifications ? ", " + unreadNotifications + " unread" : "")} onClick={() => navigate("Notifications")}><Bell size={18} />{unreadNotifications > 0 && <span className="notification-count-badge">{Math.min(unreadNotifications, 99)}</span>}</button>
