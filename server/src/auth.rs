@@ -626,6 +626,13 @@ async fn logout(
     Ok(response)
 }
 
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/register", post(register))
+        .route("/login", post(login))
+        .route("/logout", post(logout))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
