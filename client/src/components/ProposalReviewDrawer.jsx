@@ -24,6 +24,8 @@ export default function ProposalReviewDrawer({
   const selected = proposals.find((item) => item.id === selectedProposalId) || null;
   const pendingCount = proposals.filter((item) => item.status === "pending").length;
   const dialogRef = useRef(null);
+  const workingRef = useRef(working);
+  workingRef.current = working;
 
   useEffect(() => {
     if (typeof document === "undefined") return undefined;
@@ -38,7 +40,7 @@ export default function ProposalReviewDrawer({
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
-        if (!working) onClose?.();
+        if (!workingRef.current) onClose?.();
         return;
       }
       if (event.key !== "Tab") return;
@@ -63,7 +65,7 @@ export default function ProposalReviewDrawer({
       document.removeEventListener("keydown", onKeyDown, true);
       if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
     };
-  }, [onClose, working]);
+  }, [onClose]);
 
   return (
     <div
