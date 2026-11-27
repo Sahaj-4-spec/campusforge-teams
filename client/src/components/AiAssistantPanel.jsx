@@ -123,7 +123,7 @@ export default function AiAssistantPanel({ onClose, boards = [], activeBoardId =
     if (!content || loading || !status?.enabled) return;
     const history = messages.slice(-8).map(({ role, content: messageContent }) => ({
       role,
-      content: messageContent
+      content: messageContent.slice(0, 1800)
     }));
     setMessages((current) => [...current, { role: "user", content, mode }]);
     setPrompt("");
@@ -199,7 +199,7 @@ export default function AiAssistantPanel({ onClose, boards = [], activeBoardId =
                 <span><CheckCircle2 size={15} /> Suggestions never change project data</span>
               </div>
               <div className="ai-setup-note"><LockKeyhole size={14} /> No prompt or project data is sent to an AI provider while this feature is disabled.</div>
-              <p className="ai-setup-help">{status?.message || "Configure CAMPUSFORGE_AI_ENABLED, CAMPUSFORGE_AI_API_BASE_URL, CAMPUSFORGE_AI_API_KEY, and CAMPUSFORGE_AI_MODEL on the backend."}</p>
+              <p className="ai-setup-help">On the Rust API server, configure <code>CAMPUSFORGE_AI_ENABLED=true</code>, <code>CAMPUSFORGE_AI_API_BASE_URL</code>, <code>CAMPUSFORGE_AI_API_KEY</code>, and <code>CAMPUSFORGE_AI_MODEL</code>. Use an HTTPS OpenAI-compatible chat-completions endpoint in hosted environments.</p>
             </div>
           ) : messages.length === 0 ? (
             <div className="ai-welcome-state">
