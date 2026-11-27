@@ -685,10 +685,20 @@ mod tests {
         sqlx::query("UPDATE board_members SET role='viewer' WHERE board_id=$1 AND user_id=$2")
             .bind(board_id).bind(user_id).execute(&pool).await
             .expect("board role should be changeable");
+        sqlx::query("UPDATE workspace_members SET role='member' WHERE workspace_id=$1 AND user_id=$2")
+            .bind(workspace_id).bind(user_id).execute(&pool).await
+            .expect("workspace role should be demoted for board-viewer assertion");
         let role = board_role(&pool,user_id,workspace_id,board_id).await.unwrap();
         assert_eq!(role.as_deref(),Some("viewer"));
         assert!(board_role_allows(role.as_deref(),false));
         assert!(!board_role_allows(role.as_deref(),true));
+
+        sqlx::query("UPDATE workspace_members SET role='owner' WHERE workspace_id=$1 AND user_id=$2")
+            .bind(workspace_id).bind(user_id).execute(&pool).await
+            .expect("workspace owner role should restore elevated access");
+        let owner_role = board_role(&pool,user_id,workspace_id,board_id).await.unwrap();
+        assert_eq!(owner_role.as_deref(),Some("admin"));
+        assert!(board_role_allows(owner_role.as_deref(),true));
 
         sqlx::query("DELETE FROM workspaces WHERE id=$1").bind(workspace_id).execute(&pool).await
             .expect("workspace fixture should be removed");
