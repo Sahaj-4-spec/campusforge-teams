@@ -599,8 +599,8 @@ async fn create_task(
     let mut tx = state.db.begin().await.map_err(|cause| internal_error(cause, "Could not begin task creation"))?;
     let scope: Option<(Uuid, Uuid)> = sqlx::query_as(
         "SELECT b.workspace_id, b.id FROM lists l JOIN boards b ON b.id = l.board_id          JOIN workspace_members wm ON wm.workspace_id = b.workspace_id
-          JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id AND bm.role IN ('admin','member')
-          WHERE l.id = $1 AND wm.user_id = $2",
+          LEFT JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id
+          WHERE l.id = $1 AND wm.user_id = $2 AND (bm.role IN ('admin','member') OR wm.role IN ('owner','admin'))",
     )
     .bind(input.list_id)
     .bind(user_id)
@@ -672,8 +672,8 @@ async fn update_task(
         "SELECT b.workspace_id, b.id, t.list_id, t.title, l.name
            FROM tasks t JOIN lists l ON l.id=t.list_id JOIN boards b ON b.id=l.board_id
            JOIN workspace_members wm ON wm.workspace_id=b.workspace_id
-           JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id AND bm.role IN ('admin','member')
-          WHERE t.id=$1 AND wm.user_id=$2",
+           LEFT JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id
+          WHERE t.id=$1 AND wm.user_id=$2 AND (bm.role IN ('admin','member') OR wm.role IN ('owner','admin')) AND (bm.role IN ('admin','member') OR wm.role IN ('owner','admin'))",
     )
     .bind(task_id)
     .bind(user_id)
@@ -833,8 +833,8 @@ async fn delete_task(
     let mut tx = state.db.begin().await.map_err(|cause| internal_error(cause, "Could not begin task deletion"))?;
     let existing: Option<(Uuid, Uuid, Uuid, String)> = sqlx::query_as(
         "SELECT b.workspace_id, b.id, t.list_id, t.title FROM tasks t          JOIN lists l ON l.id = t.list_id JOIN boards b ON b.id = l.board_id          JOIN workspace_members wm ON wm.workspace_id = b.workspace_id
-          JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id AND bm.role IN ('admin','member')
-          WHERE t.id = $1 AND wm.user_id = $2",
+          LEFT JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id
+          WHERE t.id = $1 AND wm.user_id = $2 AND (bm.role IN ('admin','member') OR wm.role IN ('owner','admin'))",
     )
     .bind(task_id)
     .bind(user_id)
@@ -878,8 +878,8 @@ async fn add_comment(
     let mut tx = state.db.begin().await.map_err(|cause| internal_error(cause, "Could not begin comment"))?;
     let scope: Option<(Uuid, Uuid)> = sqlx::query_as(
         "SELECT b.workspace_id, b.id FROM tasks t JOIN lists l ON l.id = t.list_id          JOIN boards b ON b.id = l.board_id          JOIN workspace_members wm ON wm.workspace_id = b.workspace_id
-          JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id AND bm.role IN ('admin','member')
-          WHERE t.id = $1 AND wm.user_id = $2",
+          LEFT JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id
+          WHERE t.id = $1 AND wm.user_id = $2 AND (bm.role IN ('admin','member') OR wm.role IN ('owner','admin'))",
     )
     .bind(task_id)
     .bind(user_id)
@@ -955,8 +955,8 @@ async fn move_task(
         "SELECT t.list_id, l.board_id, b.workspace_id, l.name, t.title
            FROM tasks t JOIN lists l ON l.id=t.list_id JOIN boards b ON b.id=l.board_id
            JOIN workspace_members wm ON wm.workspace_id=b.workspace_id
-           JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id AND bm.role IN ('admin','member')
-          WHERE t.id=$1 AND wm.user_id=$2",
+           LEFT JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id
+          WHERE t.id=$1 AND wm.user_id=$2 AND (bm.role IN ('admin','member') OR wm.role IN ('owner','admin')) AND (bm.role IN ('admin','member') OR wm.role IN ('owner','admin'))",
     )
     .bind(task_id)
     .bind(user_id)
