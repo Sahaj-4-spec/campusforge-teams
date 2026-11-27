@@ -195,7 +195,7 @@ impl FromRequestParts<AppState> for AuthUser {
 }
 
 /// Board viewers may read board resources but cannot make changes.
-/// Workspace membership alone never grants board access.
+/// Explicit board membership is required for ordinary members; workspace owners and admins retain workspace-wide access.
 fn logout_request_allowed(
     has_cookie: bool,
     has_bearer: bool,
@@ -218,7 +218,7 @@ pub(crate) fn board_role_allows(role: Option<&str>, write: bool) -> bool {
 }
 
 /// Return the caller's role on a board in the selected workspace.
-/// Workspace membership alone is not sufficient for board-scoped reads or writes.
+/// Ordinary members require explicit board membership; workspace owners and admins are elevated to board admin.
 pub(crate) async fn board_role(
     pool: &PgPool,
     user_id: uuid::Uuid,
