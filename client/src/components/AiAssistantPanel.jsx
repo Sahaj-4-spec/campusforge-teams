@@ -45,6 +45,10 @@ function parseProposal(content) {
 
 function AssistantAnswer({ message }) {
   const proposal = message.mode === "task_breakdown" ? parseProposal(message.content) : null;
+  const proposalTasks = proposal && Array.isArray(proposal.tasks)
+    ? proposal.tasks.filter((task) => task && typeof task === "object" && typeof task.title === "string").slice(0, 8)
+    : [];
+  const allowedReferences = new Set((message.sources || []).map((source) => source.reference));
 
   return (
     <div className="ai-answer-body">
@@ -52,20 +56,20 @@ function AssistantAnswer({ message }) {
         <>
           {proposal.summary && <p className="ai-proposal-summary">{proposal.summary}</p>}
           <div className="ai-proposal-list">
-            {proposal.tasks.slice(0, 8).map((task, index) => (
+            {proposalTasks.map((task, index) => (
               <article className="ai-proposal-card" key={task.title + "-" + index}>
                 <div className="ai-proposal-card-top">
                   <span className="ai-proposal-number">{index + 1}</span>
                   <strong>{task.title}</strong>
-                  <span className={"ai-priority ai-priority-" + String(task.priority || "medium").toLowerCase()}>{task.priority || "medium"}</span>
+                  <span className={"ai-priority ai-priority-" + (["low", "medium", "high"].includes(String(task.priority).toLowerCase()) ? String(task.priority).toLowerCase() : "medium")}>{["low", "medium", "high"].includes(String(task.priority).toLowerCase()) ? String(task.priority).toLowerCase() : "medium"}</span>
                 </div>
                 {task.description && <p>{task.description}</p>}
                 <div className="ai-proposal-meta">
                   {Number.isFinite(Number(task.estimated_minutes)) && <span><Clock3 size={12} /> {task.estimated_minutes} min estimate</span>}
                   {task.reason && <span>{task.reason}</span>}
                 </div>
-                {Array.isArray(task.source_refs) && task.source_refs.length > 0 && (
-                  <div className="ai-source-references">{task.source_refs.map((reference) => <span className="ai-source-chip" key={reference}>{reference}</span>)}</div>
+                {Array.isArray(task.source_refs) && task.source_refs.some((reference) => allowedReferences.has(reference)) && (
+                  <div className="ai-source-references">{task.source_refs.filter((reference) => allowedReferences.has(reference)).slice(0, 6).map((reference) => <span className="ai-source-chip" key={reference}>{reference}</span>)}</div>
                 )}
               </article>
             ))}
@@ -82,6 +86,7 @@ function AssistantAnswer({ message }) {
 export default function AiAssistantPanel({ onClose, boards = [], activeBoardId = "" }) {
   const [status, setStatus] = useState(null);
   const [statusError, setStatusError] = useState("");
+  const [privacyAcknowledged, setPrivacyAcknowledged] = useState(false);
   const [mode, setMode] = useState("ask");
   const [boardId, setBoardId] = useState(activeBoardId || "");
   const [messages, setMessages] = useState([]);
@@ -120,7 +125,7 @@ export default function AiAssistantPanel({ onClose, boards = [], activeBoardId =
 
   async function submitPrompt(value = prompt) {
     const content = value.trim();
-    if (!content || loading || !status?.enabled) return;
+    if (!content || loading || !status?.enabled || !privacyAcknowledged) return;
     const history = messages.slice(-8).map(({ role, content: messageContent }) => ({
       role,
       content: messageContent.slice(0, 1800)
@@ -249,6 +254,12 @@ export default function AiAssistantPanel({ onClose, boards = [], activeBoardId =
         </div>
 
         <footer className="ai-panel-footer">
+          {enabled && (
+            <label className="ai-data-consent">
+              <input type="checkbox" checked={privacyAcknowledged} onChange={(event) => setPrivacyAcknowledged(event.target.checked)} />
+              <span>I understand that my prompt and authorized board/task context will be sent to the AI provider configured for this workspace.</span>
+            </label>
+          )}
           <div className="ai-composer-wrap">
             <textarea
               value={prompt}
@@ -259,13 +270,13 @@ export default function AiAssistantPanel({ onClose, boards = [], activeBoardId =
                   submitPrompt();
                 }
               }}
-              placeholder={enabled ? "Ask about tasks, priorities, or project risks…" : "AI is unavailable until server configuration is complete"}
+              placeholder={!enabled ? "AI is unavailable until server configuration is complete" : !privacyAcknowledged ? "Acknowledge the data-sharing notice to begin…" : "Ask about tasks, priorities, or project risks…"}
               rows={2}
               maxLength={2000}
               disabled={!enabled || loading}
               aria-label="Ask the CampusForge assistant"
             />
-            <button className="ai-send-button" type="button" onClick={() => submitPrompt()} disabled={!enabled || loading || !prompt.trim()} aria-label="Send prompt">
+            <button className="ai-send-button" type="button" onClick={() => submitPrompt()} disabled={!enabled || !privacyAcknowledged || loading || !prompt.trim()} aria-label="Send prompt">
               {loading ? <LoaderCircle size={17} className="ai-spin" /> : <Send size={17} />}
             </button>
           </div>
@@ -273,7 +284,7 @@ export default function AiAssistantPanel({ onClose, boards = [], activeBoardId =
             <span><LockKeyhole size={12} /> Session-only conversation</span>
             <span>{prompt.length}/2000</span>
           </div>
-          <p className="ai-disclaimer"><CircleHelp size={12} /> AI can make mistakes. Verify important conclusions against the cited CampusForge records.</p>
+          <p className="ai-disclaimer"><CircleHelp size={12} /> AI can make mistakes. Verify conclusions against cited records and avoid entering secrets or sensitive personal data.</p>
         </footer>
       </section>
     </div>
