@@ -1,6 +1,7 @@
 mod api;
 mod advanced_tasks;
 mod ai;
+mod ai_proposals;
 mod collaboration;
 mod auth;
 mod db;
@@ -161,6 +162,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let api_router = Router::new()
         .merge(ai::router())
+        .merge(ai_proposals::router())
         .merge(api::router())
         .merge(lists::router())
         .merge(advanced_tasks::router())
