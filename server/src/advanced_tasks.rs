@@ -281,7 +281,7 @@ async fn subtask_update(
             .bind(destination).bind(position).bind(subtask_id).execute(&mut *tx).await
             .map_err(|error| internal(error, "Could not update subtask status"))?;
     }
-    sqlx::query("UPDATE tasks SET title=COALESCE($1,c.title), updated_at=NOW() WHERE id=$2")
+    sqlx::query("UPDATE tasks SET title=COALESCE($1,title), updated_at=NOW() WHERE id=$2")
         .bind(title).bind(subtask_id).execute(&mut *tx).await
         .map_err(|error| internal(error, "Could not update subtask"))?;
     tx.commit().await.map_err(|error| internal(error, "Could not save subtask"))?;
@@ -367,7 +367,7 @@ async fn checklist_update(
     }
     let scope:Option<(Uuid,Uuid)>=sqlx::query_as(
         "UPDATE task_checklist_items c
-            SET title=COALESCE($1,title),
+            SET title=COALESCE($1,c.title),
                 is_done=COALESCE($2,is_done),
                 completed_by=CASE WHEN $2 IS TRUE THEN $3 WHEN $2 IS FALSE THEN NULL ELSE completed_by END,
                 completed_at=CASE WHEN $2 IS TRUE THEN NOW() WHEN $2 IS FALSE THEN NULL ELSE completed_at END
