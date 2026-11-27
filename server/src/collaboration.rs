@@ -625,6 +625,19 @@ async fn notifications_list(
                             wm.role IN ('owner','admin')
                             OR EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id=b.id AND bm.user_id=$1)
                        )
+                )
+                AND (
+                    n.notification_type NOT IN ('calendar_invitation','calendar_reminder')
+                    OR (
+                        n.resource_type='calendar_event'
+                        AND EXISTS (
+                            SELECT 1 FROM calendar_events e
+                            JOIN calendar_event_attendees a ON a.event_id=e.id
+                             WHERE e.id=n.resource_id AND e.workspace_id=n.workspace_id
+                               AND e.board_id=n.board_id AND a.user_id=$1
+                               AND a.response <> 'declined'
+                        )
+                    )
                 ))
                 OR (n.notification_type='workspace_invitation' AND EXISTS(
                     SELECT 1 FROM invitations i JOIN users u ON lower(u.email)=lower(i.email)
@@ -697,6 +710,19 @@ async fn notifications_list(
                             wm.role IN ('owner','admin')
                             OR EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id=b.id AND bm.user_id=$1)
                        )
+                )
+                AND (
+                    n.notification_type NOT IN ('calendar_invitation','calendar_reminder')
+                    OR (
+                        n.resource_type='calendar_event'
+                        AND EXISTS (
+                            SELECT 1 FROM calendar_events e
+                            JOIN calendar_event_attendees a ON a.event_id=e.id
+                             WHERE e.id=n.resource_id AND e.workspace_id=n.workspace_id
+                               AND e.board_id=n.board_id AND a.user_id=$1
+                               AND a.response <> 'declined'
+                        )
+                    )
                 ))
                 OR (n.notification_type='workspace_invitation' AND EXISTS(
                     SELECT 1 FROM invitations i JOIN users u ON lower(u.email)=lower(i.email)
@@ -781,6 +807,19 @@ async fn notification_read(
                             wm.role IN ('owner','admin')
                             OR EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id=b.id AND bm.user_id=$2)
                        )
+                )
+                AND (
+                    n.notification_type NOT IN ('calendar_invitation','calendar_reminder')
+                    OR (
+                        n.resource_type='calendar_event'
+                        AND EXISTS (
+                            SELECT 1 FROM calendar_events e
+                            JOIN calendar_event_attendees a ON a.event_id=e.id
+                             WHERE e.id=n.resource_id AND e.workspace_id=n.workspace_id
+                               AND e.board_id=n.board_id AND a.user_id=$2
+                               AND a.response <> 'declined'
+                        )
+                    )
                 ))
                 OR (n.notification_type='workspace_invitation' AND EXISTS(
                     SELECT 1 FROM invitations i JOIN users u ON lower(u.email)=lower(i.email)
@@ -859,6 +898,19 @@ async fn notifications_read_all(
                             wm.role IN ('owner','admin')
                             OR EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id=b.id AND bm.user_id=$1)
                        )
+                )
+                AND (
+                    n.notification_type NOT IN ('calendar_invitation','calendar_reminder')
+                    OR (
+                        n.resource_type='calendar_event'
+                        AND EXISTS (
+                            SELECT 1 FROM calendar_events e
+                            JOIN calendar_event_attendees a ON a.event_id=e.id
+                             WHERE e.id=n.resource_id AND e.workspace_id=n.workspace_id
+                               AND e.board_id=n.board_id AND a.user_id=$1
+                               AND a.response <> 'declined'
+                        )
+                    )
                 ))
                 OR (n.notification_type='workspace_invitation' AND EXISTS(
                     SELECT 1 FROM invitations i JOIN users u ON lower(u.email)=lower(i.email)
