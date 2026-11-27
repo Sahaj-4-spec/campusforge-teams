@@ -214,6 +214,7 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
   }, [messages, loading]);
 
   useEffect(() => {
+    if (proposalReviewOpen) return undefined;
     const previousOverflow = document.body.style.overflow;
     const previousFocus = document.activeElement;
     const panel = panelRef.current;
@@ -256,7 +257,7 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
       window.removeEventListener("keydown", onKeyDown, true);
       if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
     };
-  }, []);
+  }, [proposalReviewOpen]);
 
   function resetScopedConversation() {
     conversationGeneration.current += 1;
@@ -363,16 +364,29 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
     if (proposalWorking) return;
     setProposalWorking(true);
     setProposalActionError("");
+    let applied = false;
     try {
       await aiApi.applyProposal(proposalId);
-      await refreshProposals();
+      applied = true;
+      // Tasks are committed before the follow-up reads happen. Refresh failure
+      // must not make the UI claim that the write failed.
       await onTaskCreated?.();
     } catch (requestError) {
-      setProposalActionError(requestError.message || "The proposal could not be applied.");
-      try { await refreshProposals(); } catch {}
-    } finally {
-      setProposalWorking(false);
+      setProposalActionError(applied
+        ? "Tasks were created, but the workspace view could not be refreshed."
+        : (requestError.message || "The proposal could not be applied."));
     }
+    if (applied) {
+      try {
+        await refreshProposals();
+      } catch (refreshError) {
+        setProposalActionError(refreshError.message || "Tasks were created, but proposal history could not be refreshed.");
+        try { await refreshProposals(); } catch {}
+      }
+    } else {
+      try { await refreshProposals(); } catch {}
+    }
+    setProposalWorking(false);
   }
 
   async function rejectSavedProposal(proposalId) {
