@@ -1084,6 +1084,7 @@ struct AiFileOption {
     original_name: String,
     media_type: String,
     size_bytes: i64,
+    scan_status: String,
 }
 
 async fn ai_files_list(
@@ -1145,7 +1146,7 @@ async fn ai_files_list(
 
     let files = sqlx::query_as::<_, AiFileOption>(
         "SELECT wf.id, COALESCE(wf.board_id, fl.board_id) AS board_id,
-                wf.original_name, wf.media_type, wf.size_bytes
+                wf.original_name, wf.media_type, wf.size_bytes, wf.scan_status
            FROM workspace_files wf
            LEFT JOIN tasks ft ON ft.id = wf.task_id
            LEFT JOIN lists fl ON fl.id = ft.list_id
