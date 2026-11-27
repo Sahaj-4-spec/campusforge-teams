@@ -575,12 +575,20 @@ async fn add_activity(
 async fn ensure_assignee(
     tx: &mut Transaction<'_, Postgres>,
     workspace_id: Uuid,
+    board_id: Uuid,
     assignee_id: Uuid,
 ) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND user_id = $2)",
+        "SELECT EXISTS(
+            SELECT 1
+              FROM workspace_members wm
+              LEFT JOIN board_members bm ON bm.board_id=$2 AND bm.user_id=wm.user_id
+             WHERE wm.workspace_id=$1 AND wm.user_id=$3
+               AND (wm.role IN ('owner','admin') OR bm.role IN ('admin','member'))
+        )",
     )
     .bind(workspace_id)
+    .bind(board_id)
     .bind(assignee_id)
     .fetch_one(&mut **tx)
     .await
@@ -612,10 +620,10 @@ async fn create_task(
     };
 
     if let Some(assignee_id) = input.assignee_id {
-        let is_member = ensure_assignee(&mut tx, workspace_id, assignee_id)
+        let is_member = ensure_assignee(&mut tx, workspace_id, board_id, assignee_id)
             .await.map_err(|cause| internal_error(cause, "Could not verify assignee"))?;
         if !is_member {
-            return Err(error(StatusCode::BAD_REQUEST, "Assignee must be a workspace member"));
+            return Err(error(StatusCode::BAD_REQUEST, "Assignee must be a member or administrator of this board"));
         }
     }
 
@@ -699,10 +707,10 @@ async fn update_task(
     };
 
     if let Some(assignee_id) = input.assignee_id {
-        let is_member = ensure_assignee(&mut tx, workspace_id, assignee_id)
+        let is_member = ensure_assignee(&mut tx, workspace_id, board_id, assignee_id)
             .await.map_err(|cause| internal_error(cause, "Could not verify assignee"))?;
         if !is_member {
-            return Err(error(StatusCode::BAD_REQUEST, "Assignee must be a workspace member"));
+            return Err(error(StatusCode::BAD_REQUEST, "Assignee must be a member or administrator of this board"));
         }
     }
 
