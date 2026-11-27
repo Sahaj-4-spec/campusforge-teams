@@ -40,10 +40,12 @@ The AI assistant remains disabled by default. Provider calls require an explicit
 - Preview frontend: `campusforge-preview` — `https://campusforge-preview.onrender.com`.
 - Rust API test service: `campusforge-api-test` — `https://campusforge-api-test.onrender.com`.
 - Both services use the free/test setup and are not a production deployment.
-- The API's `DATABASE_URL` environment setting was changed to the Neon `campusforge_app` database. Render unexpectedly started a deploy; the last observed status was `update_in_progress` after the build succeeded. Do not assume the service started or is healthy until the deployment and health endpoint are confirmed.
+- An attempted API `DATABASE_URL` switch to Neon `campusforge_app` started a Render deploy and failed at startup with SQLx `VersionMismatch(1)`. The migration journal was then corrected from manually recorded SHA-256 values to SQLx SHA-384 values. Render rolled back to the previous running instance, whose logs identify the old Render test database. The Neon database is now checksum-corrected, but the API has not yet been confirmed connected to it.
 - The static frontend still targets the API test service. End-to-end live sign-in and workspace acceptance are not verified.
 
 ## 3. Migration and release ordering
+
+SQLx stores SHA-384 migration checksums (48 bytes). The initial manual journal had SHA-256 (32-byte) checksums, which caused the failed startup. All 14 existing journal entries have now been corrected using the exact committed migration text and canonical SQLx descriptions; the schema and application rows were not changed.
 
 1. Keep `0014_ai_action_proposals.sql` unchanged; it is already recorded in Neon SQLx migration history.
 2. Run the candidate through integrated CI and review.
@@ -65,7 +67,7 @@ JWTs issued before session migration 0015 do not contain `jti`; users will need 
 | Neon migration 0015 | **Pending** | Apply after candidate checks and backup/restore sign-off; verify `auth_sessions`. |
 | Database backups/restore | **Not verified** | Configure retention/PITR and complete a restore into an isolated environment. |
 | Google/GitHub/Discord OAuth | **Not configured/verified** | Supply client IDs/secrets, register exact HTTPS callback URLs, and pass verified-email sign-up tests for each provider. |
-| Private object storage | **Not configured/verified** | Provision private S3-compatible bucket, encryption, least-privilege credentials, lifecycle/versioning and PUT/GET/DELETE verification. |
+| Private object storage | **Startup I/O verified; policy review pending** | The surviving preview API startup log reports a private S3-compatible bucket (`campusforge-private-uploads`, `us-east-1`) and successful PUT/GET/DELETE verification. Still verify bucket ACL/IAM scope, encryption, lifecycle/versioning, backups and restoration. |
 | Malware scanning | **Not configured/verified** | Provision reachable ClamAV, require scanning in production, and prove infected/unscanned uploads and downloads are blocked. |
 | Email delivery | **Not configured/verified** | Configure Resend API key, verified sender, SPF/DKIM/DMARC and test delivery, bounce/suppression and retry handling. |
 | Perimeter protection | **Not configured/verified** | Configure trusted proxy/edge rate limits and validate forwarded-client-IP handling. |
