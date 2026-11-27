@@ -569,7 +569,17 @@ async fn logout(
     let valid_bearer = bearer_token
         .and_then(|token| verify_session_token(token, &state.jwt_secret).ok())
         .is_some();
-    if !valid_bearer && !frontend_origin_matches(&headers) {
+    if cookie_token.is_some() {
+        // Clearing a cookie is a browser state change: require the trusted
+        // frontend origin even when a different bearer token is also present.
+        if !frontend_origin_matches(&headers) {
+            return Err(StatusCode::FORBIDDEN);
+        }
+    } else if let Some(_bearer) = bearer_token {
+        if !valid_bearer {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+    } else if !frontend_origin_matches(&headers) {
         return Err(StatusCode::FORBIDDEN);
     }
 
