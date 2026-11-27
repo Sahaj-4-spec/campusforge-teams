@@ -129,7 +129,7 @@ Supported modes are `ask`, `summary`, `task_breakdown`, `risk_review`, `meeting_
 
 Mode-specific context is minimized:
 - Ask, Summary, Task Plan and Risk Review read only the bounded authorized board/task context.
-- Meeting Summary loads up to 10 meeting notes from workspace-level notes and boards the caller may access.
+- Meeting Summary loads up to 10 meeting notes from workspace-level notes and boards the caller may access, together with up to 40 separately authorized structured action items. Deleted chat messages and direct conversations are excluded from Team Chat before its 30-message limit is applied.
 - Team Chat loads up to 30 shared-channel messages from workspace-level channels and boards the caller may access. Direct messages are explicitly excluded.
 - Document first uses the scoped `GET /api/ai/files` picker, then requires `file_id` and loads only that file. The file must belong to the active workspace, be visible under the board/member policy, have `scan_status=clean`, use an allowed UTF-8 text media type, and be no larger than 128 KB. The stored byte length and SHA-256 checksum are verified, and the object read itself is byte-bounded. PDFs and images are not parsed or sent in this mode.
 
@@ -145,7 +145,7 @@ Project Pulse is available independently of the external AI provider and does no
 - Assigned workload estimates, with work split evenly for tasks that have multiple assignees and missing estimates shown separately.
 - Per-board health comparisons for the authorized boards in scope.
 
-Project Pulse reads are limited to 30 requests per user per minute and 300 per workspace per hour. The API reads up to 100 authorized boards and 5,000 tasks per response. When either cap is reached, `sample_capped` is true and the dashboard warns that the figures represent a bounded sample. Completion is inferred from Done/Complete/Completed/Closed/Resolved list names; blockers are inferred from Blocked/Stuck/On Hold list names. These are heuristics, not predictive analytics or AI-generated judgments. Users can narrow the dashboard to a single board for a more focused view.
+Project Pulse reads are limited to 30 requests per user per minute and 300 per workspace per hour. Board totals and task samples are read from one PostgreSQL repeatable-read snapshot; incomplete workspace samples return no overall health score and label the result partial. Sensitive Project Pulse and file-list responses use `Cache-Control: no-store`. The API reads up to 100 authorized boards and 5,000 tasks per response. When either cap is reached, `sample_capped` is true and the dashboard warns that the figures represent a bounded sample. Completion is inferred from Done/Complete/Completed/Closed/Resolved list names; blockers are inferred from Blocked/Stuck/On Hold list names. These are heuristics, not predictive analytics or AI-generated judgments. Users can narrow the dashboard to a single board for a more focused view.
 
 ### Provider configuration
 
