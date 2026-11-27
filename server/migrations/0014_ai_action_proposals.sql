@@ -18,7 +18,13 @@ CREATE TABLE ai_action_proposals (
     CONSTRAINT ai_action_proposals_status_valid
         CHECK (status IN ('pending', 'applied', 'rejected', 'stale', 'expired')),
     CONSTRAINT ai_action_proposals_tasks_valid
-        CHECK (jsonb_typeof(tasks) = 'array' AND jsonb_array_length(tasks) BETWEEN 1 AND 8),
+        CHECK (
+            CASE
+                WHEN jsonb_typeof(tasks) = 'array'
+                THEN jsonb_array_length(tasks) BETWEEN 1 AND 8
+                ELSE FALSE
+            END
+        ),
     CONSTRAINT ai_action_proposals_fingerprint_valid
         CHECK (source_fingerprint ~ '^[0-9a-f]{64}$'),
     CONSTRAINT ai_action_proposals_expiry_valid
