@@ -71,6 +71,8 @@ This file establishes the initial product and engineering boundary. The first re
 - Added structured JSON task-plan previews with an explicit "suggestions only" notice.
 - Rendered AI output as plain text; no generated HTML is injected into the page.
 - All requests remain read-only; the API returns `actions_applied: false`.
+- The task-plan JSON schema, task count, priority, estimate, field lengths, and source references are validated server-side; model-invented source IDs are removed.
+- A first-use data-sharing acknowledgement is required before the browser sends a prompt or authorized context to the configured provider.
 
 **Not yet implemented:** meeting-note or file summarization, persistent conversations, streaming, and user preferences.
 
