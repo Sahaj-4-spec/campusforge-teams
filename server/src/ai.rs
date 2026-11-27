@@ -1813,4 +1813,319 @@ mod tests {
         assert_eq!(value["tasks"][0]["source_refs"], json!(["T1"]));
         assert_eq!(references, vec!["T1".to_owned()]);
     }
+
+
+#[cfg(test)]
+mod authorization_integration_tests {
+    use super::*;
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn ai_context_is_scoped_to_current_workspace_and_board_access(
+        pool: sqlx::PgPool,
+    ) -> Result<(), sqlx::Error> {
+        let owner_one = Uuid::new_v4();
+        let member_one = Uuid::new_v4();
+        let owner_two = Uuid::new_v4();
+        let workspace_one = Uuid::new_v4();
+        let workspace_two = Uuid::new_v4();
+        let board_one_a = Uuid::new_v4();
+        let board_one_b = Uuid::new_v4();
+        let board_two = Uuid::new_v4();
+        let list_one_a = Uuid::new_v4();
+        let list_one_b = Uuid::new_v4();
+        let list_two = Uuid::new_v4();
+        let task_one_a = Uuid::new_v4();
+        let task_one_b = Uuid::new_v4();
+        let task_two = Uuid::new_v4();
+        let note_one_a = Uuid::new_v4();
+        let note_one_b = Uuid::new_v4();
+        let note_one_workspace = Uuid::new_v4();
+        let note_two = Uuid::new_v4();
+        let chat_one_a = Uuid::new_v4();
+        let chat_one_b = Uuid::new_v4();
+        let chat_one_workspace = Uuid::new_v4();
+        let chat_two = Uuid::new_v4();
+        let file_one_a = Uuid::new_v4();
+        let file_one_b = Uuid::new_v4();
+        let file_one_workspace = Uuid::new_v4();
+        let file_two = Uuid::new_v4();
+
+        for (id, email, name) in [
+            (owner_one, "owner-one@example.test", "Owner One"),
+            (member_one, "member-one@example.test", "Member One"),
+            (owner_two, "owner-two@example.test", "Owner Two"),
+        ] {
+            sqlx::query(
+                "INSERT INTO users (id, email, password_hash, full_name)
+                 VALUES ($1, $2, 'test-hash', $3)",
+            )
+            .bind(id)
+            .bind(email)
+            .bind(name)
+            .execute(&pool)
+            .await?;
+        }
+
+        for (id, name, owner) in [
+            (workspace_one, "Workspace One", owner_one),
+            (workspace_two, "Workspace Two", owner_two),
+        ] {
+            sqlx::query("INSERT INTO workspaces (id, name, owner_id) VALUES ($1, $2, $3)")
+                .bind(id)
+                .bind(name)
+                .bind(owner)
+                .execute(&pool)
+                .await?;
+        }
+
+        for (workspace_id, user_id, role) in [
+            (workspace_one, owner_one, "owner"),
+            (workspace_one, member_one, "member"),
+            (workspace_two, owner_two, "owner"),
+        ] {
+            sqlx::query(
+                "INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, $3)",
+            )
+            .bind(workspace_id)
+            .bind(user_id)
+            .bind(role)
+            .execute(&pool)
+            .await?;
+        }
+
+        for (id, workspace_id, name, creator) in [
+            (board_one_a, workspace_one, "Project A", owner_one),
+            (board_one_b, workspace_one, "Project B", owner_one),
+            (board_two, workspace_two, "Other Workspace Project", owner_two),
+        ] {
+            sqlx::query(
+                "INSERT INTO boards (id, workspace_id, name, created_by) VALUES ($1, $2, $3, $4)",
+            )
+            .bind(id)
+            .bind(workspace_id)
+            .bind(name)
+            .bind(creator)
+            .execute(&pool)
+            .await?;
+        }
+
+        sqlx::query("INSERT INTO board_members (board_id, user_id, role) VALUES ($1, $2, 'member')")
+            .bind(board_one_a)
+            .bind(member_one)
+            .execute(&pool)
+            .await?;
+
+        for (id, board_id, name, position) in [
+            (list_one_a, board_one_a, "To do", 1_i32),
+            (list_one_b, board_one_b, "To do", 1_i32),
+            (list_two, board_two, "To do", 1_i32),
+        ] {
+            sqlx::query("INSERT INTO lists (id, board_id, name, position) VALUES ($1, $2, $3, $4)")
+                .bind(id)
+                .bind(board_id)
+                .bind(name)
+                .bind(position)
+                .execute(&pool)
+                .await?;
+        }
+
+        for (id, list_id, title, creator) in [
+            (task_one_a, list_one_a, "Visible board task", owner_one),
+            (task_one_b, list_one_b, "Private board task", owner_one),
+            (task_two, list_two, "Other workspace task", owner_two),
+        ] {
+            sqlx::query(
+                "INSERT INTO tasks (id, list_id, title, created_by) VALUES ($1, $2, $3, $4)",
+            )
+            .bind(id)
+            .bind(list_id)
+            .bind(title)
+            .bind(creator)
+            .execute(&pool)
+            .await?;
+        }
+
+        for (id, workspace_id, board_id, creator, title) in [
+            (note_one_a, workspace_one, Some(board_one_a), owner_one, "Project A notes"),
+            (note_one_b, workspace_one, Some(board_one_b), owner_one, "Project B notes"),
+            (note_one_workspace, workspace_one, None, owner_one, "Workspace notes"),
+            (note_two, workspace_two, Some(board_two), owner_two, "Other workspace notes"),
+        ] {
+            sqlx::query(
+                "INSERT INTO meeting_notes (id, workspace_id, board_id, created_by, title)
+                 VALUES ($1, $2, $3, $4, $5)",
+            )
+            .bind(id)
+            .bind(workspace_id)
+            .bind(board_id)
+            .bind(creator)
+            .bind(title)
+            .execute(&pool)
+            .await?;
+        }
+
+        for (id, workspace_id, board_id, author, body) in [
+            (chat_one_a, workspace_one, Some(board_one_a), owner_one, "Project A message"),
+            (chat_one_b, workspace_one, Some(board_one_b), owner_one, "Project B message"),
+            (chat_one_workspace, workspace_one, None, owner_one, "Workspace channel message"),
+            (chat_two, workspace_two, Some(board_two), owner_two, "Other workspace message"),
+        ] {
+            sqlx::query(
+                "INSERT INTO chat_messages (id, workspace_id, board_id, author_id, body)
+                 VALUES ($1, $2, $3, $4, $5)",
+            )
+            .bind(id)
+            .bind(workspace_id)
+            .bind(board_id)
+            .bind(author)
+            .bind(body)
+            .execute(&pool)
+            .await?;
+        }
+
+        for (id, workspace_id, board_id, uploader, name) in [
+            (file_one_a, workspace_one, Some(board_one_a), owner_one, "project-a.md"),
+            (file_one_b, workspace_one, Some(board_one_b), owner_one, "project-b.md"),
+            (file_one_workspace, workspace_one, None, owner_one, "workspace-notes.md"),
+            (file_two, workspace_two, Some(board_two), owner_two, "other-workspace.md"),
+        ] {
+            sqlx::query(
+                "INSERT INTO workspace_files
+                    (id, workspace_id, board_id, uploaded_by, original_name, storage_key,
+                     media_type, size_bytes, checksum_sha256, scan_status)
+                 VALUES ($1, $2, $3, $4, $5, $6, 'text/markdown', 1, repeat('a', 64), 'clean')",
+            )
+            .bind(id)
+            .bind(workspace_id)
+            .bind(board_id)
+            .bind(uploader)
+            .bind(name)
+            .bind(format!("ai-test/{id}"))
+            .execute(&pool)
+            .await?;
+        }
+
+        // Board/task reads: a regular member sees only their explicit board; an
+        // owner/admin sees all boards in their workspace; another workspace is isolated.
+        let task_count = |workspace_id: Uuid, user_id: Uuid| async move {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*)::bigint
+                   FROM tasks t
+                   JOIN lists l ON l.id = t.list_id
+                   JOIN boards b ON b.id = l.board_id
+                  WHERE b.workspace_id = $1
+                    AND EXISTS (SELECT 1 FROM workspace_members wm
+                                 WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2)
+                    AND (
+                      EXISTS (SELECT 1 FROM board_members bm WHERE bm.board_id = b.id AND bm.user_id = $2)
+                      OR EXISTS (SELECT 1 FROM workspace_members wm
+                                  WHERE wm.workspace_id = b.workspace_id AND wm.user_id = $2
+                                    AND wm.role IN ('owner', 'admin'))
+                    )",
+            )
+            .bind(workspace_id)
+            .bind(user_id)
+            .fetch_one(&pool)
+        };
+        assert_eq!(task_count(workspace_one, member_one).await?, 1);
+        assert_eq!(task_count(workspace_one, owner_one).await?, 2);
+        assert_eq!(task_count(workspace_one, owner_two).await?, 0);
+
+        // The meeting-summary and chat-summary predicates permit workspace-level
+        // records but restrict board-linked records to the caller's board role.
+        let meeting_count = |workspace_id: Uuid, board_id: Option<Uuid>, user_id: Uuid| async move {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*)::bigint
+                   FROM meeting_notes mn
+                   LEFT JOIN boards b ON b.id = mn.board_id AND b.workspace_id = mn.workspace_id
+                  WHERE mn.workspace_id = $1
+                    AND EXISTS (SELECT 1 FROM workspace_members wm
+                                 WHERE wm.workspace_id = mn.workspace_id AND wm.user_id = $3)
+                    AND ($2::uuid IS NULL OR mn.board_id IS NULL OR mn.board_id = $2)
+                    AND (mn.board_id IS NULL OR b.id IS NOT NULL)
+                    AND (
+                      mn.board_id IS NULL
+                      OR EXISTS (SELECT 1 FROM board_members bm WHERE bm.board_id = mn.board_id AND bm.user_id = $3)
+                      OR EXISTS (SELECT 1 FROM workspace_members wm
+                                  WHERE wm.workspace_id = mn.workspace_id AND wm.user_id = $3
+                                    AND wm.role IN ('owner', 'admin'))
+                    )",
+            )
+            .bind(workspace_id)
+            .bind(board_id)
+            .bind(user_id)
+            .fetch_one(&pool)
+        };
+        let chat_count = |workspace_id: Uuid, board_id: Option<Uuid>, user_id: Uuid| async move {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*)::bigint
+                   FROM chat_messages cm
+                   LEFT JOIN boards b ON b.id = cm.board_id AND b.workspace_id = cm.workspace_id
+                  WHERE cm.workspace_id = $1
+                    AND EXISTS (SELECT 1 FROM workspace_members wm
+                                 WHERE wm.workspace_id = cm.workspace_id AND wm.user_id = $3)
+                    AND ($2::uuid IS NULL OR cm.board_id IS NULL OR cm.board_id = $2)
+                    AND (cm.board_id IS NULL OR b.id IS NOT NULL)
+                    AND (
+                      cm.board_id IS NULL
+                      OR EXISTS (SELECT 1 FROM board_members bm WHERE bm.board_id = cm.board_id AND bm.user_id = $3)
+                      OR EXISTS (SELECT 1 FROM workspace_members wm
+                                  WHERE wm.workspace_id = cm.workspace_id AND wm.user_id = $3
+                                    AND wm.role IN ('owner', 'admin'))
+                    )",
+            )
+            .bind(workspace_id)
+            .bind(board_id)
+            .bind(user_id)
+            .fetch_one(&pool)
+        };
+        assert_eq!(meeting_count(workspace_one, Some(board_one_a), member_one).await?, 2);
+        assert_eq!(meeting_count(workspace_one, None, member_one).await?, 2);
+        assert_eq!(meeting_count(workspace_one, None, owner_one).await?, 3);
+        assert_eq!(meeting_count(workspace_one, None, owner_two).await?, 0);
+        assert_eq!(chat_count(workspace_one, Some(board_one_a), member_one).await?, 2);
+        assert_eq!(chat_count(workspace_one, None, member_one).await?, 2);
+        assert_eq!(chat_count(workspace_one, None, owner_one).await?, 3);
+        assert_eq!(chat_count(workspace_one, None, owner_two).await?, 0);
+
+        // File context must use the same workspace and board permissions.
+        let file_access = |file_id: Uuid, workspace_id: Uuid, user_id: Uuid| async move {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (
+                    SELECT 1
+                      FROM workspace_files wf
+                      LEFT JOIN tasks ft ON ft.id = wf.task_id
+                      LEFT JOIN lists fl ON fl.id = ft.list_id
+                      LEFT JOIN boards b ON b.id = COALESCE(wf.board_id, fl.board_id)
+                     WHERE wf.id = $1
+                       AND wf.workspace_id = $2
+                       AND wf.is_deleting = FALSE
+                       AND EXISTS (SELECT 1 FROM workspace_members wm
+                                    WHERE wm.workspace_id = wf.workspace_id AND wm.user_id = $3)
+                       AND (
+                         COALESCE(wf.board_id, fl.board_id) IS NULL
+                         OR EXISTS (SELECT 1 FROM board_members bm
+                                     WHERE bm.board_id = COALESCE(wf.board_id, fl.board_id)
+                                       AND bm.user_id = $3)
+                         OR EXISTS (SELECT 1 FROM workspace_members wm
+                                     WHERE wm.workspace_id = wf.workspace_id AND wm.user_id = $3
+                                       AND wm.role IN ('owner', 'admin'))
+                       )
+                )",
+            )
+            .bind(file_id)
+            .bind(workspace_id)
+            .bind(user_id)
+            .fetch_one(&pool)
+        };
+        assert!(file_access(file_one_a, workspace_one, member_one).await?);
+        assert!(!file_access(file_one_b, workspace_one, member_one).await?);
+        assert!(file_access(file_one_workspace, workspace_one, member_one).await?);
+        assert!(file_access(file_one_b, workspace_one, owner_one).await?);
+        assert!(!file_access(file_two, workspace_one, owner_one).await?);
+
+        Ok(())
+    }
 }
+}
+
