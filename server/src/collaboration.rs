@@ -1368,9 +1368,10 @@ async fn analytics(
          FROM tasks t
          JOIN lists l ON l.id=t.list_id
          JOIN boards b ON b.id=l.board_id
-         WHERE b.workspace_id=$1",
+         WHERE b.workspace_id=$1 AND EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id=b.id AND bm.user_id=$2)",
     )
     .bind(workspace_id)
+    .bind(user_id)
     .fetch_one(&state.db)
     .await
     .map_err(|error| internal(error, "Could not calculate workspace metrics"))?;
@@ -1385,10 +1386,12 @@ async fn analytics(
          LEFT JOIN tasks t ON t.id=ta.task_id
          LEFT JOIN lists l ON l.id=t.list_id
          LEFT JOIN boards b ON b.id=l.board_id AND b.workspace_id=wm.workspace_id
+          AND EXISTS(SELECT 1 FROM board_members own WHERE own.board_id=b.id AND own.user_id=$2)
          WHERE wm.workspace_id=$1
          GROUP BY u.id, u.full_name ORDER BY u.full_name",
     )
     .bind(workspace_id)
+    .bind(user_id)
     .fetch_all(&state.db)
     .await
     .map_err(|error| internal(error, "Could not calculate member workload"))?;
@@ -1396,11 +1399,13 @@ async fn analytics(
     let project_rows = sqlx::query_as::<_, (Uuid, String, i64, i64)>(
         "SELECT b.id, b.name, COUNT(t.id)::bigint,
            COUNT(t.id) FILTER (WHERE lower(l.name) IN ('done','complete','completed'))::bigint
-         FROM boards b LEFT JOIN lists l ON l.board_id=b.id
+         FROM boards b JOIN board_members own ON own.board_id=b.id AND own.user_id=$2
+         LEFT JOIN lists l ON l.board_id=b.id
          LEFT JOIN tasks t ON t.list_id=l.id
          WHERE b.workspace_id=$1 GROUP BY b.id,b.name ORDER BY b.name",
     )
     .bind(workspace_id)
+    .bind(user_id)
     .fetch_all(&state.db)
     .await
     .map_err(|error| internal(error, "Could not calculate project progress"))?;
