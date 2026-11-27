@@ -2,7 +2,7 @@
 
 CampusForge applies SQLx migrations when the API starts. Keep database changes compatible with the application versions that may be live during a rolling deploy and with the last rollback target.
 
-> **Current status — 28 November 2026:** PR #20 (rollback-compatible SQLx runner) and PR #21 (verified-provider sign-up and the remaining non-AI roadmap) are already merged. The migration sequence below records the historical safe order; those PRs are not pending. Migrations 0001–0013 are present in the `main` source tree, but this does not prove that they have been applied to the currently hosted Render database. Verify the active API revision and `_sqlx_migrations` table before rollout. The integrated candidate preserves migration 0015 (`ai_action_proposals`, already applied to Neon `campusforge_app`) and adds migration 0015 (`auth_sessions`) for revocable sessions. The candidate is not merged or deployed; fresh combined-branch CI and runtime session checks remain required.
+> **Current status — 28 November 2026:** PR #20 (rollback-compatible SQLx runner) and PR #21 (verified-provider sign-up and the remaining non-AI roadmap) are already merged. The migration sequence below records the historical safe order; those PRs are not pending. Migrations 0001–0013 are present in the `main` source tree, but this does not prove that they have been applied to the currently hosted Render database. Verify the active API revision and `_sqlx_migrations` table before rollout. The integrated candidate preserves migration 0014 (`ai_action_proposals`, already applied to Neon `campusforge_app`) and adds migration 0015 (`auth_sessions`) for revocable sessions. The candidate is not merged or deployed; fresh combined-branch CI and runtime session checks remain required.
 
 ## SQLx rollback compatibility
 
@@ -45,7 +45,7 @@ The integrated candidate adds `0015_revocable_auth_sessions.sql` after the alrea
 - WebSocket handshakes validate the session and connected sockets re-check it every 30 seconds.
 - Expired/revoked rows are cleaned after a seven-day retention buffer.
 
-Apply migration 0015 only with the matching application binary after the Track A finalization branch passes CI/review. All existing JWTs issued before this change lack `jti`; users must sign in again after release. This is an additive schema change, but rollout still requires a valid backup and a tested rollback plan. Do not infer that the Render database has migrations 0001–0013 merely because those files are present in GitHub.
+Apply migration 0015 only with the matching session-aware application binary after the integrated candidate passes fresh CI and review. All existing JWTs issued before this change lack `jti`; users must sign in again after release. This is an additive schema change, but rollout still requires a valid backup and a tested rollback plan. Do not infer that the Render database has migrations 0001–0013 merely because those files are present in GitHub.
 
 ## Rollback
 
