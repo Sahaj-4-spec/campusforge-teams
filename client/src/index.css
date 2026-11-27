@@ -3237,3 +3237,5 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .ai-file-target { width:100%; margin-left:0; }
   .ai-file-target select { width:min(68%, 280px); }
 }
+
+.pulse-score-partial .pulse-score-ring { border-color:#d8d5e4; color:#77748b; background:#fbfaff; }
