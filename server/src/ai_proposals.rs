@@ -180,61 +180,50 @@ fn validate_tasks(tasks: &mut [ProposedTask]) -> Result<(), (StatusCode, Json<Ap
 }
 
 /// A member with the viewer role can read proposals but cannot create or apply them.
+/// Lock the authorization rows while an approval transaction is in progress.
 async fn can_write_board(
     tx: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
     workspace_id: Uuid,
     board_id: Uuid,
 ) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (
-            SELECT 1
-              FROM boards b
-              JOIN workspace_members wm ON wm.workspace_id = b.workspace_id
-             WHERE b.id = $1 AND b.workspace_id = $2 AND wm.user_id = $3
-               AND (
-                   wm.role IN ('owner', 'admin')
-                   OR EXISTS (
-                       SELECT 1 FROM board_members bm
-                        WHERE bm.board_id = b.id AND bm.user_id = $3
-                          AND bm.role IN ('admin', 'member')
-                   )
-               )
-        )",
+    let board: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM boards WHERE id = $1 AND workspace_id = $2 FOR KEY SHARE",
     )
     .bind(board_id)
     .bind(workspace_id)
-    .bind(user_id)
-    .fetch_one(&mut **tx)
-    .await
-}
+    .fetch_optional(&mut **tx)
+    .await?;
+    if board.is_none() {
+        return Ok(false);
+    }
 
-async fn can_read_board(
-    state: &AppState,
-    user_id: Uuid,
-    workspace_id: Uuid,
-    board_id: Uuid,
-) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (
-            SELECT 1
-              FROM boards b
-              JOIN workspace_members wm ON wm.workspace_id = b.workspace_id
-             WHERE b.id = $1 AND b.workspace_id = $2 AND wm.user_id = $3
-               AND (
-                   wm.role IN ('owner', 'admin')
-                   OR EXISTS (
-                       SELECT 1 FROM board_members bm
-                        WHERE bm.board_id = b.id AND bm.user_id = $3
-                   )
-               )
-        )",
+    let workspace_role: Option<String> = sqlx::query_scalar(
+        "SELECT role FROM workspace_members
+          WHERE workspace_id = $1 AND user_id = $2
+          FOR KEY SHARE",
     )
-    .bind(board_id)
     .bind(workspace_id)
     .bind(user_id)
-    .fetch_one(&state.db)
-    .await
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(workspace_role) = workspace_role else {
+        return Ok(false);
+    };
+    if matches!(workspace_role.as_str(), "owner" | "admin") {
+        return Ok(true);
+    }
+
+    let board_role: Option<String> = sqlx::query_scalar(
+        "SELECT role FROM board_members
+          WHERE board_id = $1 AND user_id = $2
+          FOR KEY SHARE",
+    )
+    .bind(board_id)
+    .bind(user_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(matches!(board_role.as_deref(), Some("admin" | "member")))
 }
 
 /// Hash only the current board/list/task state. Raw content is never written to the audit log.
@@ -293,7 +282,7 @@ async fn board_fingerprint(
 }
 
 async fn validate_assignees(
-    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
     workspace_id: Uuid,
     board_id: Uuid,
     tasks: &[ProposedTask],
@@ -302,31 +291,40 @@ async fn validate_assignees(
         if task.assignee_ids.is_empty() {
             continue;
         }
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*)::bigint
-               FROM unnest($1::uuid[]) AS candidate(user_id)
-              WHERE EXISTS (
-                  SELECT 1 FROM workspace_members wm
-                   WHERE wm.workspace_id = $2 AND wm.user_id = candidate.user_id
-              )
-                AND (
-                    EXISTS (
-                        SELECT 1 FROM workspace_members wm
-                         WHERE wm.workspace_id = $2 AND wm.user_id = candidate.user_id
-                           AND wm.role IN ('owner', 'admin')
-                    )
-                    OR EXISTS (
-                        SELECT 1 FROM board_members bm
-                         WHERE bm.board_id = $3 AND bm.user_id = candidate.user_id
-                    )
-                )",
+
+        // Lock both workspace and board membership records so access cannot be
+        // revoked between this check and the task/assignee inserts.
+        let owners: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT user_id FROM workspace_members
+              WHERE workspace_id = $1 AND user_id = ANY($2::uuid[])
+                AND role IN ('owner', 'admin')
+              FOR KEY SHARE",
         )
-        .bind(&task.assignee_ids)
         .bind(workspace_id)
-        .bind(board_id)
-        .fetch_one(&state.db)
+        .bind(&task.assignee_ids)
+        .fetch_all(&mut **tx)
         .await?;
-        if count != task.assignee_ids.len() as i64 {
+
+        let board_members: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT bm.user_id
+               FROM board_members bm
+               JOIN workspace_members wm
+                 ON wm.workspace_id = $2 AND wm.user_id = bm.user_id
+              WHERE bm.board_id = $1 AND bm.user_id = ANY($3::uuid[])
+                AND bm.role IN ('admin', 'member')
+              FOR KEY SHARE OF bm, wm",
+        )
+        .bind(board_id)
+        .bind(workspace_id)
+        .bind(&task.assignee_ids)
+        .fetch_all(&mut **tx)
+        .await?;
+
+        let mut eligible = owners;
+        eligible.extend(board_members);
+        eligible.sort_unstable();
+        eligible.dedup();
+        if eligible.len() != task.assignee_ids.len() {
             return Ok(false);
         }
     }
@@ -421,7 +419,7 @@ async fn create_proposal(
         return Err(fail(StatusCode::BAD_REQUEST, "Choose a valid column in the selected project"));
     }
 
-    if !validate_assignees(&state, workspace_id, request.board_id, &request.tasks).await
+    if !validate_assignees(&mut tx, workspace_id, request.board_id, &request.tasks).await
         .map_err(|cause| internal_error(cause, "Could not validate proposed assignees"))?
     {
         return Err(fail(StatusCode::BAD_REQUEST, "Every proposed assignee must be a member of this project"));
@@ -539,10 +537,10 @@ async fn apply_proposal(
         return Err(fail(StatusCode::CONFLICT, "The project changed after this proposal was created. Generate a fresh proposal."));
     }
 
-    let tasks: Vec<ProposedTask> = serde_json::from_str(&row.tasks_json)
+    let mut tasks: Vec<ProposedTask> = serde_json::from_str(&row.tasks_json)
         .map_err(|cause| internal_error(cause, "Stored proposal data is invalid"))?;
-    validate_tasks(&mut tasks.clone()).map_err(|_| fail(StatusCode::CONFLICT, "Stored proposal validation failed"))?;
-    if !validate_assignees(&state, workspace_id, row.board_id, &tasks).await
+    validate_tasks(&mut tasks).map_err(|_| fail(StatusCode::CONFLICT, "Stored proposal validation failed"))?;
+    if !validate_assignees(&mut tx, workspace_id, row.board_id, &tasks).await
         .map_err(|cause| internal_error(cause, "Could not recheck proposed assignees"))?
     {
         return Err(fail(StatusCode::CONFLICT, "A proposed assignee is no longer a member of this project"));
@@ -587,7 +585,7 @@ async fn apply_proposal(
         .bind(&task.title)
         .bind(&task.description)
         .bind(&task.priority)
-        .bind(task.due_at)
+        .bind(task.due_at.clone())
         .bind(next_position)
         .bind(user_id)
         .bind(task.estimated_minutes)
