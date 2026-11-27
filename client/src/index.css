@@ -3239,3 +3239,96 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 
 .pulse-score-partial .pulse-score-ring { border-color:#d8d5e4; color:#77748b; background:#fbfaff; }
+
+
+/* Durable AI proposal review drawer */
+.ai-proposal-review-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(20, 18, 34, 0.48);
+  backdrop-filter: blur(3px);
+}
+.ai-proposal-review-panel {
+  width: min(820px, 100vw);
+  height: 100%;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  background: #fbfaff;
+  color: #24213a;
+  box-shadow: -18px 0 60px rgba(25, 20, 55, 0.2);
+}
+.ai-proposal-review-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 24px 26px 18px;
+  border-bottom: 1px solid #e9e6f3;
+  background: #fff;
+}
+.ai-proposal-review-header h2 { margin: 3px 0 5px; font-size: 21px; }
+.ai-proposal-review-header p:not(.eyebrow) { margin: 0; color: #77738b; font-size: 13px; }
+.ai-proposal-review-layout {
+  min-height: 0;
+  flex: 1;
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+}
+.ai-proposal-review-list {
+  padding: 14px;
+  border-right: 1px solid #e9e6f3;
+  background: #f7f5fc;
+  overflow-y: auto;
+}
+.ai-proposal-review-list-item {
+  display: grid;
+  width: 100%;
+  gap: 7px;
+  margin-bottom: 9px;
+  padding: 13px;
+  border: 1px solid #e7e3f0;
+  border-radius: 12px;
+  background: #fff;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ai-proposal-review-list-item.active { border-color: #7766d8; box-shadow: 0 0 0 2px rgba(119, 102, 216, .12); }
+.ai-proposal-review-list-title { font-weight: 650; font-size: 13px; }
+.ai-proposal-review-list-item small { color: #858197; font-size: 11px; }
+.ai-proposal-review-detail { padding: 22px 24px 28px; overflow-y: auto; }
+.ai-proposal-review-detail-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ai-proposal-review-detail-heading h3 { margin: 0 0 4px; font-size: 18px; }
+.ai-proposal-review-detail-heading p { margin: 0; color: #858197; font-size: 11px; overflow-wrap: anywhere; }
+.ai-proposal-review-expiry { display: flex; align-items: center; gap: 6px; color: #77738b; font-size: 12px; }
+.ai-proposal-review-tasks { display: grid; gap: 10px; margin: 18px 0; }
+.ai-proposal-review-task { padding: 14px; border: 1px solid #e8e5f0; border-radius: 12px; background: #fff; }
+.ai-proposal-review-task-heading { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.ai-proposal-review-task-heading strong { font-size: 13px; line-height: 1.45; }
+.ai-proposal-review-task p { margin: 8px 0; color: #666278; font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
+.ai-proposal-review-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 9px; margin: 18px 0; }
+.ai-proposal-review-actions button { min-height: 40px; border-radius: 10px; padding: 0 14px; font-weight: 650; cursor: pointer; }
+.ai-proposal-reject { border: 1px solid #e5dce0; background: #fff; color: #8c4050; }
+.ai-proposal-approve { display: inline-flex; align-items: center; gap: 8px; border: 1px solid #6e5bc9; background: #6e5bc9; color: #fff; }
+.ai-proposal-review-actions button:disabled { opacity: .55; cursor: not-allowed; }
+.ai-proposal-review-safety, .ai-proposal-review-success { display: flex; align-items: flex-start; gap: 8px; margin: 14px 0 0; font-size: 12px; line-height: 1.5; color: #656078; }
+.ai-proposal-review-success { color: #23734b; }
+.ai-proposal-review-error { color: #b43b4b; font-size: 12px; }
+.ai-proposal-review-empty { padding: 20px; color: #7c788d; font-size: 13px; line-height: 1.5; }
+.ai-proposal-status { display: inline-flex; width: fit-content; padding: 3px 8px; border-radius: 999px; background: #eeeaf8; color: #63549c; font-size: 10px; font-weight: 700; text-transform: capitalize; }
+.ai-proposal-status.status-applied { background: #e5f5eb; color: #23734b; }
+.ai-proposal-status.status-rejected, .ai-proposal-status.status-stale, .ai-proposal-status.status-expired { background: #f9ecee; color: #9c4954; }
+.ai-proposal-review-button { display: inline-flex; align-items: center; gap: 7px; border: 1px solid #ded8f0; border-radius: 9px; padding: 8px 11px; color: #6455a6; background: #fff; font-size: 12px; font-weight: 650; cursor: pointer; }
+.ai-proposal-review-button:hover { background: #f7f4ff; }
+@media (max-width: 640px) {
+  .ai-proposal-review-layout { grid-template-columns: 1fr; }
+  .ai-proposal-review-list { max-height: 190px; border-right: 0; border-bottom: 1px solid #e9e6f3; }
+  .ai-proposal-review-header { padding: 18px 16px 14px; }
+  .ai-proposal-review-detail { padding: 17px 16px 24px; }
+  .ai-proposal-review-actions { flex-direction: column-reverse; }
+  .ai-proposal-review-actions button { width: 100%; justify-content: center; }
+}
