@@ -3144,7 +3144,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .pulse-metric-icon { display:grid; width:28px; height:28px; place-items:center; border-radius:8px; color:#6e65be; background:#f2f0ff; }
 .pulse-metric strong { color:#343149; font-size:22px; line-height:1.2; }
 .pulse-metric-label { color:#625f77; font-size:10px; font-weight:750; }
-.pulse-metric small { color:#9996a8; font-size:9px; line-height:1.4; }
+.pulse-metric small { color:#5d596a; font-size:9px; line-height:1.4; }
 .pulse-metric-danger .pulse-metric-icon { color:#b74d5b; background:#fff0f2; }
 .pulse-metric-warning .pulse-metric-icon { color:#a07829; background:#fff8e9; }
 .pulse-metric-good .pulse-metric-icon { color:#38846a; background:#edf8f2; }
