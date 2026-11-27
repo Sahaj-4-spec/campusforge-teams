@@ -100,6 +100,11 @@ export const authApi = {
   oauthStartUrl: (provider) => (API_BASE || window.location.origin) + "/api/auth/" + encodeURIComponent(provider) + "/start"
 };
 
+export const aiApi = {
+  status: () => request("/api/ai/status"),
+  ask: (values) => request("/api/ai/assistant", { method: "POST", body: values })
+};
+
 export const workspaceApi = {
   get: (workspaceId = getStoredWorkspaceId()) => request("/api/workspace", {
     headers: workspaceId ? { "X-Workspace-ID": workspaceId } : {}
