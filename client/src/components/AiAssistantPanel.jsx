@@ -94,6 +94,11 @@ export default function AiAssistantPanel({ onClose, boards = [], activeBoardId =
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const endRef = useRef(null);
+  const panelRef = useRef(null);
+  const onCloseRef = useRef(onClose);
+  const loadingRef = useRef(loading);
+  onCloseRef.current = onClose;
+  loadingRef.current = loading;
   const availableModes = useMemo(() => new Set(status?.modes || MODES.map((item) => item.id)), [status]);
 
   useEffect(() => {
@@ -112,16 +117,48 @@ export default function AiAssistantPanel({ onClose, boards = [], activeBoardId =
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
+    const previousFocus = document.activeElement;
+    const panel = panelRef.current;
     document.body.style.overflow = "hidden";
+
+    const getFocusable = () => panel?.querySelectorAll(
+      'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+    ) || [];
+    const initialTargets = getFocusable();
+    if (initialTargets.length) initialTargets[0].focus();
+    else panel?.focus();
+
     const onKeyDown = (event) => {
-      if (event.key === "Escape" && !loading) onClose();
+      if (event.key === "Escape" && !loadingRef.current) {
+        event.preventDefault();
+        onCloseRef.current?.();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = Array.from(getFocusable());
+      if (!items.length) {
+        event.preventDefault();
+        panel?.focus();
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !panel?.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !panel?.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
     };
-    window.addEventListener("keydown", onKeyDown);
+
+    window.addEventListener("keydown", onKeyDown, true);
     return () => {
       document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keydown", onKeyDown, true);
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
     };
-  }, [onClose, loading]);
+  }, []);
 
   async function submitPrompt(value = prompt) {
     const content = value.trim();
@@ -160,7 +197,7 @@ export default function AiAssistantPanel({ onClose, boards = [], activeBoardId =
 
   return (
     <div className="ai-panel-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !loading) onClose(); }}>
-      <section className="ai-panel" role="dialog" aria-modal="true" aria-labelledby="ai-panel-title">
+      <section className="ai-panel" role="dialog" aria-modal="true" aria-labelledby="ai-panel-title" ref={panelRef} tabIndex={-1}>
         <header className="ai-panel-header">
           <div className="ai-panel-brand">
             <span className="ai-panel-brand-icon"><BrainCircuit size={20} /></span>
@@ -170,7 +207,7 @@ export default function AiAssistantPanel({ onClose, boards = [], activeBoardId =
               <span className="ai-panel-subtitle"><span className={enabled ? "ai-status-dot active" : "ai-status-dot"} /> {enabled ? "Connected · Read-only mode" : "Not configured on this environment"}</span>
             </div>
           </div>
-          <button className="ai-close-button" type="button" onClick={onClose} aria-label="Close AI assistant" disabled={loading || !privacyAcknowledged}><X size={19} /></button>
+          <button className="ai-close-button" type="button" onClick={onClose} aria-label="Close AI assistant" disabled={loading}><X size={19} /></button>
         </header>
 
         <div className="ai-panel-controls">
