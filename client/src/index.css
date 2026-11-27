@@ -3216,3 +3216,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .ai-panel { height:calc(100dvh - 24px); min-height:0; }
   .pulse-panel { max-height:none; min-height:calc(100dvh - 24px); }
 }
+
+.pulse-partial { color:#9a7a3b; font-size:10px; font-weight:800; text-transform:uppercase; }
+.pulse-board-track i.pulse-board-track-partial { background:repeating-linear-gradient(135deg,#d7c9a8 0,#d7c9a8 4px,#f2ead9 4px,#f2ead9 8px); }
