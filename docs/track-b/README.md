@@ -16,7 +16,7 @@ Track A deliberately delivered the non-AI CampusForge Teams product. Track B beg
 - Task breakdown and subtask proposals.
 - Explanations of blockers, overdue work, workload patterns, and project progress.
 
-This file establishes the initial product and engineering boundary. It does not claim that an AI provider is configured or that AI features are implemented.
+This file establishes the initial product and engineering boundary. The first read-only assistant slice is implemented on this branch, but no provider is configured and the feature remains disabled by default.
 
 ## 2. Initial product principles
 
@@ -40,27 +40,39 @@ This file establishes the initial product and engineering boundary. It does not 
 
 ### B1 — Provider abstraction and feature controls
 
-- Add a Rust-side provider interface so the application is not coupled to one vendor.
-- Keep model name, endpoint, key, timeout, and token limits in backend-only configuration.
-- Add a server-side feature flag and per-workspace/user rate and spend controls.
-- Normalize provider errors and validate model responses before returning them to the client.
-- Do not enable provider calls in production until the provider and data-processing review is complete.
+**Implemented on this branch:**
+- Added a provider-neutral OpenAI-compatible chat-completions adapter in `server/src/ai.rs`.
+- Configured model, endpoint, key, timeout, request size, and output limits exclusively through backend environment variables.
+- Added the `CAMPUSFORGE_AI_ENABLED` kill switch; it defaults to disabled and the UI reports an unavailable state when provider settings are missing.
+- Added per-user (10/minute) and shared per-workspace (120/hour) fixed-window request limits using the existing PostgreSQL rate-limit table.
+- Disabled HTTP redirects and require HTTPS provider endpoints, except loopback HTTP for local development.
+- Normalized provider failures and reject empty or oversized responses.
+
+**Still required:** provider selection, processing/retention review, cost/spend budget, and live provider verification.
 
 ### B2 — Authorized context retrieval
 
-- Build a context service that reuses CampusForge authentication, workspace membership, and resource authorization.
-- Retrieve only the minimum records required for the user's selected workspace/project.
-- Treat task descriptions, comments, uploaded text, chat, and meeting notes as untrusted data—not instructions.
-- Add source references and timestamps to context items so generated answers can cite their evidence.
-- Do not permit arbitrary SQL, unrestricted database access, or model-directed resource discovery.
+**Implemented on this branch:**
+- Reuses the existing authenticated `WorkspaceUser` extractor.
+- Loads only boards and tasks in the selected workspace that the user may access as a board member or workspace owner/admin.
+- Supports an optional board/project scope and rejects inaccessible project IDs.
+- Limits context to 20 boards and 35 tasks, truncates long descriptions, and labels records with evidence references.
+- Treats project records and conversation history as untrusted content in the model prompt.
+- Does not expose SQL, arbitrary query tools, file contents, chat messages, or cross-workspace retrieval to the model.
+
+**Still required:** dedicated adversarial cross-workspace and per-board role integration tests.
 
 ### B3 — Read-only assistant and summaries
 
-- Add an assistant surface in the React client, initially behind a feature flag.
-- Support questions about the current authorized project and workspace.
-- Add project/board summaries and meeting-note summaries.
-- Apply output schemas, maximum response sizes, timeouts, and safe rendering for generated Markdown.
-- Keep this phase read-only: no AI-originated writes.
+**Implemented on this branch:**
+- Added a responsive assistant panel with project scoping and in-memory conversation history.
+- Added Ask, Summary, Task Plan, and Risk Review modes.
+- Added source-reference chips, token-use metadata, suggested prompts, and clear unavailable/disabled states.
+- Added structured JSON task-plan previews with an explicit "suggestions only" notice.
+- Rendered AI output as plain text; no generated HTML is injected into the page.
+- All requests remain read-only; the API returns `actions_applied: false`.
+
+**Not yet implemented:** meeting-note or file summarization, persistent conversations, streaming, and user preferences.
 
 ### B4 — Human-approved action proposals
 
@@ -154,12 +166,17 @@ Track B is not ready for production until all applicable checks pass:
 |---|---|
 | Track B repository workspace | Started on `track-b/ai-assistant-foundation` |
 | Initial scope and guardrails | Documented in this file |
-| Provider selection and data terms | Not decided |
-| Provider adapter implementation | Not started |
-| Authorized context service | Not started |
-| Assistant UI | Not started |
-| AI persistence migrations | Not started |
-| Evaluation/security suite | Not started |
+| Rust read-only assistant API | Implemented on branch; CI verification pending |
+| Provider-neutral OpenAI-compatible adapter | Implemented; server feature flag defaults off |
+| Workspace/project-scoped context | Implemented for boards and tasks; adversarial integration tests pending |
+| Assistant UI and conversation state | Implemented; current-session memory only |
+| Ask, summary, task-plan, risk-review modes | Implemented |
+| Source references and token usage display | Implemented |
+| Request limits and provider URL checks | Implemented; spend-budget policy still needed |
+| Meeting-note/file summarization | Not started |
+| Persistent conversation/audit schema | Not started; requires retention and migration-order decision |
+| Human-reviewed action application | Proposal preview only; apply workflow not implemented |
+| Provider selection, terms, and credentials | Not decided/configured |
 | Production enablement | Disabled / not approved |
 
-Track B is being developed separately from Track A. Keep the Track A PR and production acceptance record intact. Do not merge either track to `main` or trigger deployment without explicit release authorization.
+The `CAMPUSFORGE_AI_*` variables are server-only. Keep `CAMPUSFORGE_AI_ENABLED=false` until provider data-handling terms, retention, spend ceilings, and production privacy/security review are approved. Track B is separate from Track A; do not merge either track to `main` or trigger deployment without explicit release authorization.
