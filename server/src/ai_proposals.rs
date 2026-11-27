@@ -223,7 +223,7 @@ async fn can_write_board(
     let workspace_role: Option<String> = sqlx::query_scalar(
         "SELECT role FROM workspace_members
           WHERE workspace_id = $1 AND user_id = $2
-          FOR KEY SHARE",
+          FOR SHARE",
     )
     .bind(workspace_id)
     .bind(user_id)
@@ -239,7 +239,7 @@ async fn can_write_board(
     let board_role: Option<String> = sqlx::query_scalar(
         "SELECT role FROM board_members
           WHERE board_id = $1 AND user_id = $2
-          FOR KEY SHARE",
+          FOR SHARE",
     )
     .bind(board_id)
     .bind(user_id)
@@ -320,7 +320,7 @@ async fn validate_assignees(
             "SELECT user_id FROM workspace_members
               WHERE workspace_id = $1 AND user_id = ANY($2::uuid[])
                 AND role IN ('owner', 'admin')
-              FOR KEY SHARE",
+              FOR SHARE",
         )
         .bind(workspace_id)
         .bind(&task.assignee_ids)
@@ -334,7 +334,7 @@ async fn validate_assignees(
                  ON wm.workspace_id = $2 AND wm.user_id = bm.user_id
               WHERE bm.board_id = $1 AND bm.user_id = ANY($3::uuid[])
                 AND bm.role IN ('admin', 'member')
-              FOR KEY SHARE OF bm, wm",
+              FOR SHARE OF bm, wm",
         )
         .bind(board_id)
         .bind(workspace_id)
