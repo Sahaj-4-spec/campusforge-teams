@@ -46,10 +46,12 @@ async fn task_write_scope(state: &AppState, user_id: Uuid, task_id: Uuid) -> Api
     let role = crate::auth::board_role(&state.db, user_id, scope.0, scope.1)
         .await
         .map_err(|error| internal(error, "Could not verify board write permissions"))?;
-    match role.as_deref() {
-        Some("admin" | "member") => Ok(scope),
-        Some("viewer") => Err(fail(StatusCode::FORBIDDEN, "This project is read-only for your account")),
-        _ => Err(fail(StatusCode::NOT_FOUND, "Task not found")),
+    if crate::auth::board_role_allows(role.as_deref(), true) {
+        Ok(scope)
+    } else if role.as_deref() == Some("viewer") {
+        Err(fail(StatusCode::FORBIDDEN, "This project is read-only for your account"))
+    } else {
+        Err(fail(StatusCode::NOT_FOUND, "Task not found"))
     }
 }
 
