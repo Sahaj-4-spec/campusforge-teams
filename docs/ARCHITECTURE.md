@@ -156,7 +156,7 @@ Workspace presence and typing use expiring per-connection leases. PostgreSQL LIS
 
 ## 5. API and real-time conventions
 
-Protected REST routes require a valid bearer token or HttpOnly cookie session unless explicitly public. Requests validate the authenticated user's workspace membership and the relationship between referenced IDs; finalization branch adds an active server-side session record check.
+Protected REST routes require a valid bearer token or HttpOnly cookie session unless explicitly public. Requests validate the authenticated user's workspace membership and the relationship between referenced IDs; integrated candidate adds an active server-side session record check.
 
 Implemented route groups include:
 - Calendar events, attendee management, attendee responses and all-day date ranges.
