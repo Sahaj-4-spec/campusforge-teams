@@ -143,13 +143,18 @@ Before public launch, test clean and infected samples, scanner unavailability, t
 
 ## 7. Authentication session revocation
 
-The Track A finalization branch introduces migration `0014_revocable_auth_sessions.sql`. When that branch is released:
+The integrated candidate keeps migration 0015 for AI proposal persistence and adds migration `0015_revocable_auth_sessions.sql`. When the integrated session-aware release is approved:
 
 - Password and OAuth sign-in issue a random session identifier in the JWT `jti` claim and insert the corresponding session ID, user ID, and expiry into PostgreSQL. The raw JWT is not stored.
 - Protected HTTP endpoints require a matching, unexpired, non-revoked row in `auth_sessions`.
 - Logout revokes the current session in PostgreSQL before clearing the browser's HttpOnly cookie.
 - WebSocket handshakes check session activity, and connected sockets re-check the session during their 30-second presence heartbeat. A revoked session is disconnected on the next heartbeat.
 - A scheduled cleanup removes expired/revoked session records after a seven-day retention buffer.
-- Tokens issued by the pre-0014 application do not carry a session ID and will require a fresh sign-in after rollout. Plan that re-authentication as part of the release notice.
+- Tokens issued by the pre-0015 application do not carry a session ID and will require a fresh sign-in after rollout. Plan that re-authentication as part of the release notice.
 
-Do not apply migration 0014 to a production database until the matching application release has passed CI and its migration rollout/rollback plan is approved. The current Render preview is not an appropriate production database.
+Do not apply migration 0015 to a production database until the matching application release has passed CI and its migration rollout/rollback plan is approved. The Render services `campusforge-preview` and `campusforge-api-test` are preview/test services, not a production environment. The API environment was updated to use Neon `campusforge_app`; Render reported an automatic rollout and its status must be confirmed before assuming the new connection is active. Do not treat the database switch as production acceptance.
+
+
+## Track B AI operations
+
+The AI assistant remains disabled by default. Do not set `CAMPUSFORGE_AI_ENABLED=true` until a provider is selected, HTTPS endpoint and API key are configured as server-only secrets, data-processing/retention and model-training terms are approved, and request/token/cost budgets are defined. The assistant requires a per-request data-sharing acknowledgement; task mutations require a human-approved proposal. The proposal migration is version 0014 and session revocation is version 0015. Keep prompts and raw model completions out of persistent proposal audit logs.
