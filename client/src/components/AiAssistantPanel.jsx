@@ -6,6 +6,7 @@ import {
   BrainCircuit,
   CheckCircle2,
   CalendarDays,
+  ClipboardCheck,
   CircleHelp,
   Clock3,
   FileText,
@@ -21,7 +22,8 @@ import {
   Target,
   X
 } from "lucide-react";
-import { aiApi, taskApi } from "../lib/api.js";
+import { aiApi } from "../lib/api.js";
+import ProposalReviewDrawer from "./ProposalReviewDrawer.jsx";
 
 const MODES = [
   { id: "ask", label: "Ask", icon: MessageSquare },
@@ -64,51 +66,7 @@ function parseProposal(content) {
   }
 }
 
-function ProposalTaskCard({ task, index, onCreateTask }) {
-  const [saving, setSaving] = useState(false);
-  const [created, setCreated] = useState(false);
-  const [error, setError] = useState("");
-
-  async function createTask() {
-    if (saving || created || !onCreateTask) return;
-    setSaving(true);
-    setError("");
-    try {
-      await onCreateTask(task);
-      setCreated(true);
-    } catch (requestError) {
-      setError(requestError.message || "Could not create this task.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <article className="ai-proposal-card" key={task.title + "-" + index}>
-      <div className="ai-proposal-card-top">
-        <span className="ai-proposal-number">{index + 1}</span>
-        <strong>{task.title}</strong>
-        <span className={"ai-priority ai-priority-" + (["low", "medium", "high"].includes(String(task.priority).toLowerCase()) ? String(task.priority).toLowerCase() : "medium")}>{task.priority}</span>
-      </div>
-      {task.description && <p>{task.description}</p>}
-      <div className="ai-proposal-meta">
-        {Number.isFinite(Number(task.estimated_minutes)) && <span><Clock3 size={12} /> {task.estimated_minutes} min estimate</span>}
-        {task.reason && <span>{task.reason}</span>}
-      </div>
-      {Array.isArray(task.source_refs) && task.source_refs.length > 0 && (
-        <div className="ai-source-references">{task.source_refs.slice(0, 6).map((reference) => <span className="ai-source-chip" key={reference}>{reference}</span>)}</div>
-      )}
-      <div className="ai-proposal-actions">
-        <button className="ai-proposal-create" type="button" onClick={createTask} disabled={saving || created || !onCreateTask}>
-          {created ? <><CheckCircle2 size={13} /> Created</> : saving ? <><LoaderCircle size={13} className="ai-spin" /> Creating…</> : <>Create task <ArrowUpRight size={13} /></>}
-        </button>
-        {error && <span className="ai-proposal-error" role="alert">{error}</span>}
-      </div>
-    </article>
-  );
-}
-
-function AssistantAnswer({ message, onCreateTask }) {
+function AssistantAnswer({ message, onSaveProposal, proposalSaving = false }) {
   const proposal = message.mode === "task_breakdown" ? parseProposal(message.content) : null;
   const proposalTasks = proposal && Array.isArray(proposal.tasks)
     ? proposal.tasks.filter((task) => task && typeof task === "object" && typeof task.title === "string").slice(0, 8)
@@ -121,10 +79,29 @@ function AssistantAnswer({ message, onCreateTask }) {
           {proposal.summary && <p className="ai-proposal-summary">{proposal.summary}</p>}
           <div className="ai-proposal-list">
             {proposalTasks.map((task, index) => (
-              <ProposalTaskCard task={task} index={index} onCreateTask={onCreateTask} key={task.title + "-" + index} />
+              <article className="ai-proposal-card" key={task.title + "-" + index}>
+                <div className="ai-proposal-card-top">
+                  <span className="ai-proposal-number">{index + 1}</span>
+                  <strong>{task.title}</strong>
+                  <span className={"ai-priority ai-priority-" + (["low", "medium", "high"].includes(String(task.priority).toLowerCase()) ? String(task.priority).toLowerCase() : "medium")}>{task.priority || "medium"}</span>
+                </div>
+                {task.description && <p>{task.description}</p>}
+                <div className="ai-proposal-meta">
+                  {Number.isFinite(Number(task.estimated_minutes)) && <span><Clock3 size={12} /> {task.estimated_minutes} min estimate</span>}
+                  {task.reason && <span>{task.reason}</span>}
+                </div>
+                {Array.isArray(task.source_refs) && task.source_refs.length > 0 && (
+                  <div className="ai-source-references">{task.source_refs.slice(0, 6).map((reference) => <span className="ai-source-chip" key={reference}>{reference}</span>)}</div>
+                )}
+              </article>
             ))}
           </div>
-          <p className="ai-proposal-disclaimer"><LockKeyhole size={13} /> Suggestions only. Each task is created only after you press its Create task button. CampusForge rechecks your current workspace membership and list access.</p>
+          <div className="ai-proposal-actions">
+            <button className="ai-proposal-create" type="button" onClick={() => onSaveProposal?.(proposalTasks)} disabled={!onSaveProposal || proposalSaving || proposalTasks.length === 0}>
+              {proposalSaving ? <><LoaderCircle size={13} className="ai-spin" /> Saving for review…</> : <>Save proposal for approval <ArrowUpRight size={13} /></>}
+            </button>
+          </div>
+          <p className="ai-proposal-disclaimer"><LockKeyhole size={13} /> Suggestions only. Saving does not create or change tasks. A workspace member with write permission must separately approve the complete proposal; CampusForge then rechecks permissions and project state before committing it.</p>
         </>
       ) : (
         <p className="ai-answer-copy">{message.content}</p>
@@ -153,6 +130,12 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [savedProposals, setSavedProposals] = useState([]);
+  const [proposalReviewOpen, setProposalReviewOpen] = useState(false);
+  const [selectedProposalId, setSelectedProposalId] = useState("");
+  const [proposalSaving, setProposalSaving] = useState(false);
+  const [proposalWorking, setProposalWorking] = useState(false);
+  const [proposalActionError, setProposalActionError] = useState("");
   const endRef = useRef(null);
   const panelRef = useRef(null);
   const conversationGeneration = useRef(0);
@@ -168,6 +151,16 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
       .then((value) => { if (!cancelled) setStatus(value); })
       .catch((requestError) => {
         if (!cancelled) setStatusError(requestError.message || "Could not check AI availability.");
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    aiApi.proposals()
+      .then((items) => { if (!cancelled && Array.isArray(items)) setSavedProposals(items); })
+      .catch((requestError) => {
+        if (!cancelled) setProposalActionError(requestError.message || "Saved proposals are unavailable.");
       });
     return () => { cancelled = true; };
   }, []);
@@ -312,21 +305,82 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
     }
   }
 
-  async function createProposedTask(task) {
+  async function refreshProposals() {
+    const items = await aiApi.proposals();
+    const next = Array.isArray(items) ? items : [];
+    setSavedProposals(next);
+    return next;
+  }
+
+  async function saveTaskProposal(tasks) {
+    if (proposalSaving) return;
     const selectedList = lists.find((list) => list.id === proposalListId);
     if (!selectedList || (boardId && selectedList.board_id !== boardId)) {
-      throw new Error("Choose a project column from the selected project before creating proposed tasks.");
+      setProposalActionError("Choose a destination column in the selected project before saving this proposal.");
+      setProposalReviewOpen(true);
+      return;
     }
-    await taskApi.create({
-      title: String(task.title).trim(),
-      description: String(task.description || "").trim(),
-      priority: ["low", "medium", "high"].includes(String(task.priority).toLowerCase()) ? String(task.priority).toLowerCase() : "medium",
-      due_date: null,
-      list_id: proposalListId,
-      assignee_id: null,
-      estimated_minutes: Number(task.estimated_minutes)
-    });
-    await onTaskCreated?.();
+
+    setProposalSaving(true);
+    setProposalActionError("");
+    try {
+      const result = await aiApi.createProposal({
+        board_id: selectedList.board_id,
+        target_list_id: selectedList.id,
+        tasks: tasks.slice(0, 8).map((task) => {
+          const estimate = Number(task.estimated_minutes);
+          return {
+            title: String(task.title || "").trim(),
+            description: String(task.description || "").trim(),
+            priority: ["low", "medium", "high", "urgent"].includes(String(task.priority || "").toLowerCase())
+              ? String(task.priority).toLowerCase()
+              : "medium",
+            due_at: null,
+            estimated_minutes: Number.isInteger(estimate) && estimate > 0 && estimate <= 100000 ? estimate : null,
+            assignee_ids: [],
+            source_refs: Array.isArray(task.source_refs) ? task.source_refs.filter((value) => typeof value === "string").slice(0, 8) : []
+          };
+        })
+      });
+      setSavedProposals((current) => [result, ...current.filter((item) => item.id !== result.id)]);
+      setSelectedProposalId(result.id);
+      setProposalReviewOpen(true);
+    } catch (requestError) {
+      setProposalActionError(requestError.message || "Could not save this proposal for review.");
+      setProposalReviewOpen(true);
+    } finally {
+      setProposalSaving(false);
+    }
+  }
+
+  async function applySavedProposal(proposalId) {
+    if (proposalWorking) return;
+    setProposalWorking(true);
+    setProposalActionError("");
+    try {
+      await aiApi.applyProposal(proposalId);
+      await refreshProposals();
+      await onTaskCreated?.();
+    } catch (requestError) {
+      setProposalActionError(requestError.message || "The proposal could not be applied.");
+      try { await refreshProposals(); } catch {}
+    } finally {
+      setProposalWorking(false);
+    }
+  }
+
+  async function rejectSavedProposal(proposalId) {
+    if (proposalWorking) return;
+    setProposalWorking(true);
+    setProposalActionError("");
+    try {
+      await aiApi.rejectProposal(proposalId);
+      await refreshProposals();
+    } catch (requestError) {
+      setProposalActionError(requestError.message || "The proposal could not be rejected.");
+    } finally {
+      setProposalWorking(false);
+    }
   }
 
   const enabled = status?.enabled === true;
@@ -343,6 +397,7 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
               <span className="ai-panel-subtitle"><span className={enabled ? "ai-status-dot active" : "ai-status-dot"} /> {enabled ? "Configured · Read-only mode" : "Not configured on this environment"}</span>
             </div>
           </div>
+          <button className="ai-proposal-review-button" type="button" onClick={async () => { setProposalActionError(""); setProposalReviewOpen(true); try { await refreshProposals(); } catch (requestError) { setProposalActionError(requestError.message || "Saved proposals are unavailable."); } }} aria-label="Review saved task proposals"><ClipboardCheck size={14} /> Review proposals ({savedProposals.filter((item) => item.status === "pending").length})</button>
           <button className="ai-close-button" type="button" onClick={onClose} aria-label="Close AI assistant" disabled={loading}><X size={19} /></button>
         </header>
 
@@ -463,7 +518,7 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
                   <div className="ai-message-avatar">{message.role === "assistant" ? <Sparkles size={15} /> : <span>You</span>}</div>
                   <div className="ai-message-main">
                     <div className="ai-message-label">{message.role === "assistant" ? "CampusForge assistant" : "You"}</div>
-                    {message.role === "assistant" ? <AssistantAnswer message={message} onCreateTask={message.mode === "task_breakdown" ? createProposedTask : undefined} /> : <p className="ai-user-copy">{message.content}</p>}
+                    {message.role === "assistant" ? <AssistantAnswer message={message} onSaveProposal={message.mode === "task_breakdown" ? saveTaskProposal : undefined} proposalSaving={proposalSaving} /> : <p className="ai-user-copy">{message.content}</p>}
                     {message.role === "assistant" && message.sources?.length > 0 && (
                       <div className="ai-citations">
                         <span className="ai-citations-label"><BookOpen size={12} /> Sources</span>
@@ -523,6 +578,18 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
           <p className="ai-disclaimer"><CircleHelp size={12} /> AI can make mistakes. Verify conclusions against cited records and avoid entering secrets or sensitive personal data.</p>
         </footer>
       </section>
+      {proposalReviewOpen && (
+        <ProposalReviewDrawer
+          proposals={savedProposals}
+          selectedProposalId={selectedProposalId}
+          onSelect={setSelectedProposalId}
+          onClose={() => setProposalReviewOpen(false)}
+          onApply={applySavedProposal}
+          onReject={rejectSavedProposal}
+          working={proposalWorking}
+          error={proposalActionError}
+        />
+      )}
     </div>
   );
 }
