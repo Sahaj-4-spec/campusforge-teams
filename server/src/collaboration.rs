@@ -612,7 +612,10 @@ async fn notifications_list(
                        AND u.id=$1 AND i.revoked_at IS NULL AND i.expires_at>NOW()
                 ))
                 OR (
-                    n.board_id IS NULL AND (
+                    n.board_id IS NULL
+                    AND EXISTS(SELECT 1 FROM workspace_members active_member
+                                WHERE active_member.workspace_id=n.workspace_id AND active_member.user_id=$1)
+                    AND (
                         (
                             n.notification_type IN ('calendar_invitation','calendar_reminder')
                             AND n.resource_type='calendar_event'
@@ -681,7 +684,10 @@ async fn notifications_list(
                        AND u.id=$1 AND i.revoked_at IS NULL AND i.expires_at>NOW()
                 ))
                 OR (
-                    n.board_id IS NULL AND (
+                    n.board_id IS NULL
+                    AND EXISTS(SELECT 1 FROM workspace_members active_member
+                                WHERE active_member.workspace_id=n.workspace_id AND active_member.user_id=$1)
+                    AND (
                         (
                             n.notification_type IN ('calendar_invitation','calendar_reminder')
                             AND n.resource_type='calendar_event'
@@ -762,7 +768,10 @@ async fn notification_read(
                        AND i.revoked_at IS NULL AND i.expires_at>NOW()
                 ))
                 OR (
-                    n.board_id IS NULL AND (
+                    n.board_id IS NULL
+                    AND EXISTS(SELECT 1 FROM workspace_members active_member
+                                WHERE active_member.workspace_id=n.workspace_id AND active_member.user_id=$1)
+                    AND (
                         (
                             n.notification_type IN ('calendar_invitation','calendar_reminder')
                             AND n.resource_type='calendar_event'
@@ -837,7 +846,10 @@ async fn notifications_read_all(
                        AND i.revoked_at IS NULL AND i.expires_at>NOW()
                 ))
                 OR (
-                    n.board_id IS NULL AND (
+                    n.board_id IS NULL
+                    AND EXISTS(SELECT 1 FROM workspace_members active_member
+                                WHERE active_member.workspace_id=n.workspace_id AND active_member.user_id=$1)
+                    AND (
                         (
                             n.notification_type IN ('calendar_invitation','calendar_reminder')
                             AND n.resource_type='calendar_event'
