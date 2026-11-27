@@ -82,16 +82,19 @@ The API intentionally refuses production startup when remote storage or mandator
 
 ## 7. Database release order
 
-The Neon `campusforge_app` database currently has SQLx migrations 0001–0014 recorded successfully. Migration 0014 is the AI proposal/audit schema and must not be edited or renumbered. Migration 0015 adds revocable authentication sessions.
+The Neon `campusforge_app` database currently has SQLx migrations 0001–0014 recorded successfully. Migration 0014 is the AI proposal/audit schema and must not be edited or renumbered. Migration 0015 adds revocable authentication sessions. Migration 0016 adds board scope to notifications so task titles/descriptions cannot reach workspace members who do not have board access.
 
 1. Verify SQLx SHA-384 migration journal checksums and a database backup.
 2. Pass the integrated CI and security workflows.
-3. Apply migration 0015 with the session-aware API release.
+3. Apply migration 0015, then migration 0016, with the matching integrated API release.
 4. Verify password login, Google/GitHub/Discord sign-in, cookie and bearer logout, session revocation, WebSocket termination and old-token reauthentication.
 5. Complete isolated database restore and two-account authorization tests.
 
-Do not roll back to an API build that does not understand `auth_sessions` after migration 0015 is applied. Follow [Database migration release order](DATABASE_MIGRATION_RELEASE_ORDER.md).
+Do not roll back to an API build that does not understand `auth_sessions` after migration 0015 is applied, or `notifications.board_id` after migration 0016 is applied. Follow [Database migration release order](DATABASE_MIGRATION_RELEASE_ORDER.md).
 
 ## 8. Final operational gates
 
 Before public launch, additionally verify a production custom domain/TLS, trusted proxy/edge rate limiting, monitoring and alerting, backups and restore, incident response, privacy/export/deletion, account recovery/provider linking, accessibility, mobile/browser compatibility and two-account negative authorization tests. The preview/test Render services are not a production environment.
+
+
+Before applying migration 0016, confirm the matching API build writes `notifications.board_id` and checks it during inbox reads and email dispatch. Do not deploy the migration separately from that code.
