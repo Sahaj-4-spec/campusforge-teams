@@ -25,6 +25,7 @@ export default function ProjectPulseDashboard({ onClose, boards = [], onOpenTask
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [refreshCounter, setRefreshCounter] = useState(0);
   const panelRef = useRef(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -86,7 +87,7 @@ export default function ProjectPulseDashboard({ onClose, boards = [], onOpenTask
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [boardId, refreshKey]);
+  }, [boardId, refreshKey, refreshCounter]);
 
   const closeOnBackdrop = (event) => {
     if (event.target === event.currentTarget) onClose();
@@ -112,7 +113,7 @@ export default function ProjectPulseDashboard({ onClose, boards = [], onOpenTask
             </div>
           </div>
           <div className="pulse-header-actions">
-            <button className="pulse-refresh" type="button" onClick={() => setBoardId((current) => current)} disabled={loading} aria-label="Refresh Project Pulse">
+            <button className="pulse-refresh" type="button" onClick={() => setRefreshCounter((value) => value + 1)} disabled={loading} aria-label="Refresh Project Pulse">
               <RefreshCw size={16} />
             </button>
             <button className="pulse-close" type="button" onClick={onClose} aria-label="Close Project Pulse"><X size={19} /></button>
@@ -134,7 +135,7 @@ export default function ProjectPulseDashboard({ onClose, boards = [], onOpenTask
           {loading ? (
             <div className="pulse-state"><RefreshCw className="pulse-spin" size={22} /><strong>Calculating project health…</strong></div>
           ) : error ? (
-            <div className="pulse-error" role="alert"><AlertTriangle size={18} /><div><strong>Could not load Project Pulse</strong><p>{error}</p><button type="button" onClick={() => setBoardId((current) => current)}>Try again</button></div></div>
+            <div className="pulse-error" role="alert"><AlertTriangle size={18} /><div><strong>Could not load Project Pulse</strong><p>{error}</p><button type="button" onClick={() => setRefreshCounter((value) => value + 1)}>Try again</button></div></div>
           ) : data ? (
             <>
               <section className="pulse-overview">
