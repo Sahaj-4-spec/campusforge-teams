@@ -464,6 +464,82 @@ async fn applies_all_postgres_migrations_and_creates_collaboration_tables() {
      .expect("rollback-compatible workspace channel filter should execute");
     assert_eq!(legacy_channel_count,1,"legacy workspace chat must not expose direct messages");
 
+    // Migration 0016 must expose the nullable board scope and its recipient index.
+    let notification_board_column: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns
+          WHERE table_schema='public' AND table_name='notifications'
+            AND column_name='board_id' AND is_nullable='YES')",
+    ).fetch_one(&mut *transaction).await
+      .expect("notification board scope column should be readable");
+    assert!(notification_board_column, "notifications must store optional board scope");
+    let notification_board_index: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pg_indexes WHERE schemaname='public'
+          AND indexname='idx_notifications_recipient_board_created')",
+    ).fetch_one(&mut *transaction).await
+      .expect("notification scope index should be queryable");
+    assert!(notification_board_index, "board-scoped inbox access should be indexed");
+
+    // Migration 0017 must preserve completed proposal history when the target
+    // column is deleted. A pending, unexpired proposal is still recognizable
+    // by the application guard before the proposal is reviewed.
+    let proposal_board_id = uuid::Uuid::new_v4();
+    let proposal_list_id = uuid::Uuid::new_v4();
+    let proposal_id = uuid::Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO boards(id,workspace_id,name,created_by)
+         VALUES($1,$2,'Proposal Retention Project',$3)",
+    ).bind(proposal_board_id).bind(workspace_id).bind(user_id)
+     .execute(&mut *transaction).await
+     .expect("proposal fixture board should be inserted");
+    sqlx::query(
+        "INSERT INTO lists(id,board_id,name,position) VALUES($1,$2,'Proposal Target',0)",
+    ).bind(proposal_list_id).bind(proposal_board_id)
+     .execute(&mut *transaction).await
+     .expect("proposal target column should be inserted");
+    sqlx::query(
+        "INSERT INTO ai_action_proposals
+            (id,workspace_id,board_id,target_list_id,created_by,status,tasks,source_fingerprint,expires_at)
+         VALUES($1,$2,$3,$4,$5,'pending',$6::jsonb,$7,NOW() + INTERVAL '1 day')",
+    ).bind(proposal_id).bind(workspace_id).bind(proposal_board_id)
+     .bind(proposal_list_id).bind(user_id)
+     .bind(r#"[{"title":"Keep the durable task proposal"}]"#)
+     .bind("a".repeat(64))
+     .execute(&mut *transaction).await
+     .expect("pending proposal should reference its target column");
+    let active_proposal_guard: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM ai_action_proposals
+          WHERE target_list_id=$1 AND status='pending' AND expires_at>NOW())",
+    ).bind(proposal_list_id).fetch_one(&mut *transaction).await
+     .expect("pending proposal guard should be queryable");
+    assert!(active_proposal_guard, "an actionable proposal must protect its target column");
+
+    sqlx::query(
+        "UPDATE ai_action_proposals SET status='rejected',reviewed_at=NOW() WHERE id=$1",
+    ).bind(proposal_id).execute(&mut *transaction).await
+     .expect("proposal history should become non-actionable after review");
+    sqlx::query(
+        "INSERT INTO ai_action_audit_events(workspace_id,board_id,proposal_id,actor_id,event_type,metadata)
+         VALUES($1,$2,$3,$4,'rejected','{}'::jsonb)",
+    ).bind(workspace_id).bind(proposal_board_id).bind(proposal_id).bind(user_id)
+     .execute(&mut *transaction).await
+     .expect("proposal audit event should be inserted");
+    sqlx::query("DELETE FROM lists WHERE id=$1")
+        .bind(proposal_list_id)
+        .execute(&mut *transaction)
+        .await
+        .expect("deleting a column with completed proposal history should succeed");
+    let retained_history: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM ai_action_proposals
+          WHERE id=$1 AND status='rejected' AND target_list_id IS NULL)",
+    ).bind(proposal_id).fetch_one(&mut *transaction).await
+     .expect("retained proposal history should be queryable");
+    assert!(retained_history, "proposal and task details must survive target column deletion");
+    let retained_audit: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM ai_action_audit_events WHERE proposal_id=$1 AND event_type='rejected')",
+    ).bind(proposal_id).fetch_one(&mut *transaction).await
+     .expect("proposal audit linkage should remain queryable");
+    assert!(retained_audit, "proposal audit history must remain linked after target deletion");
+
     transaction.rollback().await.expect("cascade fixture should roll back");
 
     pool.close().await;
