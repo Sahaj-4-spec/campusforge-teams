@@ -90,40 +90,56 @@ This file establishes the initial product and engineering boundary. The first re
 - Provide a kill switch and a documented rollback path.
 - Release only after privacy, security, cost, accessibility, and user acceptance gates pass.
 
-## 4. Proposed technical shape
+## 4. Implemented technical shape
 
 The existing application remains the system of record:
 
-- **Frontend:** React/Vite assistant panel and proposal-review UI.
-- **Backend:** Rust/Axum routes and a provider-neutral AI service boundary.
-- **Authorization:** Existing CampusForge identity and workspace/resource authorization; all context assembly is server-side.
-- **Data:** PostgreSQL/SQLx for approved conversation metadata and audit events, subject to a retention decision.
-- **Streaming:** Select a transport only after the UX and proxy/runtime constraints are tested; do not introduce a new realtime dependency by default.
+- **Frontend:** React/Vite assistant panel in `client/src/components/AiAssistantPanel.jsx`.
+- **Backend:** Rust/Axum routes and an OpenAI-compatible `/chat/completions` adapter in `server/src/ai.rs`. The interface is configured by endpoint/model/key rather than a hard-coded vendor, but the initial wire protocol is OpenAI-compatible.
+- **Authorization:** Existing `WorkspaceUser` authentication and workspace membership; board context is further restricted to board members or workspace owners/admins. All retrieval is server-side.
+- **Context:** PostgreSQL board/task records only. Chat, files, meeting notes and unrelated workspace data are not sent to the model.
+- **Conversation:** Browser-panel memory only. Messages are not persisted in PostgreSQL, and closing the panel clears the current conversation.
+- **Writes:** None. Task breakdowns are validated display previews; the API always returns `actions_applied: false`.
 
-Potential modules (names are illustrative until implementation is approved):
+### API contract
 
-```text
-server/src/ai/
-  mod.rs
-  provider.rs       # provider-neutral request/response contract
-  context.rs        # authorized, minimal workspace context
-  prompts.rs        # versioned instructions and task templates
-  output.rs         # structured output validation
-  policy.rs         # feature flags, limits, and allowed capabilities
-  audit.rs          # proposal/approval audit hooks
-client/src/features/ai/
-  AssistantPanel.jsx
-  ProposalReview.jsx
+- `GET /api/ai/status` — authenticated workspace status and supported modes.
+- `POST /api/ai/assistant` — authenticated read-only request.
+
+Example request:
+
+```json
+{
+  "prompt": "What is at risk this week?",
+  "mode": "risk_review",
+  "board_id": null,
+  "history": []
+}
 ```
 
-Possible persistence entities to evaluate—not approved migrations:
+Supported modes are `ask`, `summary`, `task_breakdown`, and `risk_review`. Prompt length is capped at 2,000 characters; up to eight user/assistant history messages are accepted, with each message capped at 1,800 characters. An optional `board_id` scopes retrieval to one authorized board. Without it, retrieval is limited to the caller's accessible boards within the selected workspace.
 
-- `ai_conversations`: user/workspace ownership, title, status, timestamps.
-- `ai_messages`: role, content, provider/model metadata, source references, timestamps.
-- `ai_action_proposals`: validated proposal payload, source record references, status, expiry, approver, and applied resource ID.
-- `ai_usage_events`: request counts, token usage, latency, and cost metadata without storing provider secrets.
+The response contains `answer`, `mode`, `model`, `generated_at`, cited `sources`, prompt/completion token counts when supplied by the provider, and `actions_applied: false`. Only source references actually cited in the answer are returned in the `sources` list.
 
-Do not create these tables until the data-retention model, indexing, deletion behavior, and workspace/user authorization rules are agreed.
+### Provider configuration
+
+Configure these values only in the Rust API environment:
+
+- `CAMPUSFORGE_AI_ENABLED=true`
+- `CAMPUSFORGE_AI_API_BASE_URL=https://your-provider.example/v1` (the server appends `/chat/completions`)
+- `CAMPUSFORGE_AI_API_KEY=...`
+- `CAMPUSFORGE_AI_MODEL=...`
+
+Hosted endpoints must use HTTPS. HTTP is accepted only for localhost development. Redirects are disabled. Keep the feature off until provider retention/training terms, disclosure, spend ceilings and privacy review are approved.
+
+### Existing safety controls
+
+- Fixed-window rate limits: 10 requests/user/minute and 120 requests/workspace/hour, shared through the existing PostgreSQL rate-limit table.
+- Provider call timeout: 45 seconds; output limit: 1,200 tokens and 12,000 characters.
+- Prompt size, history length/roles, context record counts and description lengths are bounded.
+- Project records and conversation history are identified as untrusted content; no tools, arbitrary SQL or autonomous writes are exposed.
+
+No AI-specific persistence migration has been created. Conversation/audit tables remain deferred until retention, deletion, indexing and migration ordering are approved.
 
 ## 5. Security and privacy requirements
 
