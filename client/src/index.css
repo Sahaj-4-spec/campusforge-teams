@@ -3332,3 +3332,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .ai-proposal-review-actions { flex-direction: column-reverse; }
   .ai-proposal-review-actions button { width: 100%; justify-content: center; }
 }
+
+.ai-proposal-audit { margin-top: 20px; padding-top: 14px; border-top: 1px solid #e9e6f3; }
+.ai-proposal-audit h4 { margin: 0 0 10px; font-size: 13px; }
+.ai-proposal-audit > p { color: #858197; font-size: 12px; }
+.ai-proposal-audit-event { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 8px 0; border-bottom: 1px solid #efedf5; font-size: 11px; }
+.ai-proposal-audit-event strong { text-transform: capitalize; color: #62558f; }
+.ai-proposal-audit-event span, .ai-proposal-audit-event small { color: #858197; }
