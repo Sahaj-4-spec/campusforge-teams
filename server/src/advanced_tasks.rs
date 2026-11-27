@@ -55,17 +55,19 @@ async fn task_write_scope(state: &AppState, user_id: Uuid, task_id: Uuid) -> Api
     }
 }
 
-async fn task_in_workspace(state: &AppState, task_id: Uuid, workspace_id: Uuid) -> ApiResult<()> {
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM tasks t JOIN lists l ON l.id=t.list_id
-         JOIN boards b ON b.id=l.board_id WHERE t.id=$1 AND b.workspace_id=$2)",
-    )
-    .bind(task_id)
-    .bind(workspace_id)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|error| internal(error, "Could not validate task relationship"))?;
-    if exists { Ok(()) } else { Err(fail(StatusCode::BAD_REQUEST, "The selected task is outside this project")) }
+async fn task_in_workspace(
+    state: &AppState, user_id: Uuid, task_id: Uuid, workspace_id: Uuid,
+) -> ApiResult<()> {
+    let (_, board_id, _) = task_scope(state, user_id, task_id).await
+        .map_err(|_| fail(StatusCode::BAD_REQUEST, "The selected task is outside an accessible project"))?;
+    let role = crate::auth::board_role(&state.db, user_id, workspace_id, board_id)
+        .await
+        .map_err(|error| internal(error, "Could not validate dependency board permissions"))?;
+    if crate::auth::board_role_allows(role.as_deref(), true) {
+        Ok(())
+    } else {
+        Err(fail(StatusCode::BAD_REQUEST, "The selected task is outside a writable project"))
+    }
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -469,7 +471,7 @@ async fn dependency_add(
     Json(input): Json<DependencyInput>,
 ) -> ApiResult<StatusCode> {
     let (workspace_id, board_id, _) = task_write_scope(&state, user_id, task_id).await?;
-    task_in_workspace(&state, input.depends_on_task_id, workspace_id).await?;
+    task_in_workspace(&state, user_id, input.depends_on_task_id, workspace_id).await?;
     if task_id == input.depends_on_task_id {
         return Err(fail(StatusCode::BAD_REQUEST, "A task cannot depend on itself"));
     }
