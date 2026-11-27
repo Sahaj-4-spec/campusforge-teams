@@ -2005,7 +2005,7 @@ mod tests {
         assert_eq!(value["tasks"][0]["source_refs"], json!(["T1"]));
         assert_eq!(references, vec!["T1".to_owned()]);
     }
-
+}
 
 #[cfg(test)]
 mod authorization_integration_tests {
