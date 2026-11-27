@@ -12,7 +12,7 @@ use axum::{
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
+use sqlx::{FromRow, PgPool};
 use validator::Validate;
 use sha2::{Digest, Sha256};
 
@@ -62,6 +62,8 @@ struct Claims {
     email: String,
     exp: usize,
     iat: usize,
+    #[serde(default)]
+    jti: String,
 }
 
 const SESSION_COOKIE_NAME: &str = "campusforge_session";
@@ -148,14 +150,45 @@ impl FromRequestParts<AppState> for AuthUser {
             ));
         }
 
-        let (user_id, _) = verify_token(&token, &state.jwt_secret).map_err(|_| {
+        let (user_id, _, session_id) =
+            verify_session_token(&token, &state.jwt_secret).map_err(|_| {
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(ApiError {
+                        error: "Your session is invalid or has expired",
+                    }),
+                )
+            })?;
+
+        let active: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+                SELECT 1 FROM auth_sessions
+                 WHERE id=$1 AND user_id=$2
+                   AND revoked_at IS NULL AND expires_at > NOW()
+            )",
+        )
+        .bind(session_id)
+        .bind(user_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "Could not validate authentication session");
             (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ApiError {
+                    error: "Authentication is temporarily unavailable",
+                }),
+            )
+        })?;
+
+        if !active {
+            return Err((
                 StatusCode::UNAUTHORIZED,
                 Json(ApiError {
                     error: "Your session is invalid or has expired",
                 }),
-            )
-        })?;
+            ));
+        }
 
         Ok(Self(user_id))
     }
@@ -235,27 +268,86 @@ impl FromRequestParts<AppState> for WorkspaceUser {
     }
 }
 
-/// Verify a bearer JWT and return the authenticated user ID.
-pub fn verify_token(token: &str, secret: &str) -> Result<(uuid::Uuid, usize), StatusCode> {
-    let decoded = decode::<Claims>(
+/// Decode a signed JWT. Tokens without a session identifier remain decodable for
+/// diagnostics, but are rejected by verify_session_token after revocation is enabled.
+fn decode_claims(token: &str, secret: &str) -> Result<Claims, StatusCode> {
+    decode::<Claims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
         &Validation::default(),
     )
-    .map_err(|_| StatusCode::UNAUTHORIZED)?;
-
-    let user_id = uuid::Uuid::parse_str(&decoded.claims.sub).map_err(|_| StatusCode::UNAUTHORIZED)?;
-    Ok((user_id, decoded.claims.exp))
+    .map(|decoded| decoded.claims)
+    .map_err(|_| StatusCode::UNAUTHORIZED)
 }
 
-pub(crate) fn issue_token(user_id: uuid::Uuid, email: &str, secret: &str) -> Result<(String, i64), StatusCode> {
+/// Verify a bearer JWT and return the authenticated user ID and expiry.
+pub fn verify_token(token: &str, secret: &str) -> Result<(uuid::Uuid, usize), StatusCode> {
+    let claims = decode_claims(token, secret)?;
+    let user_id = uuid::Uuid::parse_str(&claims.sub).map_err(|_| StatusCode::UNAUTHORIZED)?;
+    Ok((user_id, claims.exp))
+}
+
+/// Verify a JWT and require its JTI to be a valid server-recorded session ID.
+pub(crate) fn verify_session_token(
+    token: &str,
+    secret: &str,
+) -> Result<(uuid::Uuid, usize, uuid::Uuid), StatusCode> {
+    let claims = decode_claims(token, secret)?;
+    let user_id = uuid::Uuid::parse_str(&claims.sub).map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let session_id = uuid::Uuid::parse_str(&claims.jti).map_err(|_| StatusCode::UNAUTHORIZED)?;
+    Ok((user_id, claims.exp, session_id))
+}
+
+/// Persist only the non-secret session ID and lifecycle metadata, never the JWT.
+pub(crate) async fn persist_session(
+    db: &PgPool,
+    user_id: uuid::Uuid,
+    session_id: uuid::Uuid,
+    expires_at: usize,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO auth_sessions (id, user_id, expires_at)
+         VALUES ($1, $2, to_timestamp($3::bigint::double precision))",
+    )
+    .bind(session_id)
+    .bind(user_id)
+    .bind(expires_at as i64)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn run_session_cleanup(db: PgPool) {
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        if let Err(error) = sqlx::query(
+            "DELETE FROM auth_sessions
+             WHERE expires_at < NOW() - INTERVAL '7 days'
+                OR revoked_at < NOW() - INTERVAL '7 days'",
+        )
+        .execute(&db)
+        .await
+        {
+            tracing::warn!(%error, "Could not clean expired authentication sessions");
+        }
+    }
+}
+
+pub(crate) fn issue_token(
+    user_id: uuid::Uuid,
+    email: &str,
+    secret: &str,
+) -> Result<(String, i64, uuid::Uuid, usize), StatusCode> {
     let now = Utc::now();
     let expires_in = Duration::hours(24).num_seconds();
+    let expires_at = (now + Duration::seconds(expires_in)).timestamp() as usize;
+    let session_id = uuid::Uuid::new_v4();
     let claims = Claims {
         sub: user_id.to_string(),
         email: email.to_owned(),
         iat: now.timestamp() as usize,
-        exp: (now + Duration::seconds(expires_in)).timestamp() as usize,
+        exp: expires_at,
+        jti: session_id.to_string(),
     };
 
     let token = encode(
@@ -265,7 +357,7 @@ pub(crate) fn issue_token(user_id: uuid::Uuid, email: &str, secret: &str) -> Res
     )
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Ok((token, expires_in))
+    Ok((token, expires_in, session_id, expires_at))
 }
 
 
@@ -383,12 +475,23 @@ async fn login(
         ));
     }
 
-    let (token, expires_in) = issue_token(user.id, &user.email, &state.jwt_secret)
-        .map_err(|status| {
+    let (token, expires_in, session_id, expires_at) =
+        issue_token(user.id, &user.email, &state.jwt_secret).map_err(|status| {
             (
                 status,
                 Json(ApiError {
                     error: "Unable to create session",
+                }),
+            )
+        })?;
+    persist_session(&state.db, user.id, session_id, expires_at)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "Could not persist authentication session");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ApiError {
+                    error: "Sign-in is temporarily unavailable",
                 }),
             )
         })?;
@@ -410,10 +513,42 @@ async fn login(
     Ok(response)
 }
 
-async fn logout(headers: HeaderMap) -> Result<Response, StatusCode> {
-    if !frontend_origin_matches(&headers) {
+fn session_or_bearer_token_from_headers(headers: &HeaderMap) -> Option<(String, bool)> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(|token| (token.to_owned(), false))
+        .or_else(|| session_token_from_headers(headers).map(|token| (token, true)))
+}
+
+async fn logout(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, StatusCode> {
+    let token = session_or_bearer_token_from_headers(&headers);
+    if !matches!(token.as_ref(), Some((_, false))) && !frontend_origin_matches(&headers) {
         return Err(StatusCode::FORBIDDEN);
     }
+
+    if let Some((token, _)) = token {
+        if let Ok((user_id, _, session_id)) = verify_session_token(&token, &state.jwt_secret) {
+            sqlx::query(
+                "UPDATE auth_sessions
+                    SET revoked_at = COALESCE(revoked_at, NOW())
+                  WHERE id=$1 AND user_id=$2",
+            )
+            .bind(session_id)
+            .bind(user_id)
+            .execute(&state.db)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, "Could not revoke authentication session");
+                StatusCode::SERVICE_UNAVAILABLE
+            })?;
+        }
+    }
+
     let mut response = StatusCode::NO_CONTENT.into_response();
     response.headers_mut().append(header::SET_COOKIE, clear_session_cookie_header());
     Ok(response)
@@ -432,14 +567,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn logout_resolves_bearer_tokens_and_cookie_sessions() {
+        let mut bearer_headers = HeaderMap::new();
+        bearer_headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer bearer-token"));
+        bearer_headers.insert(header::COOKIE, HeaderValue::from_static("campusforge_session=cookie-token"));
+        assert_eq!(
+            session_or_bearer_token_from_headers(&bearer_headers),
+            Some(("bearer-token".to_owned(), false))
+        );
+
+        let mut cookie_headers = HeaderMap::new();
+        cookie_headers.insert(header::COOKIE, HeaderValue::from_static("campusforge_session=cookie-token"));
+        assert_eq!(
+            session_or_bearer_token_from_headers(&cookie_headers),
+            Some(("cookie-token".to_owned(), true))
+        );
+    }
+
+    #[test]
     fn issued_hs256_token_verifies_user_and_expiration() {
         let user_id = uuid::Uuid::new_v4();
         let secret = "test-only-secret-with-more-than-32-characters";
-        let (token, lifetime) = issue_token(user_id, "student@example.edu", secret).unwrap();
+        let (token, lifetime, session_id, token_expires_at) =
+            issue_token(user_id, "student@example.edu", secret).unwrap();
 
         let (verified_user, expires_at) = verify_token(&token, secret).unwrap();
+        let (session_user, session_expiry, verified_session_id) =
+            verify_session_token(&token, secret).unwrap();
 
         assert_eq!(verified_user, user_id);
+        assert_eq!(session_user, user_id);
+        assert_eq!(verified_session_id, session_id);
+        assert_eq!(session_expiry, token_expires_at);
         assert!(lifetime > 0);
         assert!(expires_at > Utc::now().timestamp() as usize);
     }
@@ -448,7 +607,7 @@ mod tests {
     fn token_with_a_modified_signature_is_rejected() {
         let user_id = uuid::Uuid::new_v4();
         let secret = "test-only-secret-with-more-than-32-characters";
-        let (mut token, _) = issue_token(user_id, "student@example.edu", secret).unwrap();
+        let (mut token, _, _, _) = issue_token(user_id, "student@example.edu", secret).unwrap();
 
         let signature_start = token.rfind('.').unwrap() + 1;
         let first_signature_byte = token.as_bytes()[signature_start];
@@ -489,7 +648,7 @@ mod tests {
     #[test]
     fn token_signed_with_a_different_secret_is_rejected() {
         let user_id = uuid::Uuid::new_v4();
-        let (token, _) = issue_token(
+        let (token, _, _, _) = issue_token(
             user_id,
             "student@example.edu",
             "original-test-secret-with-more-than-32-chars",
