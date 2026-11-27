@@ -517,7 +517,7 @@ async fn load_authorized_context(
     .bind(requested_board_id)
     .bind(user_id)
     .bind(!matches!(mode, AssistantMode::MeetingSummary | AssistantMode::ChatSummary | AssistantMode::FileSummary))
-    .fetch_all(&mut *pulse_tx)
+    .fetch_all(&state.db)
     .await
     .map_err(|error| {
         tracing::error!(%error, "AI context board lookup failed");
@@ -1561,7 +1561,7 @@ async fn project_pulse(
     .bind(workspace_id)
     .bind(query.board_id)
     .bind(user_id)
-    .fetch_all(&state.db)
+    .fetch_all(&mut *pulse_tx)
     .await
     .map_err(|error| {
         tracing::error!(%error, "Project Pulse board lookup failed");
@@ -1633,7 +1633,8 @@ async fn project_pulse(
         .bind(user_id)
         .bind(per_board_limit as i64)
         .fetch_all(&mut *pulse_tx)
-        .await        .map_err(|error| {
+        .await
+        .map_err(|error| {
             tracing::error!(%error, "Project Pulse task lookup failed");
             fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not load project health")
         })?
