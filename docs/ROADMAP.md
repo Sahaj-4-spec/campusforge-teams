@@ -29,7 +29,7 @@ The integrated candidate `release/campusforge-integrated-candidate` combines the
 
 **Hosting status:** the Render preview and API are test services. The repository's `render.yaml` currently tracks `main` with commit-triggered auto-deploy. Therefore, do not merge finalization changes to `main` until the user explicitly authorizes the corresponding deployment and the external production gates below are met. The current source branch being complete does not prove that the deployed database or services have been upgraded.
 
-**External release gates:** configure production Google/GitHub/Discord OAuth applications and exact HTTPS callbacks; migrate to durable Neon PostgreSQL and verify row counts, backups, and restoration; provision private Neon Object Storage; configure a private ClamAV service and require clean scans; verify Resend sender-domain authentication and delivery; configure trusted ingress/WAF controls; finish two-user/browser/accessibility tests; approve privacy, data-retention, export, and deletion policies; and close the documented per-board/channel authorization and account-recovery gaps.
+**External release gates:** configure production Google/GitHub/Discord OAuth applications and exact HTTPS callbacks; migrate to durable Neon PostgreSQL and verify row counts, backups, and restoration; provision private Neon Object Storage; configure a private ClamAV service and require clean scans; verify Resend sender-domain authentication and delivery; configure trusted ingress/WAF controls; finish two-user/browser/accessibility tests for the implemented per-board/channel authorization rules; approve privacy, data-retention, export, and deletion policies; and close the account-recovery/provider-linking gap.
 
 ## Phase 1 — Core workspaces and project boards
 
@@ -138,7 +138,7 @@ Implemented:
 Acceptance gates:
 - Run multi-browser/two-account tests for private-message isolation, member removal, presence reconnect and typing behavior.
 - Add end-user-facing retention/export/delete rules for chat and meeting records.
-- Fine-grained per-board/channel authorization remains a separate permission-hardening item.
+- Per-board/channel authorization is implemented in the integrated candidate; two-account negative tests remain a release-acceptance item.
 
 ## Phase 8 — Team productivity analytics
 
