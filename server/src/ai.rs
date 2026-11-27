@@ -2172,7 +2172,9 @@ mod authorization_integration_tests {
                       LEFT JOIN tasks ft ON ft.id = wf.task_id
                       LEFT JOIN lists fl ON fl.id = ft.list_id
                       LEFT JOIN boards b ON b.id = COALESCE(wf.board_id, fl.board_id)
+                                  AND b.workspace_id = wf.workspace_id
                      WHERE wf.id = $1
+                       AND (COALESCE(wf.board_id, fl.board_id) IS NULL OR b.id IS NOT NULL)
                        AND wf.workspace_id = $2
                        AND wf.is_deleting = FALSE
                        AND EXISTS (SELECT 1 FROM workspace_members wm
