@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowUpRight,
@@ -137,6 +137,7 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
   const [proposalSaving, setProposalSaving] = useState(false);
   const [proposalWorking, setProposalWorking] = useState(false);
   const [proposalActionError, setProposalActionError] = useState("");
+  const closeProposalReview = useCallback(() => setProposalReviewOpen(false), []);
   const endRef = useRef(null);
   const panelRef = useRef(null);
   const conversationGeneration = useRef(0);
@@ -604,7 +605,7 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
           auditEvents={proposalAudit}
           selectedProposalId={selectedProposalId}
           onSelect={setSelectedProposalId}
-          onClose={() => setProposalReviewOpen(false)}
+          onClose={closeProposalReview}
           onApply={applySavedProposal}
           onReject={rejectSavedProposal}
           working={proposalWorking}
