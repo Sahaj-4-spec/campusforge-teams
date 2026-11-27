@@ -58,7 +58,7 @@ This file establishes the initial product and engineering boundary. The first re
 - Supports an optional board/project scope and rejects inaccessible project IDs.
 - Limits context to 20 boards and 35 tasks, truncates long descriptions, and labels records with evidence references.
 - Treats project records and conversation history as untrusted content in the model prompt.
-- Does not expose SQL, arbitrary query tools, file contents, chat messages, or cross-workspace retrieval to the model.
+- Does not expose SQL, arbitrary query tools, or cross-workspace retrieval. Meeting notes, shared-channel messages, and a selected clean text file are included only in their corresponding modes, after the same explicit data-sharing acknowledgement and scope checks.
 
 **Still required:** dedicated adversarial cross-workspace and per-board role integration tests.
 
@@ -76,7 +76,7 @@ This file establishes the initial product and engineering boundary. The first re
 - Changing project, mode, file, or workspace clears the in-memory conversation and resets acknowledgement. Changing workspaces remounts the assistant.
 - The assistant cannot autonomously mutate projects. Task plans are persisted as structured proposals and require explicit approval through the separate proposal review endpoint; permissions, destination membership, expiry and source state are revalidated at approval time.
 
-**Not yet implemented:** meeting-note or file summarization, persistent conversations, streaming, and user preferences.
+**Not yet implemented:** persistent conversations, streaming, and user preferences. Meeting-note, shared-channel chat, and clean UTF-8 file summaries are supported through separate modes with mode-specific context.
 
 ### B4 — Human-approved action proposals
 
@@ -102,9 +102,9 @@ The existing application remains the system of record:
 - **Frontend:** React/Vite assistant panel in `client/src/components/AiAssistantPanel.jsx`.
 - **Backend:** Rust/Axum routes and an OpenAI-compatible `/chat/completions` adapter in `server/src/ai.rs`. The interface is configured by endpoint/model/key rather than a hard-coded vendor, but the initial wire protocol is OpenAI-compatible.
 - **Authorization:** Existing `WorkspaceUser` authentication and workspace membership; board context is further restricted to board members or workspace owners/admins. All retrieval is server-side.
-- **Context:** PostgreSQL board/task records only. Chat, files, meeting notes and unrelated workspace data are not sent to the model.
+- **Context:** Each request sends only bounded context for the selected mode. Ask/Summary/Task Plan/Risk Review use authorized board/task records; Meeting Summary can include authorized meeting notes and action items; Chat Summary can include shared-channel messages but excludes direct messages; File Summary can include one selected, verified clean UTF-8 text file up to 128 KB. All provider-bound context requires explicit data-sharing acknowledgement.
 - **Conversation:** Browser-panel memory only. Messages are not persisted in PostgreSQL, and closing the panel clears the current conversation.
-- **Writes:** None. Task breakdowns are validated display previews; the API always returns `actions_applied: false`.
+- **Writes:** The assistant response itself never applies actions and returns `actions_applied: false`. A task breakdown can be saved as a durable proposal, then separately approved or rejected through the proposal review API. Approval rechecks current permissions and project state and applies tasks transactionally.
 
 ### API contract
 
@@ -137,9 +137,9 @@ Mode-specific context is minimized:
 - Team Chat loads up to 30 shared-channel messages from workspace-level channels and boards the caller may access. Direct messages are explicitly excluded.
 - Document first uses the scoped `GET /api/ai/files` picker, then requires `file_id` and loads only that file. The file must belong to the active workspace, be visible under the board/member policy, have `scan_status=clean`, use an allowed UTF-8 text media type, and be no larger than 128 KB. The stored byte length and SHA-256 checksum are verified, and the object read itself is byte-bounded. PDFs and images are not parsed or sent in this mode.
 
-Changing the assistant mode, selected project, or selected document clears the in-memory conversation and requires a new acknowledgement. Each task-plan card has a separate Create task action; the model cannot call write tools, and the existing authenticated task API revalidates the target list and assignee at the time of creation.
+Changing the assistant mode, selected project, or selected document clears the in-memory conversation and requires a new acknowledgement. The user can save the task plan as a durable proposal for review; the model cannot call write tools. A workspace member with board write permission must explicitly approve the proposal in the review drawer. The proposal API rechecks the target list, assignees, role, expiry and board fingerprint before transactional creation.
 
-The response contains `answer`, `mode`, `model`, `generated_at`, cited `sources`, prompt/completion token counts when supplied by the provider, and `actions_applied: false`. File-summary requests must set `file_id` to the selected file UUID; other modes must leave it null. Only source references actually cited in the answer are returned in the `sources` list. The endpoint remains read-only; approved task-plan cards call the normal task API only after a separate user click.
+The response contains `answer`, `mode`, `model`, `generated_at`, cited `sources`, prompt/completion token counts when supplied by the provider, and `actions_applied: false`. File-summary requests must set `file_id` to the selected file UUID; other modes must leave it null. Only source references actually cited in the answer are returned in the `sources` list. The assistant endpoint remains read-only; a separate proposal endpoint stores suggestions, and the review workflow performs a fresh authorization check before any task creation.
 
 ### Project Pulse
 
@@ -242,4 +242,4 @@ Endpoints:
 - `POST /api/ai/proposals/{proposal_id}/apply` and `POST /api/ai/proposals/{proposal_id}/reject`
 - `GET /api/ai/proposals/audit`
 
-The migration is additive and is applied by the repository's existing SQLx migration runner. It must be run against a database initialized with the repository's Track A migrations (0001–0013), not against the legacy camelCase-only schema. Production release still requires the provider/legal/privacy gates, deployment configuration, CI, and multi-account browser acceptance checks described above.
+The migration is additive and is applied by the repository's existing SQLx migration runner. Migration 0014 adds proposal history; migration 0015 adds revocable auth sessions. The connected Neon `campusforge_app` database already records version 0014, so keep it unchanged and apply 0015 only with the integrated application release. Production release still requires the provider/legal/privacy gates, deployment configuration, CI, and multi-account browser acceptance checks described above.
