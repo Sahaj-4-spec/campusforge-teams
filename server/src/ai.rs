@@ -1,6 +1,6 @@
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
+    http::{header::CACHE_CONTROL, HeaderMap, HeaderValue, StatusCode},
     routing::{get, post},
     Json, Router,
 };
@@ -25,6 +25,12 @@ type ApiResult<T> = Result<T, (StatusCode, Json<ApiError>)>;
 
 fn fail(status: StatusCode, message: &'static str) -> (StatusCode, Json<ApiError>) {
     (status, Json(ApiError { error: message }))
+}
+
+fn no_store_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers
 }
 
 #[derive(Debug, Serialize)]
@@ -136,6 +142,15 @@ struct ChatContext {
     board_name: String,
     body: String,
     created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow)]
+struct MeetingActionContext {
+    meeting_note_id: Uuid,
+    title: String,
+    assignee: Option<String>,
+    due_at: Option<DateTime<Utc>>,
+    is_done: bool,
 }
 
 #[derive(Debug, FromRow)]
@@ -502,7 +517,7 @@ async fn load_authorized_context(
     .bind(requested_board_id)
     .bind(user_id)
     .bind(!matches!(mode, AssistantMode::MeetingSummary | AssistantMode::ChatSummary | AssistantMode::FileSummary))
-    .fetch_all(&state.db)
+    .fetch_all(&mut *pulse_tx)
     .await
     .map_err(|error| {
         tracing::error!(%error, "AI context board lookup failed");
@@ -575,6 +590,46 @@ async fn load_authorized_context(
         Vec::new()
     };
 
+    let meeting_action_items = if matches!(mode, AssistantMode::MeetingSummary) && !meeting_notes.is_empty() {
+        let note_ids: Vec<Uuid> = meeting_notes.iter().map(|note| note.id).collect();
+        sqlx::query_as::<_, MeetingActionContext>(
+            "SELECT mai.meeting_note_id, mai.title, u.full_name AS assignee,
+                    mai.due_at, mai.is_done
+               FROM meeting_note_action_items mai
+               JOIN meeting_notes mn ON mn.id = mai.meeting_note_id
+                                     AND mn.workspace_id = mai.workspace_id
+               LEFT JOIN users u ON u.id = mai.assigned_to
+               LEFT JOIN boards b ON b.id = mn.board_id
+                                 AND b.workspace_id = mn.workspace_id
+              WHERE mai.workspace_id = $1
+                AND mai.meeting_note_id = ANY($2::uuid[])
+                AND EXISTS (SELECT 1 FROM workspace_members wm
+                             WHERE wm.workspace_id = mai.workspace_id AND wm.user_id = $3)
+                AND (mn.board_id IS NULL OR b.id IS NOT NULL)
+                AND (
+                  mn.board_id IS NULL
+                  OR EXISTS (SELECT 1 FROM board_members bm
+                              WHERE bm.board_id = mn.board_id AND bm.user_id = $3)
+                  OR EXISTS (SELECT 1 FROM workspace_members wm
+                              WHERE wm.workspace_id = mai.workspace_id AND wm.user_id = $3
+                                AND wm.role IN ('owner', 'admin'))
+                )
+              ORDER BY mai.meeting_note_id, mai.position, mai.created_at
+              LIMIT 40"
+        )
+        .bind(workspace_id)
+        .bind(&note_ids)
+        .bind(user_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "AI meeting action-item context lookup failed");
+            fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not load authorized meeting action items")
+        })?
+    } else {
+        Vec::new()
+    };
+
     let chat_messages = if matches!(mode, AssistantMode::ChatSummary) {
         sqlx::query_as::<_, ChatContext>(
             "SELECT cm.id, COALESCE(b.name, 'Workspace') AS board_name, cm.body, cm.created_at
@@ -582,6 +637,7 @@ async fn load_authorized_context(
                LEFT JOIN boards b ON b.id = cm.board_id AND b.workspace_id = cm.workspace_id
               WHERE cm.workspace_id = $1
                 AND cm.conversation_id IS NULL
+                AND cm.deleted_at IS NULL
                 AND EXISTS (SELECT 1 FROM workspace_members wm
                              WHERE wm.workspace_id = cm.workspace_id AND wm.user_id = $3)
                 AND ($2::uuid IS NULL OR cm.board_id IS NULL OR cm.board_id = $2)
@@ -729,6 +785,15 @@ async fn load_authorized_context(
             label: truncate_chars(&redact_sensitive_text(&note.title), 120),
             resource_id: note.id,
         });
+        let structured_actions: Vec<Value> = meeting_action_items.iter()
+            .filter(|action| action.meeting_note_id == note.id)
+            .map(|action| json!({
+                "title": truncate_chars(&redact_sensitive_text(&action.title), 240),
+                "assignee": action.assignee.as_ref().map(|name| truncate_chars(&redact_sensitive_text(name), 100)),
+                "due_at": action.due_at,
+                "done": action.is_done,
+            }))
+            .collect();
         meeting_records.push(json!({
             "reference": reference,
             "project": truncate_chars(&redact_sensitive_text(&note.board_name), 100),
@@ -738,6 +803,7 @@ async fn load_authorized_context(
             "agenda": truncate_chars(&redact_sensitive_text(&note.agenda), 900),
             "notes": truncate_chars(&redact_sensitive_text(&note.notes), 1600),
             "action_items": truncate_chars(&redact_sensitive_text(&note.action_items), 900),
+            "structured_action_items": structured_actions,
         }));
     }
 
@@ -876,7 +942,7 @@ async fn assistant(
     State(state): State<AppState>,
     WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Json(request): Json<AssistantRequest>,
-) -> ApiResult<Json<AssistantResponse>> {
+) -> ApiResult<(HeaderMap, Json<AssistantResponse>)> {
     validate_request(&request)?;
 
     let config = provider_config().ok_or_else(|| fail(
@@ -1062,7 +1128,7 @@ async fn assistant(
         }
     }).collect();
 
-    Ok(Json(AssistantResponse {
+    Ok((no_store_headers(), Json(AssistantResponse {
         answer: answer.to_owned(),
         mode: request.mode.as_str(),
         model: truncate_chars(&config.model, 100),
@@ -1073,7 +1139,7 @@ async fn assistant(
             completion_tokens,
         },
         actions_applied: false,
-    }))
+    })))
 }
 
 
@@ -1091,7 +1157,7 @@ async fn ai_files_list(
     State(state): State<AppState>,
     WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Query(query): Query<PulseQuery>,
-) -> ApiResult<Json<Vec<AiFileOption>>> {
+) -> ApiResult<(HeaderMap, Json<Vec<AiFileOption>>)> {
     let user_allowed = state.check_rate_limit(
         &rate_limit_key("ai-files-user", Some(user_id), workspace_id),
         30,
@@ -1190,7 +1256,7 @@ async fn ai_files_list(
         fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not load eligible project documents")
     })?;
 
-    Ok(Json(files))
+    Ok((no_store_headers(), Json(files)))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1271,7 +1337,7 @@ struct PulseBoardHealth {
 struct ProjectPulseResponse {
     generated_at: DateTime<Utc>,
     scope: &'static str,
-    health_score: u8,
+    health_score: Option<u8>,
     health_label: &'static str,
     total_tasks: Option<usize>,
     open_tasks: usize,
@@ -1429,7 +1495,7 @@ async fn project_pulse(
     State(state): State<AppState>,
     WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Query(query): Query<PulseQuery>,
-) -> ApiResult<Json<ProjectPulseResponse>> {
+) -> ApiResult<(HeaderMap, Json<ProjectPulseResponse>)> {
     const MAX_BOARDS: usize = 100;
     const MAX_TASKS: usize = 5000;
 
@@ -1455,6 +1521,21 @@ async fn project_pulse(
     if !workspace_allowed {
         return Err(fail(StatusCode::TOO_MANY_REQUESTS, "Project Pulse workspace request limit reached; please try again later"));
     }
+
+    // Counts and sampled task rows must describe one database snapshot.
+    // Otherwise a task created between the two reads can be silently omitted
+    // while the response incorrectly labels the board's health complete.
+    let mut pulse_tx = state.db.begin().await.map_err(|error| {
+        tracing::error!(%error, "Could not begin Project Pulse snapshot");
+        fail(StatusCode::SERVICE_UNAVAILABLE, "Project Pulse is temporarily unavailable")
+    })?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *pulse_tx)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "Could not establish Project Pulse snapshot");
+            fail(StatusCode::SERVICE_UNAVAILABLE, "Project Pulse is temporarily unavailable")
+        })?;
 
     let boards = sqlx::query_as::<_, PulseBoard>(
         "SELECT b.id, b.name,
@@ -1551,12 +1632,17 @@ async fn project_pulse(
         .bind(&board_ids)
         .bind(user_id)
         .bind(per_board_limit as i64)
-        .fetch_all(&state.db)
+        .fetch_all(&mut *pulse_tx)
         .await        .map_err(|error| {
             tracing::error!(%error, "Project Pulse task lookup failed");
             fail(StatusCode::INTERNAL_SERVER_ERROR, "Could not load project health")
         })?
     };
+    pulse_tx.commit().await.map_err(|error| {
+        tracing::error!(%error, "Could not finish Project Pulse snapshot");
+        fail(StatusCode::SERVICE_UNAVAILABLE, "Project Pulse is temporarily unavailable")
+    })?;
+
     let per_board_limit = (MAX_TASKS / boards.len().max(1)).max(1);
     let sample_capped = board_sample_capped
         || boards.iter().any(|board| board.total_tasks > per_board_limit as i64);
@@ -1663,11 +1749,11 @@ async fn project_pulse(
         PulseMetric { key: "unestimated", label: "No estimate", value: overall.unestimated as i64, detail: "Open tasks without an effort estimate".into() },
     ];
 
-    Ok(Json(ProjectPulseResponse {
+    Ok((no_store_headers(), Json(ProjectPulseResponse {
         generated_at: now,
         scope: if query.board_id.is_some() { "selected_project" } else { "authorized_workspace_projects" },
-        health_score: overall.score,
-        health_label: health_label(overall.score),
+        health_score: if sample_capped { None } else { Some(overall.score) },
+        health_label: if sample_capped { "partial" } else { health_label(overall.score) },
         total_tasks: if board_sample_capped { None } else { Some(total_workspace_tasks) },
         open_tasks: overall.open,
         completed_tasks: overall.completed,
@@ -1685,7 +1771,7 @@ async fn project_pulse(
         board_health,
         sample_capped,
         methodology: "Transparent heuristic, not an AI prediction. Completion is inferred from Done/Complete/Completed/Closed/Resolved list names; blockers are inferred from Blocked/Stuck/On Hold list names. Overdue means due before today; due soon means due within three days; stale means not updated for seven days. Workload effort is split evenly across multiple assignees. Missing estimates are not treated as zero effort.",
-    }))
+    })))
 }
 
 #[cfg(test)]
