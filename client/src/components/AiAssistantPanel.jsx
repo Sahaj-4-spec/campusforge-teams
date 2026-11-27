@@ -369,6 +369,7 @@ export default function AiAssistantPanel({ onClose, boards = [], lists = [], act
                 if (nextBoardId === boardId) return;
                 resetScopedConversation();
                 setSelectedFileId("");
+                setProposalListId("");
                 setBoardId(nextBoardId);
               }}
             >
