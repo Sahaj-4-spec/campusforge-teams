@@ -335,8 +335,10 @@ async fn get_workspace(
     let activity_events = sqlx::query_as::<_, ActivityRow>(
         "SELECT a.id, a.board_id, a.actor_id, a.event_type,
                 COALESCE(a.payload->>'description', a.event_type) AS description, a.created_at
-         FROM activity_events a JOIN board_members own ON own.board_id=a.board_id AND own.user_id=$2
-         WHERE a.workspace_id=$1 ORDER BY a.created_at DESC LIMIT 200",
+         FROM activity_events a
+         LEFT JOIN board_members own ON own.board_id=a.board_id AND own.user_id=$2
+         WHERE a.workspace_id=$1 AND (a.board_id IS NULL OR own.user_id IS NOT NULL)
+         ORDER BY a.created_at DESC LIMIT 200",
     )
     .bind(workspace.id)
     .bind(user_id)
