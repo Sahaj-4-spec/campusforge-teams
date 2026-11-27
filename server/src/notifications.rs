@@ -190,6 +190,18 @@ async fn send_one(
              ON outbox.notification_id=n.id AND outbox.recipient_user_id=n.recipient_user_id
           WHERE n.id=$1 AND n.recipient_user_id=$2
             AND outbox.id=$3 AND outbox.status='processing' AND outbox.attempts=$4
+            AND n.board_id IS NOT NULL
+            AND EXISTS(
+                SELECT 1 FROM boards b
+                 WHERE b.id=n.board_id AND b.workspace_id=n.workspace_id
+                   AND (
+                        wm.role IN ('owner','admin')
+                        OR EXISTS(
+                            SELECT 1 FROM board_members bm
+                             WHERE bm.board_id=b.id AND bm.user_id=n.recipient_user_id
+                        )
+                   )
+            )
           FOR UPDATE OF outbox",
     )
     .bind(job.notification_id)
