@@ -144,33 +144,37 @@ fn internal<E: std::fmt::Display>(error: E, context: &'static str) -> (StatusCod
     fail(StatusCode::INTERNAL_SERVER_ERROR, "The request could not be completed")
 }
 
-async fn board_in_workspace(state: &AppState, board_id: Uuid, workspace_id: Uuid) -> ApiResult<()> {
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM boards WHERE id = $1 AND workspace_id = $2)",
-    )
-    .bind(board_id)
-    .bind(workspace_id)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|error| internal(error, "Could not verify project access"))?;
-    if exists { Ok(()) } else { Err(fail(StatusCode::NOT_FOUND, "Project not found in this workspace")) }
+async fn board_access(
+    state: &AppState, user_id: Uuid, board_id: Uuid, workspace_id: Uuid, write: bool,
+) -> ApiResult<()> {
+    let role = crate::auth::board_role(&state.db, user_id, workspace_id, board_id)
+        .await.map_err(|error| internal(error, "Could not verify board permissions"))?;
+    match (role.as_deref(), write) {
+        (Some("admin" | "member" | "viewer"), false) => Ok(()),
+        (Some("admin" | "member"), true) => Ok(()),
+        (Some("viewer"), true) => Err(fail(StatusCode::FORBIDDEN, "This project is read-only for your account")),
+        _ => Err(fail(StatusCode::NOT_FOUND, "Project not found in this workspace")),
+    }
 }
-
-async fn task_in_workspace(state: &AppState, task_id: Uuid, workspace_id: Uuid) -> ApiResult<()> {
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(
-            SELECT 1 FROM tasks t
-            JOIN lists l ON l.id = t.list_id
-            JOIN boards b ON b.id = l.board_id
-            WHERE t.id = $1 AND b.workspace_id = $2
-        )",
+async fn board_in_workspace(state: &AppState, user_id: Uuid, board_id: Uuid, workspace_id: Uuid) -> ApiResult<()> {
+    board_access(state, user_id, board_id, workspace_id, false).await
+}
+async fn board_write_access(state: &AppState, user_id: Uuid, board_id: Uuid, workspace_id: Uuid) -> ApiResult<()> {
+    board_access(state, user_id, board_id, workspace_id, true).await
+}
+async fn task_in_workspace(
+    state: &AppState, user_id: Uuid, task_id: Uuid, workspace_id: Uuid, write: bool,
+) -> ApiResult<()> {
+    let board_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT b.id FROM tasks t JOIN lists l ON l.id=t.list_id
+         JOIN boards b ON b.id=l.board_id WHERE t.id=$1 AND b.workspace_id=$2",
     )
-    .bind(task_id)
-    .bind(workspace_id)
-    .fetch_one(&state.db)
-    .await
+    .bind(task_id).bind(workspace_id).fetch_optional(&state.db).await
     .map_err(|error| internal(error, "Could not verify task access"))?;
-    if exists { Ok(()) } else { Err(fail(StatusCode::NOT_FOUND, "Task not found in this workspace")) }
+    let Some(board_id) = board_id else {
+        return Err(fail(StatusCode::NOT_FOUND, "Task not found in this workspace"));
+    };
+    board_access(state, user_id, board_id, workspace_id, write).await
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -219,6 +223,7 @@ async fn calendar_list(
     WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Query(range): Query<CalendarRange>,
 ) -> ApiResult<Json<Value>> {
+    if let Some(board_id)=range.board_id { board_in_workspace(&state,user_id,board_id,workspace_id).await?; }
     let today = Utc::now().date_naive();
     let from = range.from.unwrap_or(today - Duration::days(30));
     let to = range.to.unwrap_or(today + Duration::days(60));
@@ -248,6 +253,7 @@ async fn calendar_list(
                 OR (all_day=FALSE AND start_at < $5 AND end_at > $4)
            )
            AND ($6::uuid IS NULL OR board_id=$6)
+           AND (board_id IS NULL OR EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id=calendar_events.board_id AND bm.user_id=$9))
            AND ($7::text IS NULL OR event_type=$7)
            AND ($8::uuid IS NULL OR EXISTS(
                 SELECT 1 FROM calendar_event_attendees a WHERE a.event_id=calendar_events.id AND a.user_id=$8
@@ -262,6 +268,7 @@ async fn calendar_list(
     .bind(range.board_id)
     .bind(range.event_type.as_deref())
     .bind(range.attendee_id)
+    .bind(user_id)
     .fetch_all(&state.db)
     .await
     .map_err(|error| internal(error, "Could not load calendar events"))?;
@@ -273,12 +280,14 @@ async fn calendar_list(
          JOIN boards b ON b.id = l.board_id
          WHERE b.workspace_id = $1 AND t.due_at >= $2 AND t.due_at < $3
            AND ($4::uuid IS NULL OR b.id=$4)
+           AND EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id=b.id AND bm.user_id=$5)
          ORDER BY t.due_at",
     )
     .bind(workspace_id)
     .bind(task_start)
     .bind(task_end)
     .bind(range.board_id)
+    .bind(user_id)
     .fetch_all(&state.db)
     .await
     .map_err(|error| internal(error, "Could not load task deadlines"))?;
@@ -414,7 +423,7 @@ async fn calendar_create(
     validate_calendar_input(&input)?;
     validate_calendar_timezone(&state, input.time_zone.as_deref()).await?;
     if let Some(board_id) = input.board_id {
-        board_in_workspace(&state, board_id, workspace_id).await?;
+        board_write_access(&state,user_id,board_id,workspace_id).await?;
     }
     if let Some(attendees)=input.attendee_ids.as_deref() {
         validate_calendar_attendees(&state,workspace_id,attendees).await?;
@@ -464,7 +473,7 @@ async fn calendar_update(
 ) -> ApiResult<StatusCode> {
     validate_calendar_input(&input)?;
     if let Some(board_id) = input.board_id {
-        board_in_workspace(&state, board_id, workspace_id).await?;
+        board_write_access(&state,user_id,board_id,workspace_id).await?;
     }
     if let Some(attendees)=input.attendee_ids.as_deref() {
         validate_calendar_attendees(&state,workspace_id,attendees).await?;
@@ -518,11 +527,12 @@ async fn calendar_delete(
     WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Path(event_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let creator:Option<Uuid>=sqlx::query_scalar(
-        "SELECT created_by FROM calendar_events WHERE id=$1 AND workspace_id=$2",
+    let event:Option<(Uuid,Option<Uuid>)>=sqlx::query_as(
+        "SELECT created_by,board_id FROM calendar_events WHERE id=$1 AND workspace_id=$2",
     ).bind(event_id).bind(workspace_id).fetch_optional(&state.db).await
       .map_err(|error|internal(error,"Could not verify calendar delete permission"))?;
-    let Some(creator)=creator else { return Err(fail(StatusCode::NOT_FOUND,"Calendar event not found")); };
+    let Some((creator,board_id))=event else { return Err(fail(StatusCode::NOT_FOUND,"Calendar event not found")); };
+    if let Some(board_id)=board_id { board_write_access(&state,user_id,board_id,workspace_id).await?; }
     if creator!=user_id && !crate::roadmap::workspace_admin(&state,user_id,workspace_id).await
         .map_err(|error|internal(error,"Could not verify calendar delete permission"))? {
         return Err(fail(StatusCode::FORBIDDEN,"Only the event creator or a workspace admin can delete this event"));
@@ -804,9 +814,13 @@ async fn files_list(
     let rows = sqlx::query_as::<_, WorkspaceFile>(
         "SELECT id, workspace_id, board_id, task_id, uploaded_by, original_name, media_type,
                 size_bytes, checksum_sha256, scan_status, created_at
-         FROM workspace_files WHERE workspace_id=$1 AND is_deleting=FALSE ORDER BY created_at DESC",
+         FROM workspace_files wf WHERE workspace_id=$1 AND is_deleting=FALSE
+           AND (board_id IS NULL OR EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id=wf.board_id AND bm.user_id=$2))
+           AND (task_id IS NULL OR EXISTS(SELECT 1 FROM tasks t JOIN lists l ON l.id=t.list_id JOIN board_members bm ON bm.board_id=l.board_id WHERE t.id=wf.task_id AND bm.user_id=$2))
+         ORDER BY created_at DESC",
     )
     .bind(workspace_id)
+    .bind(user_id)
     .fetch_all(&state.db)
     .await
     .map_err(|error| internal(error, "Could not load workspace files"))?;
@@ -886,10 +900,10 @@ async fn files_upload(
         return Err(fail(StatusCode::BAD_REQUEST, "Attach a file to a project or a task, not both"));
     }
     if let Some(board_id) = board_id {
-        board_in_workspace(&state, board_id, workspace_id).await?;
+        board_write_access(&state,user_id,board_id,workspace_id).await?;
     }
     if let Some(task_id) = task_id {
-        task_in_workspace(&state, task_id, workspace_id).await?;
+        task_in_workspace(&state,user_id,task_id,workspace_id,true).await?;
     }
     let temporary = temp_upload.as_ref()
         .ok_or_else(|| fail(StatusCode::BAD_REQUEST, "Choose a file to upload"))?;
@@ -999,18 +1013,20 @@ async fn file_download(
     WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Path(file_id): Path<Uuid>,
 ) -> ApiResult<Response<axum::body::Body>> {
-    let row: Option<(String, String, String, String, i64)> = sqlx::query_as(
-        "SELECT storage_key, original_name, media_type, scan_status, size_bytes FROM workspace_files WHERE id=$1 AND workspace_id=$2 AND is_deleting=FALSE",
+    let row: Option<(String, String, String, String, i64, Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
+        "SELECT storage_key, original_name, media_type, scan_status, size_bytes, board_id, task_id FROM workspace_files WHERE id=$1 AND workspace_id=$2 AND is_deleting=FALSE",
     )
     .bind(file_id)
     .bind(workspace_id)
     .fetch_optional(&state.db)
     .await
     .map_err(|error| internal(error, "Could not load file metadata"))?;
-    let Some((storage_key, original_name, media_type, scan_status, size_bytes)) = row else {
+    let Some((storage_key, original_name, media_type, scan_status, size_bytes, board_id, task_id)) = row else {
         return Err(fail(StatusCode::NOT_FOUND, "File not found"));
     };
 
+    if let Some(board_id)=board_id { board_in_workspace(&state,user_id,board_id,workspace_id).await?; }
+    if let Some(task_id)=task_id { task_in_workspace(&state,user_id,task_id,workspace_id,false).await?; }
     if scan_status == "infected" || (std::env::var("CAMPUSFORGE_REQUIRE_MALWARE_SCAN").ok().is_some_and(|value| value.eq_ignore_ascii_case("true")) && scan_status != "clean") {
         return Err(fail(StatusCode::LOCKED, "File download is unavailable until malware scanning passes"));
     }
@@ -1045,8 +1061,8 @@ async fn file_delete(
     Path(file_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
     let mut tx=state.db.begin().await.map_err(|error|internal(error,"Could not begin file deletion"))?;
-    let existing: Option<(bool,String,i64,Uuid)> = sqlx::query_as(
-        "SELECT is_deleting,original_name,size_bytes,uploaded_by FROM workspace_files
+    let existing: Option<(bool,String,i64,Uuid,Option<Uuid>,Option<Uuid>)> = sqlx::query_as(
+        "SELECT is_deleting,original_name,size_bytes,uploaded_by,board_id,task_id FROM workspace_files
          WHERE id=$1 AND workspace_id=$2 FOR UPDATE",
     )
     .bind(file_id)
@@ -1054,9 +1070,11 @@ async fn file_delete(
     .fetch_optional(&mut *tx)
     .await
     .map_err(|error| internal(error, "Could not load file metadata"))?;
-    let Some((is_deleting,original_name,size_bytes,uploaded_by)) = existing else {
+    let Some((is_deleting,original_name,size_bytes,uploaded_by,board_id,task_id)) = existing else {
         return Err(fail(StatusCode::NOT_FOUND, "File not found"));
     };
+    if let Some(board_id)=board_id { board_write_access(&state,user_id,board_id,workspace_id).await?; }
+    if let Some(task_id)=task_id { task_in_workspace(&state,user_id,task_id,workspace_id,true).await?; }
     if uploaded_by!=user_id && !crate::roadmap::workspace_admin(&state,user_id,workspace_id).await
         .map_err(|error|internal(error,"Could not verify file deletion permission"))? {
         return Err(fail(StatusCode::FORBIDDEN,"Only the uploader or a workspace admin can delete this file"));
@@ -1112,7 +1130,7 @@ async fn chat_list(
     Query(query): Query<ChatQuery>,
 ) -> ApiResult<Json<Vec<ChatMessage>>> {
     if let Some(board_id) = query.board_id {
-        board_in_workspace(&state, board_id, workspace_id).await?;
+        board_in_workspace(&state,user_id,board_id,workspace_id).await?;
     }
     let limit=query.limit.unwrap_or(50).clamp(1,100);
     let rows = sqlx::query_as::<_, ChatMessage>(
@@ -1153,7 +1171,7 @@ async fn chat_send(
         return Err(fail(StatusCode::BAD_REQUEST, "Message must be between 1 and 4000 characters"));
     }
     if let Some(board_id) = input.board_id {
-        board_in_workspace(&state, board_id, workspace_id).await?;
+        board_write_access(&state,user_id,board_id,workspace_id).await?;
     }
     let mut tx=state.db.begin().await.map_err(|error|internal(error,"Could not begin team message"))?;
     let message = sqlx::query_as::<_, ChatMessage>(
@@ -1224,9 +1242,12 @@ async fn meeting_notes_list(
     let rows = sqlx::query_as::<_, MeetingNote>(
         "SELECT id, workspace_id, board_id, created_by, title, meeting_at, attendees,
                 agenda, notes, action_items, created_at, updated_at
-         FROM meeting_notes WHERE workspace_id=$1 ORDER BY meeting_at DESC NULLS LAST, created_at DESC",
+         FROM meeting_notes mn WHERE workspace_id=$1
+           AND (board_id IS NULL OR EXISTS(SELECT 1 FROM board_members bm WHERE bm.board_id=mn.board_id AND bm.user_id=$2))
+         ORDER BY meeting_at DESC NULLS LAST, created_at DESC",
     )
     .bind(workspace_id)
+    .bind(user_id)
     .fetch_all(&state.db)
     .await
     .map_err(|error| internal(error, "Could not load meeting notes"))?;
@@ -1240,7 +1261,7 @@ async fn meeting_note_create(
 ) -> ApiResult<(StatusCode, Json<MeetingNote>)> {
     validate_meeting_note(&input)?;
     if let Some(board_id) = input.board_id {
-        board_in_workspace(&state, board_id, workspace_id).await?;
+        board_write_access(&state,user_id,board_id,workspace_id).await?;
     }
     let note = sqlx::query_as::<_, MeetingNote>(
         "INSERT INTO meeting_notes
@@ -1273,7 +1294,7 @@ async fn meeting_note_update(
 ) -> ApiResult<StatusCode> {
     validate_meeting_note(&input)?;
     if let Some(board_id) = input.board_id {
-        board_in_workspace(&state, board_id, workspace_id).await?;
+        board_write_access(&state,user_id,board_id,workspace_id).await?;
     }
     let result = sqlx::query(
         "UPDATE meeting_notes SET board_id=$1, title=$2, meeting_at=$3, attendees=$4,
@@ -1304,6 +1325,12 @@ async fn meeting_note_delete(
     WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Path(note_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
+    let note:Option<(Uuid,Option<Uuid>)>=sqlx::query_as("SELECT created_by,board_id FROM meeting_notes WHERE id=$1 AND workspace_id=$2")
+        .bind(note_id).bind(workspace_id).fetch_optional(&state.db).await
+        .map_err(|error|internal(error,"Could not verify meeting note permissions"))?;
+    let Some((creator,board_id))=note else { return Err(fail(StatusCode::NOT_FOUND,"Meeting notes not found")); };
+    if let Some(board_id)=board_id { board_write_access(&state,user_id,board_id,workspace_id).await?; }
+    if creator!=user_id { return Err(fail(StatusCode::FORBIDDEN,"Only the meeting notes creator can delete them")); }
     let result = sqlx::query("DELETE FROM meeting_notes WHERE id=$1 AND workspace_id=$2 AND created_by=$3")
         .bind(note_id)
         .bind(workspace_id)
