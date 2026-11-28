@@ -235,17 +235,25 @@ npm run dev
 - Frontend: `http://localhost:5173`
 - Backend health check: `http://localhost:5000/api/health`
 
-Build both applications:
+Build the React frontend for static hosting:
 
 ```bash
 npm run build
 ```
 
-Run the Rust backend in release mode:
+Build the Rust API separately:
 
 ```bash
-npm start
+npm run build:server
 ```
+
+Run the Rust API in release mode (with the required server environment variables configured):
+
+```bash
+cargo run --release --manifest-path server/Cargo.toml
+```
+
+The Node-based Render frontend host serves only the files in `client/dist`; it does not start the API. For a local development session, use `npm run dev` to start Vite and the Rust API together. For a compiled API binary, build it with `npm run build:server` and run `./server/target/release/campusforge-server`.
 
 ## 🖥️ Frontend Milestone
 
