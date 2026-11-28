@@ -24,4 +24,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 url = "2.5"
 regex = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
-validator = { version = "0.19", features = ["derive"] }
+validator = { version = "0.21", features = ["derive"] }
