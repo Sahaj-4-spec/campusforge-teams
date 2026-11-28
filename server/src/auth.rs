@@ -821,9 +821,21 @@ async fn request_password_reset(
 
 async fn confirm_password_reset(
     axum::extract::State(state): axum::extract::State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<PasswordResetConfirmRequest>,
 ) -> Result<Json<PasswordResetMessage>, (StatusCode, Json<ApiError>)> {
     request.validate().map_err(|_| invalid_request())?;
+    let ip_key = rate_limit_digest("password-reset-confirm-ip", &client_ip(&headers));
+    let ip_allowed = state.check_rate_limit(&ip_key, 20, 900).await.map_err(|error| {
+        tracing::error!(%error, "Could not enforce password reset confirmation rate limit");
+        (StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: "Password recovery is temporarily unavailable" }))
+    })?;
+    if !ip_allowed {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ApiError { error: "Too many password reset attempts. Please wait before trying again." }),
+        ));
+    }
     let token_hash = reset_token_hash(request.token.trim());
 
     let mut transaction = state.db.begin().await.map_err(|error| {
@@ -923,6 +935,16 @@ pub fn router() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn password_reset_token_hash_is_fixed_length_and_one_way() {
+        let token = "0123456789abcdef0123456789abcdef.abcdef0123456789abcdef0123456789";
+        let digest = reset_token_hash(token);
+        assert_eq!(digest.len(), 32);
+        assert_ne!(digest, token.as_bytes());
+        assert_eq!(digest, reset_token_hash(token));
+        assert_ne!(digest, reset_token_hash("a different reset token"));
+    }
 
     #[tokio::test]
     async fn board_role_lookup_uses_real_workspace_and_board_memberships() {
