@@ -80,8 +80,8 @@ The long-running API uses `DATABASE_URL` with the DML-only runtime role and keep
 
 ```bash
 # Inject MIGRATION_DATABASE_URL from the protected release secret store.
-# The secret URL must use sslmode=verify-full and the canonical Neon hostname.
+# Its URL must use sslmode=verify-full and the canonical Neon hostname.
 npm run db:migrate
 ```
 
-Configure `MIGRATION_DATABASE_URL` only in the protected one-off release environment/secret store; never type its value into a shell command or place it in shell history. Do not configure it on the public API service, expose it to the frontend, or log it. The PostgreSQL URL must use `sslmode=verify-full`, which SQLx 0.8.6 supports, so the certificate chain is checked against trusted roots and the Neon hostname is verified. SQLx's Rustls build includes WebPKI roots unless an explicit `PGSSLROOTCERT` is supplied. Confirm the Neon project, branch, database name and a restorable backup before running the command. After the migration completes, deploy the matching API code with the restricted runtime role.
+Configure `MIGRATION_DATABASE_URL` only in the protected one-off release environment/secret store; never type its value into a shell command or place it in shell history. Do not configure it on the public API service, expose it to the frontend, or log it. The PostgreSQL URL must use `sslmode=verify-full`, which SQLx 0.8.6 supports, so the certificate chain is checked against trusted roots and the Neon hostname is verified. SQLx 0.8.6 uses WebPKI roots with the configured Rustls runtime unless an explicit trusted `PGSSLROOTCERT` is supplied. Confirm the Neon project, branch, database name and a restorable backup before running the command. After the migration completes, deploy the matching API code with the restricted runtime role.
