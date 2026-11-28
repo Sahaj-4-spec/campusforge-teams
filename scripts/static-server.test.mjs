@@ -20,7 +20,7 @@ before(async () => {
     server.listen(0, "127.0.0.1", resolve);
   });
   const address = server.address();
-  baseUrl = \`http://127.0.0.1:\${address.port}\`;
+  baseUrl = "http://127.0.0.1:" + address.port;
 });
 
 after(async () => {
@@ -64,6 +64,11 @@ test("serves HEAD requests without a response body", async () => {
   const response = await fetch(baseUrl + "/assets/app.js", { method: "HEAD" });
   assert.equal(response.status, 200);
   assert.equal(await response.text(), "");
+});
+
+test("rejects a path traversal request", async () => {
+  const response = await fetch(baseUrl + "/%2e%2e/secret.txt");
+  assert.notEqual(await response.text(), "secret");
 });
 
 test("sets baseline browser security headers", async () => {
