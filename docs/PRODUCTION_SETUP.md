@@ -33,7 +33,7 @@ Production uses S3-compatible private object storage. Configure:
 - `AWS_ACCESS_KEY_ID`
 - `AWS_SECRET_ACCESS_KEY`
 
-Neon Object Storage is enabled on the CampusForge Neon project and the existing `campusforge-private-uploads` bucket is private. For production, create a dedicated credential on the production `main` branch with `storage:read` and `storage:write` scopes. Map the credential `token_id` to `AWS_ACCESS_KEY_ID` and `s3_secret_access_key` to `AWS_SECRET_ACCESS_KEY`. Use the `main` branch's own endpoint, region, and path-style addressing. Never reuse the preview credential in production. Optional S3-compatible provider settings are `CAMPUSFORGE_S3_ENDPOINT_URL`, `CAMPUSFORGE_S3_URL_STYLE=path`, and `AWS_SESSION_TOKEN` for temporary credentials.
+Neon Object Storage is enabled on the CampusForge Neon project and the existing `campusforge-private-uploads` bucket is private. The isolated integrated preview has a child-branch-scoped `storage:read`/`storage:write` credential and Render startup has verified PUT/GET/DELETE. For production, create a separate credential on the production `main` branch with `storage:read` and `storage:write` scopes. Map the credential `token_id` to `AWS_ACCESS_KEY_ID` and `s3_secret_access_key` to `AWS_SECRET_ACCESS_KEY`. Use the `main` branch's own endpoint, region, and path-style addressing. Never reuse the preview credential in production. Optional S3-compatible provider settings are `CAMPUSFORGE_S3_ENDPOINT_URL`, `CAMPUSFORGE_S3_URL_STYLE=path`, and `AWS_SESSION_TOKEN` for temporary credentials.
 
 The bucket must be private. Use a branch-scoped Neon credential limited to `storage:read` and `storage:write`; create separate credentials for production and preview. Neon Object Storage is branch-scoped and supports path-style S3 requests. Confirm the provider's supported retention/versioning and backup features rather than assuming standard AWS S3 features are available. Exercise upload, download, deletion, checksum and restore from the deployed API.
 
@@ -114,3 +114,16 @@ MIGRATION_DATABASE_URL='postgresql://MIGRATION_ROLE:...@HOST/campusforge_app?ssl
 ```
 
 The migration command applies the repository's embedded SQLx migrations and checks their checksums. Use a controlled migration credential with schema ownership/DDL authority, keep its secret in a protected operator or release environment, and never copy it into application logs or frontend variables. Confirm the expected branch, database and migration journal before running it. The runtime API then starts with the separate read/write role and does not perform schema changes.
+
+
+## 9. Backup and restore evidence (28 November 2026)
+
+A manual snapshot of the production Neon `main` branch was created before further production changes:
+
+- Snapshot: `campusforge-prelaunch-2026-11-28` (`snap-orange-grass-bbu0vwvb`).
+- Restore drill: `campusforge-restore-drill-2026-11-28` (`br-bold-math-bbmdqptf`), restored with `finalize=false`; the original production branch was not replaced.
+- The restored `campusforge_app` had 43 public tables and SQLx migrations 0001–0017 successful, with 48-byte checksums.
+- The selected core data tables contained zero rows in the restored database. The legacy `neondb` core tables were also empty in the source branch during this check. This is schema/journal restore evidence, **not** proof of recovering populated user records.
+- Neon snapshot schedule was empty before and after the manual snapshot; no recurring retention policy is configured. The restored drill branch could not be marked protected because the current Neon plan had reached its protected-branch limit.
+
+Before launch, set and approve an automatic snapshot/PITR retention policy appropriate for the chosen Neon plan and verify restore against a populated test dataset. Do not claim customer-data recovery until a representative populated restore has been exercised.
