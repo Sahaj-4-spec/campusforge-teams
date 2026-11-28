@@ -990,18 +990,6 @@ async fn assistant(
     if !user_limit {
         return Err(fail(StatusCode::TOO_MANY_REQUESTS, "AI user request limit reached; please wait before trying again"));
     }
-    let workspace_limit = state.check_rate_limit(
-        &rate_limit_key("workspace", None, workspace_id),
-        120,
-        3600,
-    ).await.map_err(|error| {
-        tracing::error!(%error, "Could not enforce AI workspace rate limit");
-        fail(StatusCode::SERVICE_UNAVAILABLE, "AI assistance is temporarily unavailable")
-    })?;
-    if !workspace_limit {
-        return Err(fail(StatusCode::TOO_MANY_REQUESTS, "AI workspace request limit reached; please wait before trying again"));
-    }
-
     // Daily request ceilings provide an additional cost guardrail on top of the
     // minute/hour throttles. They count admitted provider calls, not estimated currency.
     let daily_user_limit = state.check_rate_limit(
@@ -1014,6 +1002,18 @@ async fn assistant(
     })?;
     if !daily_user_limit {
         return Err(fail(StatusCode::TOO_MANY_REQUESTS, "Your daily AI request allowance is exhausted"));
+    }
+
+    let workspace_limit = state.check_rate_limit(
+        &rate_limit_key("workspace", None, workspace_id),
+        120,
+        3600,
+    ).await.map_err(|error| {
+        tracing::error!(%error, "Could not enforce AI workspace rate limit");
+        fail(StatusCode::SERVICE_UNAVAILABLE, "AI assistance is temporarily unavailable")
+    })?;
+    if !workspace_limit {
+        return Err(fail(StatusCode::TOO_MANY_REQUESTS, "AI workspace request limit reached; please wait before trying again"));
     }
 
     // As with the hourly limit, only users admitted by their own daily bucket
