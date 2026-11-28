@@ -22,6 +22,24 @@ The client starts OAuth at /api/auth/{provider}/start. For local Vite developmen
 
 Register each exact callback URL in that provider's developer console. For production, use the public HTTPS API host in OAUTH_REDIRECT_BASE_URL and register its exact callback URL.
 
+## Preview deployment callback URLs
+
+For the current Track A Render preview, register these exact callback URLs in the provider consoles:
+
+- Google: https://campusforge-track-a-api-preview.onrender.com/api/auth/google/callback
+- GitHub: https://campusforge-track-a-api-preview.onrender.com/api/auth/github/callback
+- Discord: https://campusforge-track-a-api-preview.onrender.com/api/auth/discord/callback
+
+On the Render API service `campusforge-track-a-api-preview`, store these as encrypted environment variables (never in the frontend service or Git):
+
+- `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`
+- `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`
+- `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET`
+
+Keep `OAUTH_REDIRECT_BASE_URL` set to `https://campusforge-track-a-api-preview.onrender.com` and `FRONTEND_ORIGIN` set to `https://campusforge-track-a-preview.onrender.com`.
+
+The API exposes `GET /api/auth/providers`, which returns only a boolean for each provider. The sign-in UI reads this endpoint at runtime, so buttons become active automatically after the server has both credentials for that provider. No OAuth client secret or enablement flag is sent to the browser.
+
 ## 2. Google
 
 Create an OAuth 2.0 Client ID with application type Web application in Google Cloud Console. Add the exact callback URL under Authorized redirect URIs. Configure the OAuth consent screen and authorized domains before opening the app to public users. Google sign-in requests only openid, email, and profile; the API requires Google's email_verified result.
