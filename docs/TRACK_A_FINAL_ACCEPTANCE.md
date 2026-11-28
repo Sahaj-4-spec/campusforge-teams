@@ -24,23 +24,23 @@ The AI assistant remains disabled by default. Provider calls require an explicit
 - Default branch `main` contains integrated commit `bced1af502303b86bfb17d0eabdac18ea2985dc1` (PR #41, squash-merged on 28 November 2026).
 - PRs #38, #39, #40 and #42 were closed as superseded because their changes are included in the integrated commit; they were not merged separately.
 - Integrated frontend build, Rust backend check, dependency vulnerability audit, CodeQL and Dependabot checks passed on the merged commit.
-- A follow-up security PR #43 separates runtime database privileges from schema migrations; it is not part of the merged commit until its checks pass and it is merged.
+- PR #43 (`2bfa2a105d6986fa9ac79679fc15614360edf9d1`) is merged. It separates runtime database privileges from schema migrations, adds a protected one-off SQLx migration runner, and defaults production API startup to no DDL.
 
 ### Database
 
 - Neon project `neon-rose-book`; default branch `main`; application database `campusforge_app`.
 - SQLx journal versions 0001–0017 were verified successful. Versions 0014–0017 are respectively AI proposals, revocable auth sessions, board-scoped notifications and proposal-history retention. Each recorded migration is successful and has the expected 48-byte SQLx SHA-384 checksum.
 - The merged API started against `campusforge_app` and applied pending migrations 0015–0017 at startup. The `auth_sessions` migration is therefore applied; do not rerun or rename prior versions.
-- The running Render API was observed connecting as `neondb_owner`, a role with broad database/role creation and RLS-bypass capabilities. A DML-only `campusforge_app_runtime` role has been created and verified against the 43 application tables, but the Render API connection string had not yet been switched at the time of this update.
+- The initial post-PR #41 rollout temporarily connected `campusforge-api-test` to `campusforge_app` as `neondb_owner` and applied migrations 0015–0017 there. The service has since been moved to the isolated child branch and `campusforge_release_preview` database. A DML-only `campusforge_release_runtime` role was created and verified for all 43 preview tables, with no superuser, role-creation, database-creation, RLS-bypass or schema-CREATE privilege. The production database also has a separate `campusforge_app_runtime` DML-only role prepared; no active production API is configured to use it yet.
 - The isolated Neon branch `campusforge-track-a-b-preview` and database `campusforge_release_preview` remain separate from the default branch.
 - Backup/PITR configuration and an isolated restore drill are not evidenced.
 
 ### Render
 
-- Frontend preview: `campusforge-preview` — `https://campusforge-preview.onrender.com`. It has been rerouted to the isolated `campusforge-track-a-api-preview` service.
-- Track A isolated API preview: `https://campusforge-track-a-api-preview.onrender.com`, confirmed against Neon database `campusforge_track_a_preview` using role `campusforge_track_a_app`; it uses local development file storage and is not a production service.
-- Rust service `campusforge-api-test` — `https://campusforge-api-test.onrender.com` — is live on the integrated commit, but its actual Neon target is the default `campusforge_app` database and it uses the `neondb_owner` role. Despite its name, it is production-connected and must not be treated as a disposable test API.
-- The integrated API startup log confirmed the database migration journal, private S3-compatible bucket configuration and a successful storage PUT/GET/DELETE check.
+- Integrated frontend preview: `campusforge-preview` — `https://campusforge-preview.onrender.com`; it is now configured to call the integrated API preview at `https://campusforge-api-test.onrender.com`, with AI and Project Pulse frontend flags disabled.
+- Integrated Rust API preview: `campusforge-api-test` — `https://campusforge-api-test.onrender.com`; it uses the isolated Neon child branch database `campusforge_release_preview`, whose SQLx journal contains successful migrations 0001–0017. The DML-only `campusforge_release_runtime` role is configured for the service; the runtime/migration separation code is now in `main` and automatic migrations are disabled for this hosted preview.
+- Track A-only API preview: `https://campusforge-track-a-api-preview.onrender.com`, backed by Neon `campusforge_track_a_preview` and role `campusforge_track_a_app`; it remains separate from both the production database and integrated preview database.
+- The integrated API preview currently uses local file storage only. This is acceptable for the isolated preview, but not for a production launch. A prior deployment briefly showed remote storage checks; the current preview startup explicitly reports local storage mode.
 - The legacy `campusforge-teams` Node service still fails its main-branch deploy because its build invokes `vite` without installing the client dependencies (`vite: not found`). Its Render runtime/build configuration has not been corrected.
 - End-to-end account, OAuth, cross-account, mobile and accessibility acceptance remains outstanding.
 
@@ -86,10 +86,10 @@ JWTs issued before session migration 0015 do not contain `jti`; users will need 
 
 **Source integration:** Merged into `main` as `bced1af`; merged CI/security checks passed.  
 **Database:** Migrations 0001–0017 are recorded successful on `campusforge_app`.  
-**Preview:** `campusforge-preview` is live and routes to the isolated Track A API preview.  
-**Integrated API:** `campusforge-api-test` is live but connected to the production Neon database; its owner-role connection still needs to be replaced by the DML-only runtime role through follow-up PR #43.  
+**Preview:** `campusforge-preview` is configured to call the integrated API preview and both deploys are on the merged `main` source.  
+**Integrated API:** `campusforge-api-test` is isolated to `campusforge_release_preview`; its DML-only runtime role is configured and the API deployment is rolling out the PR #43 migration/runtime separation change.  
 **Legacy public service:** `campusforge-teams` Node deploy is failing (`vite: not found`).  
 **Production acceptance:** **Not complete**.  
-**Launch decision:** **Not production-ready** until the runtime-role switch, legacy service correction, OAuth configuration, backup/restore proof, malware scanning, provider/email verification, two-account authorization and mobile/accessibility acceptance are complete.
+**Launch decision:** **Not production-ready** until a dedicated production API service uses `campusforge_app_runtime`, the legacy `campusforge-teams` service build/runtime is corrected, persistent S3 + ClamAV are configured and verified, OAuth credentials/redirects and email delivery are tested, backups/restore are proven, and two-account authorization plus mobile/accessibility acceptance pass.
 
 Do not describe the application as production-ready before each applicable gate has evidence. The notification authorization change (migration 0016) is already applied to the live application database; a running API binary must match that schema.
