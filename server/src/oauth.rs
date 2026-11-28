@@ -7,7 +7,7 @@ use axum::{
 };
 use chrono::{Duration, Utc};
 use reqwest::header::{ACCEPT, USER_AGENT};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::FromRow;
 use url::Url;
@@ -176,8 +176,14 @@ fn callback_uri(provider: Provider) -> Result<String, &'static str> {
 }
 
 fn frontend_redirect(error: Option<&str>) -> Redirect {
-    let origin = std::env::var("FRONTEND_ORIGIN")
-        .unwrap_or_else(|_| "http://localhost:5173".to_owned());
+    // Use the first configured frontend origin for OAuth redirects. FRONTEND_ORIGIN
+    // may contain multiple exact CORS origins for separate preview environments.
+    let configured_origin = std::env::var("FRONTEND_REDIRECT_ORIGIN").ok()
+        .or_else(|| std::env::var("FRONTEND_ORIGIN").ok()
+            .and_then(|value| value.split(',').next().map(|entry| entry.trim().to_owned())))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "http://localhost:5173".to_owned());
+    let origin = configured_origin;
     let mut url = Url::parse(&origin)
         .unwrap_or_else(|_| Url::parse("http://localhost:5173").expect("valid local fallback URL"));
     url.set_path("/");
@@ -459,7 +465,13 @@ fn normalize_verified_email(email: &str) -> Result<String, &'static str> {
     };
     let valid_domain = domain.contains('.')
         && domain.split('.').all(|label| {
-            !label.is_empty() && !label.starts_with('-') && !label.ends_with('-')
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
         });
     if parts.next().is_some()
         || local.is_empty()
@@ -727,8 +739,32 @@ async fn find_or_create_user(
     Ok(user)
 }
 
+
+#[derive(Serialize)]
+struct OAuthProviderAvailability {
+    google: bool,
+    github: bool,
+    discord: bool,
+}
+
+async fn provider_availability() -> Response {
+    // Expose only readiness booleans. OAuth client IDs and secrets stay server-side.
+    let availability = OAuthProviderAvailability {
+        google: Provider::Google.config().is_ok(),
+        github: Provider::Github.config().is_ok(),
+        discord: Provider::Discord.config().is_ok(),
+    };
+    let mut response = axum::Json(availability).into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    response
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/providers", get(provider_availability))
         .route("/{provider}/start", get(start))
         .route("/{provider}/callback", get(callback))
 }
@@ -857,6 +893,15 @@ mod tests {
         assert!(normalize_verified_email("student@@gmail.com").is_err());
         assert!(normalize_verified_email("student@gmail..com").is_err());
         assert!(normalize_verified_email(".student@gmail.com").is_err());
+        assert!(normalize_verified_email("student@bad/domain.com").is_err());
+        assert!(normalize_verified_email("student@bad_domain.com").is_err());
+        assert!(normalize_verified_email("student@bad!domain.com").is_err());
+        assert!(normalize_verified_email("student@-bad.com").is_err());
+        assert!(normalize_verified_email("student@bad-.com").is_err());
+
+        let long_domain_label = format!("student@{}.com", "a".repeat(64));
+        assert!(normalize_verified_email(&long_domain_label).is_err());
+        assert!(normalize_verified_email("student@xn--bcher-kva.example").is_ok());
     }
 
     #[test]
