@@ -182,4 +182,4 @@ The release owner must sign off every applicable item in [Track A Final Acceptan
 
 ### Board-scoped notification authorization
 
-The integrated candidate now records the board on each activity notification and applies the same board access rule when selecting recipients, listing inbox items, updating read state, and dispatching email. Migration 0016 adds the required column/index and backfills task notifications when the task still exists. Workspace invitations keep their separate invitation validation.
+The merged main release records the board on each activity notification and applies the same board access rule when selecting recipients, listing inbox items, updating read state, and dispatching email. Migration 0016 added the required column/index and backfilled task notifications when the task still existed. Workspace invitations keep their separate invitation validation.
