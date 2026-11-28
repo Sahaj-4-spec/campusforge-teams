@@ -698,10 +698,11 @@ function AppSidebar({
 
 export default function App() {
   const hasOAuthError = new URLSearchParams(window.location.search).has("oauth_error");
-  const [isAuthenticated, setIsAuthenticated] = useState(() => !hasOAuthError);
+  const isPasswordRecoveryRoute = ["/forgot-password", "/reset-password"].includes(window.location.pathname);
+  const [isAuthenticated, setIsAuthenticated] = useState(() => !hasOAuthError && !isPasswordRecoveryRoute);
   const [data, setData] = useState(null);
   const [invitations, setInvitations] = useState([]);
-  const [loading, setLoading] = useState(() => !hasOAuthError);
+  const [loading, setLoading] = useState(() => !hasOAuthError && !isPasswordRecoveryRoute);
   const [loadError, setLoadError] = useState("");
   const [activeView, setActiveView] = useState("Overview");
   const [activeBoardId, setActiveBoardId] = useState("");
