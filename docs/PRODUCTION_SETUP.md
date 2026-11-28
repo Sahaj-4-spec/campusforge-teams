@@ -80,7 +80,7 @@ CAMPUSFORGE_REQUIRE_MALWARE_SCAN=true
 CAMPUSFORGE_CLAMAV_ADDR=<private-clamav-host>:<port>
 ```
 
-The API intentionally refuses production startup when remote storage or mandatory malware scanning is not configured. A configured scanner address must be private and reachable from the API; a non-empty address alone is not proof of scanner health. The integrated preview currently has remote private storage configured but does not have a production ClamAV service. Preview file scanning is optional; production file uploads must remain blocked until ClamAV is available and tests for clean/infected/timeout/unavailable scanner paths pass.
+The API intentionally refuses production startup when remote storage or mandatory malware scanning is not configured. A configured scanner address must be private and reachable from the API; a non-empty address alone is not proof of scanner health. The committed Render Blueprint (`render.yaml`) is being aligned to the live preview storage configuration: the current live `campusforge-api-test` service has `CAMPUSFORGE_STORAGE_MODE=s3`, `CAMPUSFORGE_REQUIRE_REMOTE_STORAGE=true`, a child-branch-only Neon storage credential, and a successful PUT/GET/DELETE startup test. The preview still does not have ClamAV and keeps `CAMPUSFORGE_REQUIRE_MALWARE_SCAN=false`; production file uploads must remain blocked until ClamAV is privately reachable and clean/infected/timeout/unavailable scanner paths pass.
 
 ## 7. Database release order
 
