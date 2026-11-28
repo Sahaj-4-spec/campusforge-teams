@@ -23,7 +23,9 @@ struct SecurityEmail<'a> {
 /// Deliver one-off account-security email through the same server-side Resend
 /// configuration as notifications. Callers must never log the message body:
 /// password-reset URLs contain a short-lived bearer token.
-pub async fn send_security_email(
+/// Send a transactional email through the server-side Resend integration.
+/// Keep bearer tokens out of logs and provide an application-generated idempotency key.
+pub async fn send_transactional_email(
     recipient: &str,
     subject: &str,
     text: &str,
@@ -59,6 +61,15 @@ pub async fn send_security_email(
         return Err(format!("Email provider returned HTTP {}", response.status()));
     }
     Ok(())
+}
+
+pub async fn send_security_email(
+    recipient: &str,
+    subject: &str,
+    text: &str,
+    idempotency_key: &str,
+) -> Result<(), String> {
+    send_transactional_email(recipient, subject, text, idempotency_key).await
 }
 
 #[derive(Debug, FromRow)]
