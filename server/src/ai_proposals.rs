@@ -55,7 +55,7 @@ fn proposal_workspace_rate_limit_key(action: &str, workspace_id: Uuid) -> String
     hash_proposal_rate_limit_key(&format!("ai-proposal:workspace:{action}:{workspace_id}"))
 }
 
-async fn check_proposal_rate_limit(
+async fn check_proposal_user_rate_limit(
     state: &AppState,
     user_id: Uuid,
     workspace_id: Uuid,
@@ -68,9 +68,18 @@ async fn check_proposal_rate_limit(
     if !user_allowed {
         return Err(fail(StatusCode::TOO_MANY_REQUESTS, "Your proposal request limit was reached. Please wait before trying again."));
     }
+    Ok(())
+}
 
+async fn check_proposal_workspace_rate_limit(
+    state: &AppState,
+    workspace_id: Uuid,
+    action: &'static str,
+) -> ApiResult<()> {
     // A shared workspace bucket prevents many individually throttled users from
     // multiplying proposal traffic and creating excessive review/audit rows.
+    // Write handlers call this only after the transaction has rechecked board
+    // write permission, so read-only viewers cannot exhaust shared write capacity.
     let (workspace_limit, workspace_window_seconds) = if action == "write" {
         (120, 3600)
     } else {
@@ -88,6 +97,17 @@ async fn check_proposal_rate_limit(
         return Err(fail(StatusCode::TOO_MANY_REQUESTS, "This workspace reached its proposal request limit. Please wait before trying again."));
     }
     Ok(())
+}
+
+async fn check_proposal_rate_limit(
+    state: &AppState,
+    user_id: Uuid,
+    workspace_id: Uuid,
+    action: &'static str,
+    limit: i32,
+) -> ApiResult<()> {
+    check_proposal_user_rate_limit(state, user_id, workspace_id, action, limit).await?;
+    check_proposal_workspace_rate_limit(state, workspace_id, action).await
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -457,7 +477,7 @@ async fn create_proposal(
     WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Json(mut request): Json<CreateProposalRequest>,
 ) -> ApiResult<(StatusCode, Json<ProposalView>)> {
-    check_proposal_rate_limit(&state, user_id, workspace_id, "write", 10).await?;
+    check_proposal_user_rate_limit(&state, user_id, workspace_id, "write", 10).await?;
     validate_tasks(&mut request.tasks)?;
 
     let mut tx = state.db.begin().await
@@ -468,6 +488,7 @@ async fn create_proposal(
     {
         return Err(fail(StatusCode::FORBIDDEN, "You cannot create proposals for this project"));
     }
+    check_proposal_workspace_rate_limit(&state, workspace_id, "write").await?;
 
     let list_exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM lists WHERE id = $1 AND board_id = $2)",
@@ -534,7 +555,7 @@ async fn apply_proposal(
     WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Path(proposal_id): Path<Uuid>,
 ) -> ApiResult<Json<ApplyResponse>> {
-    check_proposal_rate_limit(&state, user_id, workspace_id, "write", 10).await?;
+    check_proposal_user_rate_limit(&state, user_id, workspace_id, "write", 10).await?;
     let mut tx = state.db.begin().await
         .map_err(|cause| internal_error(cause, "Could not begin proposal approval"))?;
     // Serializable isolation prevents a concurrent board/task write from slipping
@@ -575,6 +596,7 @@ async fn apply_proposal(
     {
         return Err(fail(StatusCode::FORBIDDEN, "You no longer have permission to approve this proposal"));
     }
+    check_proposal_workspace_rate_limit(&state, workspace_id, "write").await?;
 
     if row.expires_at <= Utc::now() {
         sqlx::query(
@@ -760,7 +782,7 @@ async fn reject_proposal(
     WorkspaceUser(user_id, workspace_id): WorkspaceUser,
     Path(proposal_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    check_proposal_rate_limit(&state, user_id, workspace_id, "write", 10).await?;
+    check_proposal_user_rate_limit(&state, user_id, workspace_id, "write", 10).await?;
     let mut tx = state.db.begin().await
         .map_err(|cause| internal_error(cause, "Could not begin proposal rejection"))?;
     let row = sqlx::query_as::<_, ProposalRow>(
@@ -787,6 +809,7 @@ async fn reject_proposal(
     {
         return Err(fail(StatusCode::FORBIDDEN, "You no longer have permission to reject this proposal"));
     }
+    check_proposal_workspace_rate_limit(&state, workspace_id, "write").await?;
 
     if row.expires_at <= Utc::now() {
         sqlx::query(
