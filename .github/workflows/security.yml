@@ -6,9 +6,8 @@ concurrency:
 
 on:
   push:
-    branches: [main, 'track-b/**']
+    branches: [main, 'track-a/**', 'track-b/**', 'feature/**', 'release/**']
   pull_request:
-    branches: [main, 'track-b/**']
   schedule:
     - cron: "23 4 * * 1"
 
