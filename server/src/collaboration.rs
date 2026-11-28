@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::FromRow;
-use std::collections::HashSet;
+use std::{collections::HashSet, net::{IpAddr, SocketAddr}};
 use std::path::PathBuf;
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream};
+use tokio::{io::{AsyncRead, AsyncReadExt, AsyncWriteExt}, net::TcpStream};
 use tokio::time::{interval, Duration as TokioDuration};
 use uuid::Uuid;
 
@@ -35,6 +35,107 @@ fn create_private_upload_file(path: &PathBuf) -> std::io::Result<std::fs::File> 
     std::fs::OpenOptions::new().write(true).create_new(true).open(path)
 }
 
+fn scanner_ip_is_private(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(address) => address.is_private() || address.is_loopback(),
+        IpAddr::V6(address) => address.is_unique_local() || address.is_loopback(),
+    }
+}
+
+fn clamav_pong_received(response: &[u8]) -> bool {
+    response == b"zPONG\0"
+}
+
+async fn read_clamav_frame<R: AsyncRead + Unpin>(
+    stream: &mut R,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    let mut response = Vec::with_capacity(max_bytes.min(64));
+    let mut buffer = [0_u8; 64];
+
+    loop {
+        let remaining = max_bytes.saturating_sub(response.len());
+        if remaining == 0 {
+            return Err("ClamAV response exceeded the maximum frame size".to_string());
+        }
+
+        let read_len = remaining.min(buffer.len());
+        let read = stream.read(&mut buffer[..read_len]).await
+            .map_err(|error| format!("ClamAV response read failed: {error}"))?;
+        if read == 0 {
+            return Err("ClamAV connection closed before the response terminator".to_string());
+        }
+
+        if let Some(end) = buffer[..read].iter().position(|byte| *byte == 0) {
+            response.extend_from_slice(&buffer[..=end]);
+            return Ok(response);
+        }
+
+        response.extend_from_slice(&buffer[..read]);
+    }
+}
+
+/// Resolve and connect only to private or loopback scanner addresses.
+/// The connection is made to the validated SocketAddr to avoid a second DNS lookup.
+async fn connect_private_clamav(address: &str) -> Result<TcpStream, String> {
+    let resolved = tokio::net::lookup_host(address)
+        .await
+        .map_err(|error| format!("Could not resolve private ClamAV address: {error}"))?
+        .collect::<Vec<SocketAddr>>();
+
+    if resolved.is_empty() || resolved.iter().any(|target| !scanner_ip_is_private(target.ip())) {
+        return Err("ClamAV address must resolve only to private or loopback IP addresses".to_string());
+    }
+
+    let mut last_error = "No private scanner address was available".to_string();
+    for target in resolved {
+        match tokio::time::timeout(std::time::Duration::from_secs(5), TcpStream::connect(target)).await {
+            Ok(Ok(stream)) => return Ok(stream),
+            Ok(Err(error)) => last_error = error.to_string(),
+            Err(_) => last_error = "connection timed out".to_string(),
+        }
+    }
+
+    Err(format!("Could not connect to private ClamAV service: {last_error}"))
+}
+
+/// Verify the configured ClamAV TCP service before production begins accepting requests.
+/// ClamAV's null-delimited zPING command should receive a zPONG response.
+pub async fn verify_clamav_from_env() -> Result<(), String> {
+    let required = std::env::var("CAMPUSFORGE_REQUIRE_MALWARE_SCAN")
+        .ok()
+        .is_some_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes"));
+    if !required {
+        return Ok(());
+    }
+
+    let address = std::env::var("CAMPUSFORGE_CLAMAV_ADDR")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "Malware scanning is required but CAMPUSFORGE_CLAMAV_ADDR is not configured".to_string())?;
+
+    let mut stream = connect_private_clamav(&address).await?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        stream.write_all(b"zPING\0"),
+    )
+    .await
+    .map_err(|_| "ClamAV health probe write timed out".to_string())?
+    .map_err(|error| format!("ClamAV health probe write failed: {error}"))?;
+
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        read_clamav_frame(&mut stream, 64),
+    )
+    .await
+    .map_err(|_| "ClamAV health probe response timed out".to_string())??;
+
+    if !clamav_pong_received(&response) {
+        return Err("ClamAV health probe returned an unexpected response".to_string());
+    }
+    Ok(())
+}
+
 async fn scan_upload(path: &PathBuf) -> Result<&'static str, String> {
     let scanner = std::env::var("CAMPUSFORGE_CLAMAV_ADDR")
         .ok().filter(|value| !value.trim().is_empty());
@@ -48,9 +149,7 @@ async fn scan_upload(path: &PathBuf) -> Result<&'static str, String> {
         };
     };
 
-    let mut stream = tokio::time::timeout(std::time::Duration::from_secs(5), TcpStream::connect(&address))
-        .await.map_err(|_| "Malware scanner connection timed out".to_string())?
-        .map_err(|error| format!("Could not connect to malware scanner: {error}"))?;
+    let mut stream = connect_private_clamav(&address).await?;
     stream.write_all(b"zINSTREAM\0").await.map_err(|error| error.to_string())?;
     let mut file = tokio::fs::File::open(path).await.map_err(|error| error.to_string())?;
     let mut buffer = vec![0_u8; 64 * 1024];
@@ -62,11 +161,13 @@ async fn scan_upload(path: &PathBuf) -> Result<&'static str, String> {
         stream.write_all(&buffer[..read]).await.map_err(|error| error.to_string())?;
     }
     stream.write_all(&0_u32.to_be_bytes()).await.map_err(|error| error.to_string())?;
-    let mut response = [0_u8; 1024];
-    let read = tokio::time::timeout(std::time::Duration::from_secs(20), stream.read(&mut response))
-        .await.map_err(|_| "Malware scanner response timed out".to_string())?
-        .map_err(|error| format!("Could not read malware scanner response: {error}"))?;
-    let response = String::from_utf8_lossy(&response[..read]);
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        read_clamav_frame(&mut stream, 1024),
+    )
+    .await
+    .map_err(|_| "Malware scanner response timed out".to_string())??;
+    let response = String::from_utf8_lossy(&response);
     if response.contains(" FOUND") {
         return Err("The uploaded file was flagged as malware".to_string());
     }
@@ -1913,4 +2014,64 @@ pub fn router() -> Router<AppState> {
         .route("/meeting-notes", get(meeting_notes_list).post(meeting_note_create))
         .route("/meeting-notes/{note_id}", patch(meeting_note_update).delete(meeting_note_delete))
         .route("/analytics", get(analytics))
+}
+
+
+#[cfg(test)]
+mod clamav_health_probe_tests {
+    use super::{clamav_pong_received, read_clamav_frame, scanner_ip_is_private};
+    use tokio::io::AsyncWriteExt;
+
+    #[test]
+    fn accepts_clamav_pong_response() {
+        assert!(clamav_pong_received(b"zPONG\0"));
+    }
+
+    #[test]
+    fn rejects_error_and_unexpected_responses() {
+        assert!(!clamav_pong_received(b"zERROR\0"));
+        assert!(!clamav_pong_received(b"READY"));
+        assert!(!clamav_pong_received(b""));
+    }
+
+    #[tokio::test]
+    async fn reads_split_pong_frame_until_null_terminator() {
+        let (mut writer, mut reader) = tokio::io::duplex(16);
+        let writer_task = tokio::spawn(async move {
+            writer.write_all(b"zPO").await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            writer.write_all(b"NG\0").await.unwrap();
+        });
+
+        let response = read_clamav_frame(&mut reader, 64).await.unwrap();
+        writer_task.await.unwrap();
+        assert!(clamav_pong_received(&response));
+    }
+
+    #[tokio::test]
+    async fn rejects_eof_and_oversized_clamav_frames() {
+        let (writer, mut reader) = tokio::io::duplex(16);
+        drop(writer);
+        assert!(read_clamav_frame(&mut reader, 64).await.is_err());
+
+        let (mut writer, mut reader) = tokio::io::duplex(16);
+        let writer_task = tokio::spawn(async move {
+            writer.write_all(b"0123456789").await.unwrap();
+        });
+        assert!(read_clamav_frame(&mut reader, 8).await.is_err());
+        writer_task.await.unwrap();
+    }
+
+    #[test]
+    fn scanner_addresses_must_be_private_or_loopback() {
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+        assert!(scanner_ip_is_private(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 10))));
+        assert!(scanner_ip_is_private(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5))));
+        assert!(scanner_ip_is_private(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))));
+        assert!(scanner_ip_is_private(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+        assert!(scanner_ip_is_private(IpAddr::V6("fc00::1".parse().unwrap())));
+        assert!(!scanner_ip_is_private(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
+        assert!(!scanner_ip_is_private(IpAddr::V6("2001:4860:4860::8888".parse().unwrap())));
+    }
 }

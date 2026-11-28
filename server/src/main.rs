@@ -105,6 +105,39 @@ fn should_run_migrations(configured: Option<&str>, production_mode: bool) -> Res
     }
 }
 
+fn validate_database_tls(database_url: &str, production_mode: bool) -> Result<(), &'static str> {
+    if !production_mode {
+        return Ok(());
+    }
+
+    let parsed = url::Url::parse(database_url)
+        .map_err(|_| "DATABASE_URL must be a valid PostgreSQL URL")?;
+    if !matches!(parsed.scheme(), "postgres" | "postgresql") || parsed.host_str().is_none() {
+        return Err("Production DATABASE_URL must be a PostgreSQL URL with a verified hostname");
+    }
+
+    let mut ssl_modes = Vec::new();
+    for (key, value) in parsed.query_pairs() {
+        if key.eq_ignore_ascii_case("sslmode") || key.eq_ignore_ascii_case("ssl-mode") {
+            // Require SQLx's canonical PostgreSQL URL key. Reject aliases and case
+            // variants instead of allowing an unrecognized key to fall back to Prefer.
+            if key != "sslmode" {
+                return Err("Production DATABASE_URL must use the canonical lowercase sslmode parameter");
+            }
+            ssl_modes.push(value.into_owned());
+        }
+    }
+    if ssl_modes.len() != 1 || !ssl_modes[0].eq_ignore_ascii_case("verify-full") {
+        return Err("Production DATABASE_URL must set exactly one sslmode=verify-full parameter");
+    }
+    if std::env::var("PGSSLMODE")
+        .is_ok_and(|mode| !mode.eq_ignore_ascii_case("verify-full"))
+    {
+        return Err("PGSSLMODE must not weaken production PostgreSQL TLS verification");
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
@@ -133,6 +166,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let database_url = std::env::var("DATABASE_URL")
         .map_err(|_| "DATABASE_URL must be set before starting CampusForge API")?;
+    let production_mode = std::env::var("CAMPUSFORGE_ENV")
+        .is_ok_and(|value| value.eq_ignore_ascii_case("production"));
+    validate_database_tls(&database_url, production_mode)?;
     let jwt_secret = std::env::var("JWT_SECRET")
         .map_err(|_| "JWT_SECRET must contain at least 32 characters")?;
     if jwt_secret.len() < 32 {
@@ -143,8 +179,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // weakening credentialed CORS to a wildcard.
     let frontend_origin = std::env::var("FRONTEND_ORIGIN")
         .unwrap_or_else(|_| "http://localhost:5173".to_string());
-    let production_mode = std::env::var("CAMPUSFORGE_ENV")
-        .is_ok_and(|value| value.eq_ignore_ascii_case("production"));
     let allowed_frontend_origins = parse_frontend_origins(&frontend_origin, production_mode)?;
 
     // Log only non-secret database identity fields so the live target can be verified
@@ -176,6 +210,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         server_version = %database_identity.server_version,
         "Verified active PostgreSQL connection target"
     );
+
+    if production_mode {
+        collaboration::verify_clamav_from_env()
+            .await
+            .map_err(|error| format!("Production startup blocked: ClamAV health probe failed: {error}"))?;
+        tracing::info!("Private ClamAV service passed its startup PING/PONG probe");
+    }
 
     let storage = storage::StorageService::from_env().await?;
     if storage.verify_remote().await.map_err(|error| {
@@ -317,5 +358,60 @@ mod migration_configuration_tests {
     #[test]
     fn invalid_configuration_fails_closed() {
         assert!(should_run_migrations(Some("sometimes"), true).is_err());
+    }
+}
+
+
+#[cfg(test)]
+mod database_tls_configuration_tests {
+    use super::validate_database_tls;
+
+    const HOSTED_URL: &str =
+        "postgresql://runtime:secret@ep-example-pooler.us-east-1.aws.neon.tech/campusforge_app";
+
+    #[test]
+    fn production_requires_full_certificate_and_hostname_verification() {
+        assert!(validate_database_tls(
+            &format!("{HOSTED_URL}?sslmode=verify-full&channel_binding=require"),
+            true
+        ).is_ok());
+    }
+
+    #[test]
+    fn production_rejects_encrypted_but_unverified_connections() {
+        assert!(validate_database_tls(
+            &format!("{HOSTED_URL}?sslmode=require"),
+            true
+        ).is_err());
+    }
+
+    #[test]
+    fn production_rejects_missing_or_duplicate_ssl_mode() {
+        assert!(validate_database_tls(HOSTED_URL, true).is_err());
+        assert!(validate_database_tls(
+            &format!("{HOSTED_URL}?sslmode=verify-full&sslmode=require"),
+            true
+        ).is_err());
+        assert!(validate_database_tls(
+            &format!("{HOSTED_URL}?sslmode=verify-full&ssl-mode=disable"),
+            true
+        ).is_err());
+    }
+
+    #[test]
+    fn production_rejects_noncanonical_ssl_parameter_spelling() {
+        assert!(validate_database_tls(
+            &format!("{HOSTED_URL}?SSLMODE=verify-full"),
+            true
+        ).is_err());
+        assert!(validate_database_tls(
+            &format!("{HOSTED_URL}?ssl-mode=verify-full"),
+            true
+        ).is_err());
+    }
+
+    #[test]
+    fn development_can_use_local_database_settings() {
+        assert!(validate_database_tls("postgres://localhost/campusforge_dev", false).is_ok());
     }
 }
