@@ -420,6 +420,19 @@ fn rate_limit_key(scope: &str, user_id: Option<Uuid>, workspace_id: Uuid) -> Str
     digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>()
 }
 
+/// Parse a bounded positive request limit. Invalid operator input falls back to
+/// a conservative built-in ceiling rather than disabling throttling.
+fn parse_rate_limit(value: Option<&str>, default_limit: i32, max_limit: i32) -> i32 {
+    value
+        .and_then(|raw| raw.trim().parse::<i32>().ok())
+        .filter(|limit| (1..=max_limit).contains(limit))
+        .unwrap_or(default_limit)
+}
+
+fn configured_ai_rate_limit(name: &str, default_limit: i32, max_limit: i32) -> i32 {
+    parse_rate_limit(env::var(name).ok().as_deref(), default_limit, max_limit)
+}
+
 fn validate_request(request: &AssistantRequest) -> Result<(), (StatusCode, Json<ApiError>)> {
     if !request.acknowledged_data_sharing {
         return Err(fail(StatusCode::BAD_REQUEST, "Acknowledge the data-sharing notice before sending prompts or workspace context to the AI provider"));
@@ -987,6 +1000,34 @@ async fn assistant(
     })?;
     if !workspace_limit {
         return Err(fail(StatusCode::TOO_MANY_REQUESTS, "AI workspace request limit reached; please wait before trying again"));
+    }
+
+    // Daily request ceilings provide an additional cost guardrail on top of the
+    // minute/hour throttles. They count admitted provider calls, not estimated currency.
+    let daily_user_limit = state.check_rate_limit(
+        &rate_limit_key("daily-user", Some(user_id), workspace_id),
+        configured_ai_rate_limit("CAMPUSFORGE_AI_DAILY_REQUEST_LIMIT_USER", 100, 10000),
+        86400,
+    ).await.map_err(|error| {
+        tracing::error!(%error, "Could not enforce AI daily user limit");
+        fail(StatusCode::SERVICE_UNAVAILABLE, "AI assistance is temporarily unavailable")
+    })?;
+    if !daily_user_limit {
+        return Err(fail(StatusCode::TOO_MANY_REQUESTS, "Your daily AI request allowance is exhausted"));
+    }
+
+    // As with the hourly limit, only users admitted by their own daily bucket
+    // consume the workspace-wide daily allowance.
+    let daily_workspace_limit = state.check_rate_limit(
+        &rate_limit_key("daily-workspace", None, workspace_id),
+        configured_ai_rate_limit("CAMPUSFORGE_AI_DAILY_REQUEST_LIMIT_WORKSPACE", 1000, 50000),
+        86400,
+    ).await.map_err(|error| {
+        tracing::error!(%error, "Could not enforce AI daily workspace limit");
+        fail(StatusCode::SERVICE_UNAVAILABLE, "AI assistance is temporarily unavailable")
+    })?;
+    if !daily_workspace_limit {
+        return Err(fail(StatusCode::TOO_MANY_REQUESTS, "This workspace's daily AI request allowance is exhausted"));
     }
 
     let prompt = request.prompt.trim();
@@ -2007,6 +2048,16 @@ mod tests {
         assert_eq!(user_key.len(), 64);
         assert_eq!(workspace_key.len(), 64);
         assert_ne!(user_key, workspace_key);
+    }
+
+    #[test]
+    fn ai_daily_request_limits_reject_invalid_or_unbounded_values() {
+        assert_eq!(parse_rate_limit(None, 100, 10000), 100);
+        assert_eq!(parse_rate_limit(Some("250"), 100, 10000), 250);
+        assert_eq!(parse_rate_limit(Some("0"), 100, 10000), 100);
+        assert_eq!(parse_rate_limit(Some("-5"), 100, 10000), 100);
+        assert_eq!(parse_rate_limit(Some("not-a-number"), 100, 10000), 100);
+        assert_eq!(parse_rate_limit(Some("10001"), 100, 10000), 100);
     }
 
     #[test]
