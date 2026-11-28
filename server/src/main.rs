@@ -27,6 +27,42 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::state::AppState;
 
+fn parse_frontend_origins(raw: &str) -> Result<Vec<HeaderValue>, Box<dyn std::error::Error>> {
+    let mut origins = Vec::new();
+
+    for entry in raw.split(',').map(str::trim).filter(|entry| !entry.is_empty()) {
+        if entry == "*" {
+            return Err("FRONTEND_ORIGIN cannot use '*' when credentialed CORS is enabled".into());
+        }
+
+        let parsed = url::Url::parse(entry)?;
+        if !matches!(parsed.scheme(), "http" | "https")
+            || parsed.host_str().is_none()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+            || !matches!(parsed.path(), "" | "/")
+        {
+            return Err(format!("FRONTEND_ORIGIN entry must be a plain HTTP(S) origin: {entry}").into());
+        }
+
+        let serialized = parsed.origin().ascii_serialization();
+        if serialized == "null" {
+            return Err("FRONTEND_ORIGIN contains an opaque origin".into());
+        }
+        let header_value = serialized.parse::<HeaderValue>()?;
+        if !origins.contains(&header_value) {
+            origins.push(header_value);
+        }
+    }
+
+    if origins.is_empty() {
+        return Err("FRONTEND_ORIGIN must contain at least one valid HTTP(S) origin".into());
+    }
+    Ok(origins)
+}
+
 #[derive(Serialize)]
 struct HealthResponse {
     status: &'static str,
@@ -93,8 +129,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("JWT_SECRET must contain at least 32 characters".into());
     }
 
+    // Comma-separated exact origins allow isolated preview domains without
+    // weakening credentialed CORS to a wildcard.
     let frontend_origin = std::env::var("FRONTEND_ORIGIN")
         .unwrap_or_else(|_| "http://localhost:5173".to_string());
+    let allowed_frontend_origins = parse_frontend_origins(&frontend_origin)?;
 
     // Log only non-secret database identity fields so the live target can be verified
     // without ever exposing DATABASE_URL or its credentials.
@@ -146,7 +185,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         state::run_postgres_workspace_listener(realtime_state).await;
     });
     let cors = CorsLayer::new()
-        .allow_origin(frontend_origin.parse::<HeaderValue>()?)
+        .allow_origin(allowed_frontend_origins)
         .allow_methods([
             Method::GET,
             Method::POST,
@@ -195,4 +234,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+
+#[cfg(test)]
+mod cors_origin_tests {
+    use super::parse_frontend_origins;
+
+    #[test]
+    fn accepts_multiple_exact_origins_and_deduplicates() {
+        let origins = parse_frontend_origins(
+            "https://app.example.com, https://preview.example.com/, https://app.example.com"
+        ).expect("valid origins");
+        assert_eq!(origins.len(), 2);
+        assert_eq!(origins[0].to_str().unwrap(), "https://app.example.com");
+        assert_eq!(origins[1].to_str().unwrap(), "https://preview.example.com");
+    }
+
+    #[test]
+    fn rejects_wildcard_for_credentialed_cors() {
+        assert!(parse_frontend_origins("*").is_err());
+    }
+
+    #[test]
+    fn rejects_paths_and_non_http_schemes() {
+        assert!(parse_frontend_origins("https://example.com/dashboard").is_err());
+        assert!(parse_frontend_origins("javascript:alert(1)").is_err());
+    }
+
+    #[test]
+    fn rejects_an_empty_origin_list() {
+        assert!(parse_frontend_origins(" , , ").is_err());
+    }
 }
