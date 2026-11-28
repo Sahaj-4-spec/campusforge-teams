@@ -53,13 +53,14 @@ Set `RESEND_API_KEY` and `EMAIL_FROM`. Verify the sender/domain in Resend, confi
 
 Project Pulse is a workspace-scoped metrics feature and is independently gated. Keep both `CAMPUSFORGE_PROJECT_PULSE_ENABLED=false` on the API and `VITE_CAMPUSFORGE_PROJECT_PULSE_ENABLED=false` on the frontend for initial launch. Enable both only after the board-scoped analytics and two-account authorization tests pass. The server returns a forbidden response when disabled, so hiding the frontend control is not the only enforcement layer.
 
-The AI assistant is independently controlled by `CAMPUSFORGE_AI_ENABLED` and remains disabled until provider and data-processing approvals.
+The AI assistant requires both `CAMPUSFORGE_AI_ENABLED` on the API and `VITE_CAMPUSFORGE_AI_ENABLED` at frontend build time. Both stay false by default, so the entry point is hidden and the API also rejects requests until provider and data-processing approvals.
 
 Keep `CAMPUSFORGE_AI_ENABLED=false` for initial production release. The assistant must remain disabled until the organization approves its data processing, provider retention/training terms, subprocessor list, data residency, spending budget, request limits and user-facing disclosure.
 
 Only after approval, configure:
 
 - `CAMPUSFORGE_AI_ENABLED=true`
+- `VITE_CAMPUSFORGE_AI_ENABLED=true`
 - `CAMPUSFORGE_AI_API_BASE_URL` (HTTPS provider endpoint)
 - `CAMPUSFORGE_AI_API_KEY` (server-only secret)
 - `CAMPUSFORGE_AI_MODEL`
