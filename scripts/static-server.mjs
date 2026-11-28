@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,7 +37,7 @@ function isInsideRoot(root, candidate) {
 
 export function createStaticServer({ rootDir = DEFAULT_ROOT } = {}) {
   const root = resolve(rootDir);
-  const indexPath = resolve(root, "index.html");
+  const rootPath = realpath(root).catch(() => null);
 
   return createServer(async (request, response) => {
     setSecurityHeaders(response);
@@ -63,9 +63,27 @@ export function createStaticServer({ rootDir = DEFAULT_ROOT } = {}) {
       return;
     }
 
+    // API and WebSocket routes belong to the Rust service. Never return SPA
+    // HTML with status 200 for an unavailable/misconfigured API request.
+    if (pathname === "/api" || pathname.startsWith("/api/") || pathname === "/ws" || pathname.startsWith("/ws/")) {
+      response.writeHead(404, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+      response.end(JSON.stringify({ error: "CampusForge API is hosted separately; configure VITE_API_BASE_URL." }));
+      return;
+    }
+
+    const staticRoot = await rootPath;
+    if (!staticRoot) {
+      response.writeHead(503);
+      response.end("Frontend build is not available");
+      return;
+    }
+    const indexPath = await realpath(resolve(staticRoot, "index.html")).catch(() => null);
     const relativePath = pathname.startsWith("/") ? pathname.slice(1) : pathname;
-    const candidate = resolve(root, relativePath || "index.html");
-    if (!isInsideRoot(root, candidate)) {
+    const candidate = resolve(staticRoot, relativePath || "index.html");
+    if (!isInsideRoot(staticRoot, candidate)) {
       response.writeHead(404);
       response.end("Not found");
       return;
@@ -74,6 +92,14 @@ export function createStaticServer({ rootDir = DEFAULT_ROOT } = {}) {
     let filePath = candidate;
     let fileInfo;
     try {
+      // Resolve symbolic links before stat/open so links cannot expose files
+      // elsewhere on the host through the published directory.
+      filePath = await realpath(candidate);
+      if (!isInsideRoot(staticRoot, filePath)) {
+        response.writeHead(404);
+        response.end("Not found");
+        return;
+      }
       fileInfo = await stat(filePath);
       if (!fileInfo.isFile()) fileInfo = null;
     } catch {
@@ -88,8 +114,9 @@ export function createStaticServer({ rootDir = DEFAULT_ROOT } = {}) {
         response.end("Not found");
         return;
       }
-      filePath = indexPath;
       try {
+        if (!indexPath || !isInsideRoot(staticRoot, indexPath)) throw new Error("index.html is unavailable or outside the publish root");
+        filePath = indexPath;
         fileInfo = await stat(filePath);
         if (!fileInfo.isFile()) throw new Error("index.html is not a file");
       } catch {
