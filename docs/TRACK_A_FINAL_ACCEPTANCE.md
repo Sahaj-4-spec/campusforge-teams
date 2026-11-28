@@ -23,7 +23,8 @@ The AI assistant remains disabled by default. Provider calls require an explicit
 
 - Default branch `main` contains integrated commit `bced1af502303b86bfb17d0eabdac18ea2985dc1` (PR #41, squash-merged on 28 November 2026).
 - PRs #38, #39, #40 and #42 were closed as superseded because their changes are included in the integrated commit; they were not merged separately.
-- Integrated frontend build, Rust backend check, dependency vulnerability audit, CodeQL and Dependabot checks passed on the merged commit.
+- PR #43 (runtime DB/migration separation), PR #44 (acceptance/runbook correction) and PR #46 (verified TLS, private ClamAV health gate and preview Blueprint) are also merged.
+- The final merged commit `1639c8f133ab4c77b1ce8c85c14928e1b39a4341` passed frontend build, Rust backend check/unit tests, dependency vulnerability audit and CodeQL.
 - PR #43 (`2bfa2a105d6986fa9ac79679fc15614360edf9d1`) is merged. It separates runtime database privileges from schema migrations, adds a protected one-off SQLx migration runner, and defaults production API startup to no DDL.
 
 ### Database
@@ -37,10 +38,10 @@ The AI assistant remains disabled by default. Provider calls require an explicit
 
 ### Render
 
-- Integrated frontend preview: `campusforge-preview` — `https://campusforge-preview.onrender.com`; it is now configured to call the integrated API preview at `https://campusforge-api-test.onrender.com`, with AI and Project Pulse frontend flags disabled.
-- Integrated Rust API preview: `campusforge-api-test` — `https://campusforge-api-test.onrender.com`; it uses the isolated Neon child branch database `campusforge_release_preview`, whose SQLx journal contains successful migrations 0001–0017. The DML-only `campusforge_release_runtime` role is configured for the service; the runtime/migration separation code is now in `main` and automatic migrations are disabled for this hosted preview.
+- Integrated frontend preview: `campusforge-preview` — `https://campusforge-preview.onrender.com`; Render deploy `dep-dc5ch8ui0phs73d8l2q0` is live on commit `1639c8f`. Its `VITE_API_BASE_URL` is explicitly `https://campusforge-api-test.onrender.com`; AI and Project Pulse frontend flags are both set to `false`.
+- Integrated Rust API preview: `campusforge-api-test` — `https://campusforge-api-test.onrender.com`; Render deploy `dep-dc5cf6utlv9c7397ei90` is live on commit `1639c8f`. It connects to Neon child branch database `campusforge_release_preview` as `campusforge_release_runtime`, uses `sslmode=verify-full`, and has automatic SQLx migrations disabled. Migrations 0001–0017 are successful.
 - Track A-only API preview: `https://campusforge-track-a-api-preview.onrender.com`, backed by Neon `campusforge_track_a_preview` and role `campusforge_track_a_app`; it remains separate from both the production database and integrated preview database.
-- Neon Object Storage is enabled on both branches and the bucket `campusforge-private-uploads` is private. The integrated API preview uses a child-branch-only `storage:read`/`storage:write` credential, path-style requests and `CAMPUSFORGE_REQUIRE_REMOTE_STORAGE=true`. Render deploy `dep-dc5c0e4o3iic73d8k5g0` is live and its startup log confirms successful S3 PUT/GET/DELETE verification. This is preview evidence only; no production API is using a production-branch storage credential. No private production ClamAV service is configured.
+- Neon Object Storage is enabled on both branches and the bucket `campusforge-private-uploads` is private. The integrated API preview uses a child-branch-only `storage:read`/`storage:write` credential, path-style requests and `CAMPUSFORGE_REQUIRE_REMOTE_STORAGE=true`. Deploy `dep-dc5cf6utlv9c7397ei90` confirms S3 PUT/GET/DELETE verification on startup. This is preview evidence only; no production API uses a production-branch storage credential. PR #46 adds a mandatory private ClamAV PING/PONG startup probe and private-IP-only scanner connection; no production ClamAV service is provisioned.
 - The legacy `campusforge-teams` Node service still fails its main-branch deploy: `yarn install` runs at repository root, then the root build invokes `npm --prefix client run build` without installing the client package's Vite dependency (`vite: not found`). Its start command is also `yarn start`, while the root start script launches Cargo; the Node runtime is not a valid host configuration for this monorepo API/frontend split. The existing service configuration must be replaced with a static frontend service plus a separate Rust API service, or converted to a supported Docker setup. The available Render connector cannot edit that existing service's build/start command directly.
 - End-to-end account, OAuth, cross-account, mobile and accessibility acceptance remains outstanding.
 
@@ -86,10 +87,10 @@ JWTs issued before session migration 0015 do not contain `jti`; users will need 
 
 **Source integration:** Merged into `main` as `bced1af`; merged CI/security checks passed.  
 **Database:** Migrations 0001–0017 are recorded successful on `campusforge_app`.  
-**Preview:** `campusforge-preview` is configured to call the integrated API preview and both deploys are on the merged `main` source.  
-**Integrated API:** `campusforge-api-test` is isolated to `campusforge_release_preview`, confirmed running as `campusforge_release_runtime` with automatic migrations disabled, and passes private Neon Object Storage PUT/GET/DELETE verification.  
-**Legacy public service:** `campusforge-teams` Node deploy is failing (`vite: not found`).  
+**Preview:** `campusforge-preview` is live on commit `1639c8f` and explicitly targets the integrated API preview; AI and Project Pulse remain hidden.  
+**Integrated API:** `campusforge-api-test` is live on commit `1639c8f`, isolated to `campusforge_release_preview`, connected as `campusforge_release_runtime` with verified TLS and automatic migrations disabled, and passes private Neon Object Storage PUT/GET/DELETE verification.  
+**Legacy public service:** `campusforge-teams` Node deploy is still misconfigured (`vite: not found`; its `yarn start` invokes Cargo under a Node runtime).  
 **Production acceptance:** **Not complete**.  
-**Launch decision:** **Not production-ready** until a dedicated production API uses `campusforge_app_runtime`, a supported production frontend/API topology replaces the failing legacy Node service, production S3 storage and private ClamAV scanning are verified, Google/GitHub/Discord and email credentials are configured and tested, a recurring backup/retention policy and populated-data restore evidence exist, and two-account authorization plus mobile/accessibility acceptance pass.
+**Launch decision:** **Not production-ready** until a dedicated production Rust API uses `campusforge_app_runtime`, a supported production frontend/API topology replaces the failing legacy Node service, production-branch S3 credentials and a private reachable ClamAV service are configured and tested, Google/GitHub/Discord OAuth app credentials and Resend email sender/DNS are verified, a recurring backup/retention policy plus populated-data restore evidence exist, and two-account authorization plus mobile/accessibility acceptance pass.
 
 Do not describe the application as production-ready before each applicable gate has evidence. The notification authorization change (migration 0016) is already applied to the live application database; a running API binary must match that schema.
