@@ -15,6 +15,7 @@ import {
   Users,
 } from "lucide-react";
 import { authApi } from "../lib/api.js";
+import PasswordRecoveryScreen from "./PasswordRecoveryScreen.jsx";
 
 function GoogleIcon() {
   return (
@@ -56,7 +57,6 @@ export default function AuthScreen({ onAuthenticated, onTryDemo }) {
   const [busyProvider, setBusyProvider] = useState("");
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState({});
-  const [showRecoveryNotice, setShowRecoveryNotice] = useState(false);
   const [providerAvailability, setProviderAvailability] = useState(null);
   const providersLoading = providerAvailability === null;
 
@@ -106,7 +106,6 @@ export default function AuthScreen({ onAuthenticated, onTryDemo }) {
   async function submit(event) {
     event.preventDefault();
     setError("");
-    setShowRecoveryNotice(false);
 
     const nextFieldErrors = {
       email: getEmailError(email),
@@ -159,6 +158,10 @@ export default function AuthScreen({ onAuthenticated, onTryDemo }) {
     setFieldErrors({});
     setShowRecoveryNotice(false);
     setPassword("");
+  }
+
+  if (location.pathname === "/forgot-password" || location.pathname === "/reset-password") {
+    return <PasswordRecoveryScreen />;
   }
 
   return (
@@ -228,9 +231,7 @@ export default function AuthScreen({ onAuthenticated, onTryDemo }) {
                 <button
                   className="auth-forgot-link"
                   type="button"
-                  onClick={() => { setShowRecoveryNotice(true); setError(""); }}
-                  aria-expanded={showRecoveryNotice}
-                  aria-controls="auth-recovery-notice"
+                  onClick={() => { setError(""); navigate("/forgot-password"); }}
                 >
                   Forgot password?
                 </button>
@@ -262,11 +263,6 @@ export default function AuthScreen({ onAuthenticated, onTryDemo }) {
                 </button>
               </span>
               <p className="auth-field-error" id="auth-password-error" role="alert" aria-live="polite">{fieldErrors.password || "\u00a0"}</p>
-              {showRecoveryNotice && (
-                <p className="auth-recovery-notice" id="auth-recovery-notice" role="status">
-                  Password reset is not set up yet. Try signing in with your connected Google, GitHub, or Discord account, or contact your workspace administrator.
-                </p>
-              )}
             </div>
             <button className="primary-button auth-submit" type="submit" disabled={busy || Boolean(busyProvider)}>
               {busy ? "Please wait..." : "Sign in"}
