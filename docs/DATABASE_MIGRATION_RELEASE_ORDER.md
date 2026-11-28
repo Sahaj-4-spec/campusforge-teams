@@ -1,8 +1,8 @@
 # Database migration and rollback release order
 
-CampusForge applies SQLx migrations when the API starts. Keep database changes compatible with the application versions that may be live during a rolling deploy and with the last rollback target.
+Hosted CampusForge API processes use a least-privilege runtime database role and do not apply DDL at startup. Local/non-production development can opt into automatic migrations. Production schema changes are run separately with the protected `MIGRATION_DATABASE_URL` using `npm run db:migrate`. Keep database changes compatible with the application versions that may be live during a rolling deploy and with the last rollback target.
 
-> **Current status — 28 November 2026:** PR #20 (rollback-compatible SQLx runner) and PR #21 (verified-provider sign-up and the remaining non-AI roadmap) are already merged. The migration sequence below records the historical safe order; those PRs are not pending. Migrations 0001–0013 are present in the `main` source tree, but this does not prove that they have been applied to the currently hosted Render database. Verify the active API revision and `_sqlx_migrations` table before rollout. The integrated candidate preserves migration 0014 (`ai_action_proposals`, already applied to Neon `campusforge_app`), adds migration 0015 (`auth_sessions`) for revocable sessions, migration 0016 (`notifications.board_id`) for board-scoped notification delivery and reads, and migration 0017 to preserve AI proposal history when a target column is deleted. Migrations 0015–0017 are not yet applied. The candidate is not merged or deployed; fresh combined-branch CI and runtime checks remain required.
+> **Current status — 28 November 2026:** PR #41 (Track A/B integration) and PR #43 (runtime database/migration separation) are merged to `main`. Neon `campusforge_app` and the isolated `campusforge_release_preview` database both have successful SQLx migrations 0001–0017; all recorded checksums are 48-byte SQLx SHA-384 values. Migrations 0015–0017 are already applied; do not run or edit them again. The hosted integrated preview API uses `campusforge_release_runtime` on the child branch and has `CAMPUSFORGE_AUTO_MIGRATE=false`. The production database has a separate `campusforge_app_runtime` DML-only role, and default privileges for future tables/sequences are configured, but no production Rust API service has been attached to it yet. The legacy `campusforge-teams` Render Node service still has a failed deploy (`vite: not found`). Production launch remains blocked by the missing production API rollout, OAuth/email provider configuration, mandatory private ClamAV service and full acceptance/restore checks.
 
 ## SQLx rollback compatibility
 
@@ -37,7 +37,7 @@ The application broadcasts ephemeral board-view and card-editing signals over th
 
 ## Revocable sessions (migration 0015)
 
-The integrated candidate adds `0015_revocable_auth_sessions.sql` after the already-applied Track B migration 0014:
+The merged release adds `0015_revocable_auth_sessions.sql` after the already-applied Track B migration 0014:
 
 - `auth_sessions.id` stores a random UUID referenced by the JWT `jti` claim.
 - The table records the owner, expiry, and optional `revoked_at` timestamp; it never stores raw JWTs.
@@ -45,7 +45,7 @@ The integrated candidate adds `0015_revocable_auth_sessions.sql` after the alrea
 - WebSocket handshakes validate the session and connected sockets re-check it every 30 seconds.
 - Expired/revoked rows are cleaned after a seven-day retention buffer.
 
-Apply migrations 0015, 0016, and 0017 in order only with the matching session-aware, board-notification-aware, and proposal-history-aware application release after the integrated candidate passes fresh CI and review. All existing JWTs issued before this change lack `jti`; users must sign in again after release. This is an additive schema change, but rollout still requires a valid backup and a tested rollback plan. Do not infer that the Render database has migrations 0001–0013 merely because those files are present in GitHub.
+Migrations 0015, 0016, and 0017 are applied on both the live `campusforge_app` database and the isolated preview database. Do not reapply them. All existing JWTs issued before migration 0015 lack `jti`; users must authenticate again after the first session-aware rollout. For future schema changes, verify a database backup/restore point, then run the protected one-off migration command against the intended Neon branch and database before deploying the matching API binary. Do not infer that a migration has run merely because its file exists in GitHub.
 
 ## Rollback
 
@@ -56,10 +56,10 @@ For migrations 0009–0013, roll back only to an application version that includ
 If a later change needs a destructive schema contraction, ship it only after the rollback window and older binary support have deliberately ended.
 
 
-The connected Neon `campusforge_app` database currently records successful SQLx migration versions 1–14. Version 14 is `ai_action_proposals`; it must not be renamed or replaced. Version 15 adds revocable sessions; version 16 adds `notifications.board_id` and its access index; version 17 makes the proposal target list nullable and sets only that FK column to NULL when a list is deleted. Apply 0015, 0016, and 0017 only in order with the matching integrated application release after fresh CI, database backup verification, and a restore/rollback plan. The existing legacy `neondb` database is separate and was preserved.
+The connected Neon `campusforge_app` database and isolated `campusforge_release_preview` database both record successful SQLx migration versions 0001–0017. Version 14 is `ai_action_proposals` and remains unchanged. Version 15 adds revocable sessions; version 16 adds `notifications.board_id`; version 17 preserves proposal history after target-list deletion. The legacy `neondb` database is separate and was preserved. A DML-only `campusforge_app_runtime` role has `SELECT/INSERT/UPDATE/DELETE` on all 43 application tables, cannot create roles/databases/schemas or bypass RLS, and has default table/sequence privileges configured for objects created by `neondb_owner`. The preview service uses the correspondingly restricted `campusforge_release_runtime` role.
 
 
-SQLx calculates migration checksums with SHA-384 (48 bytes). The Neon `campusforge_app` journal was initially populated with 32-byte SHA-256 digests, which caused the API's `MigrateError::VersionMismatch(1)` at startup. The journal entries 0001–0014 were corrected using the exact SQL source and SQLx descriptions; migration files and application data were not modified. Verify 48-byte checksums before applying migrations 0015 and 0016.
+SQLx calculates migration checksums with SHA-384 (48 bytes). The Neon `campusforge_app` journal was initially populated with 32-byte SHA-256 digests, which caused the API's `MigrateError::VersionMismatch(1)` at startup. The journal entries 0001–0014 were corrected using the exact SQL source and SQLx descriptions; migration files and application data were not modified. Verify the 48-byte SQLx SHA-384 checksum format for any new migration. Do not rewrite already-applied journal rows.
 
 
 ## Board-scoped notification security (migration 0016)
@@ -72,3 +72,16 @@ Migration `0016_notification_board_scope.sql` adds `notifications.board_id`, bac
 Migration `0017_preserve_ai_proposal_history.sql` makes `ai_action_proposals.target_list_id` nullable and changes its composite foreign key to `ON DELETE SET NULL (target_list_id)`. This preserves proposal task details, applied task IDs, and audit linkage if an otherwise deletable column is removed. The application blocks deletion only while a proposal is still pending and unexpired; a deleted target cannot be used for later approval. Migration 0014 remains unchanged.
 
 Apply migration 0017 only after migrations 0015 and 0016, with the application version that models `target_list_id` as nullable and rejects applying proposals whose target column no longer exists. Verify both cases in the migration/integration suite: deleting a column with completed proposal history preserves the proposal; deleting a column with a pending unexpired proposal is rejected by the application guard.
+
+
+## Hosted migration command
+
+The long-running API uses `DATABASE_URL` with the DML-only runtime role and keeps `CAMPUSFORGE_AUTO_MIGRATE=false`. A release operator runs schema migrations separately with a protected migration owner credential:
+
+```bash
+# Inject MIGRATION_DATABASE_URL from the protected release secret store.
+# Its URL must use sslmode=verify-full and the canonical Neon hostname.
+npm run db:migrate
+```
+
+Configure `MIGRATION_DATABASE_URL` only in the protected one-off release environment/secret store; never type its value into a shell command or place it in shell history. Do not configure it on the public API service, expose it to the frontend, or log it. The PostgreSQL URL must use `sslmode=verify-full`, which SQLx 0.8.6 supports, so the certificate chain is checked against trusted roots and the Neon hostname is verified. SQLx 0.8.6 uses WebPKI roots with the configured Rustls runtime unless an explicit trusted `PGSSLROOTCERT` is supplied. Confirm the Neon project, branch, database name and a restorable backup before running the command. After the migration completes, deploy the matching API code with the restricted runtime role.

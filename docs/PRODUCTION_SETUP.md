@@ -1,6 +1,6 @@
 # CampusForge Teams — Production Setup
 
-This runbook is for the integrated release candidate. Do not set `CAMPUSFORGE_ENV=production` until every gate in [Track A release acceptance](TRACK_A_FINAL_ACCEPTANCE.md) has evidence.
+This runbook describes the merged Track A/B source and the current deployment boundary. **There is not yet a verified production Rust API service.** The integrated Render API (`campusforge-api-test`) is a preview service connected to the isolated Neon child branch. The separate `campusforge-teams` Node service still has failed builds. Do not point the public site at the preview API or set `CAMPUSFORGE_ENV=production` until every gate in [Track A release acceptance](TRACK_A_FINAL_ACCEPTANCE.md) has evidence.
 
 ## 1. Core API settings
 
@@ -8,7 +8,7 @@ Configure these in the API service's secret/environment manager. Never commit cr
 
 | Variable | Required value |
 |---|---|
-| `DATABASE_URL` | Neon PostgreSQL connection URL for the dedicated `campusforge_app` database. Use a least-privilege read/write application role; never use the database owner. |
+| `DATABASE_URL` | Neon PostgreSQL connection URL for `campusforge_app` using `campusforge_app_runtime` and `sslmode=verify-full`. Never use `neondb_owner` for the long-running API. The runtime role grants DML on all 43 application tables. |
 | `CAMPUSFORGE_AUTO_MIGRATE` | Set to `false` on the long-running API service. Production defaults to manual migrations. |
 | `JWT_SECRET` | Random high-entropy secret, at least 32 bytes. Do not reuse a development value. |
 | `FRONTEND_ORIGIN` | Comma-separated list of exact frontend origins allowed by credentialed CORS. Production should list only the canonical HTTPS app origin; isolated previews may add their own exact HTTPS origins. Wildcards and URL paths are rejected. |
@@ -33,9 +33,9 @@ Production uses S3-compatible private object storage. Configure:
 - `AWS_ACCESS_KEY_ID`
 - `AWS_SECRET_ACCESS_KEY`
 
-Optional S3-compatible provider settings are `CAMPUSFORGE_S3_ENDPOINT_URL`, `CAMPUSFORGE_S3_URL_STYLE` (set to `virtual-host` only when required), and `AWS_SESSION_TOKEN` for temporary credentials.
+Neon Object Storage is enabled on the CampusForge Neon project and the existing `campusforge-private-uploads` bucket is private. The isolated integrated preview has a child-branch-scoped `storage:read`/`storage:write` credential and Render startup has verified PUT/GET/DELETE. For production, create a separate credential on the production `main` branch with `storage:read` and `storage:write` scopes. Map the credential `token_id` to `AWS_ACCESS_KEY_ID` and `s3_secret_access_key` to `AWS_SECRET_ACCESS_KEY`. Use the `main` branch's own endpoint, region, and path-style addressing. Never reuse the preview credential in production. Optional S3-compatible provider settings are `CAMPUSFORGE_S3_ENDPOINT_URL`, `CAMPUSFORGE_S3_URL_STYLE=path`, and `AWS_SESSION_TOKEN` for temporary credentials.
 
-The bucket must be private. Use a least-privilege identity restricted to the application bucket and required object operations. Enforce encryption at rest and TLS in transit, enable provider-side versioning/retention where appropriate, configure lifecycle rules, and document backup/restore procedures. Verify denied public access and exercise upload, download, deletion, checksum, and restore from the deployed API.
+The bucket must be private. Use a branch-scoped Neon credential limited to `storage:read` and `storage:write`; create separate credentials for production and preview. Neon Object Storage is branch-scoped and supports path-style S3 requests. Confirm the provider's supported retention/versioning and backup features rather than assuming standard AWS S3 features are available. Exercise upload, download, deletion, checksum and restore from the deployed API.
 
 ## 3. Mandatory malware scanning
 
@@ -80,23 +80,25 @@ CAMPUSFORGE_REQUIRE_MALWARE_SCAN=true
 CAMPUSFORGE_CLAMAV_ADDR=<private-clamav-host>:<port>
 ```
 
-The API intentionally refuses production startup when remote storage or mandatory malware scanning is not configured.
+The API intentionally refuses production startup when remote storage or mandatory malware scanning is not configured. A configured scanner address must be private and reachable from the API; a non-empty address alone is not proof of scanner health. The committed Render Blueprint (`render.yaml`) is being aligned to the live preview storage configuration: the current live `campusforge-api-test` service has `CAMPUSFORGE_STORAGE_MODE=s3`, `CAMPUSFORGE_REQUIRE_REMOTE_STORAGE=true`, a child-branch-only Neon storage credential, and a successful PUT/GET/DELETE startup test. The preview still does not have ClamAV and keeps `CAMPUSFORGE_REQUIRE_MALWARE_SCAN=false`; production file uploads must remain blocked until ClamAV is privately reachable and clean/infected/timeout/unavailable scanner paths pass.
 
 ## 7. Database release order
 
-The Neon `campusforge_app` database currently has SQLx migrations 0001–0014 recorded successfully. Migration 0014 is the AI proposal/audit schema and must not be edited or renumbered. Migration 0015 adds revocable authentication sessions. Migration 0016 adds board scope to notifications so task titles/descriptions cannot reach workspace members who do not have board access. Migration 0017 preserves proposal history when an unused target column is deleted.
+The Neon `campusforge_app` and isolated `campusforge_release_preview` databases both have SQLx migrations 0001–0017 recorded successful. Migration 0014 is the AI proposal/audit schema and must not be edited or renumbered. Migrations 0015–0017 are already applied; do not repeat them. The production database has a DML-only `campusforge_app_runtime` role with default privileges configured for future tables/sequences. The integrated preview API uses a separate `campusforge_release_runtime` role and isolated branch database.
 
-1. Verify SQLx SHA-384 migration journal checksums and a database backup.
-2. Pass the integrated CI and security workflows.
-3. Apply migrations 0015, 0016, then 0017, with the matching integrated API release.
-4. Verify password login, Google/GitHub/Discord sign-in, cookie and bearer logout, session revocation, WebSocket termination and old-token reauthentication.
-5. Complete isolated database restore and two-account authorization tests.
+For future schema releases:
+1. Verify the intended Neon project/branch/database and a recoverable backup.
+2. Pass the relevant integrated CI and security workflows.
+3. Inject `MIGRATION_DATABASE_URL` from the protected one-off release secret store (never type it into shell history), with `sslmode=verify-full`, then run `npm run db:migrate`.
+4. Verify `_sqlx_migrations` and the migration's expected data effects.
+5. Deploy the matching API with `CAMPUSFORGE_AUTO_MIGRATE=false` and the DML-only runtime role.
+6. Complete an isolated restore and rollback rehearsal before production launch.
 
 Do not roll back to an API build that does not understand `auth_sessions` after migration 0015 is applied, or `notifications.board_id` after migration 0016 is applied. Follow [Database migration release order](DATABASE_MIGRATION_RELEASE_ORDER.md).
 
 ## 8. Final operational gates
 
-Before public launch, additionally verify a production custom domain/TLS, trusted proxy/edge rate limiting, monitoring and alerting, backups and restore, incident response, privacy/export/deletion, account recovery/provider linking, accessibility, mobile/browser compatibility and two-account negative authorization tests. The preview/test Render services are not a production environment.
+Before public launch, additionally verify a production custom domain/TLS, trusted proxy/edge rate limiting, monitoring and alerting, backups and restore, incident response, privacy/export/deletion, account recovery/provider linking, accessibility, mobile/browser compatibility and two-account negative authorization tests. The integrated `campusforge-preview` frontend and `campusforge-api-test` API are preview services on the isolated Neon child branch. The `campusforge-teams` Node web service is not a verified production deployment; its latest main-branch builds failed with `vite: not found`. A separate production Rust API service, production frontend/API connection, OAuth/email secrets, and ClamAV service must be established before calling the system production-ready.
 
 
 Before applying migration 0016, confirm the matching API build writes `notifications.board_id` and checks it during inbox reads and email dispatch. Do not deploy the migration separately from that code.
@@ -105,10 +107,23 @@ Before applying migration 0016, confirm the matching API build writes `notificat
 
 The API runtime must not connect as `neondb_owner` or another database/schema owner. Use a dedicated Neon role scoped to `campusforge_app` with only the table DML and sequence privileges the application requires. It must not have superuser, role-creation, database-creation, or RLS-bypass privileges.
 
-Keep `CAMPUSFORGE_AUTO_MIGRATE=false` on the Render API service. This prevents ordinary service restarts and rollouts from attempting DDL with the application role. Run migrations as a separate release operation using the protected `MIGRATION_DATABASE_URL` secret, which must not be configured on the long-running API service:
+Keep `CAMPUSFORGE_AUTO_MIGRATE=false` on the Render API service. This prevents ordinary service restarts and rollouts from attempting DDL with the application role. Run migrations as a separate release operation after injecting `MIGRATION_DATABASE_URL` from a protected one-off release secret store. Never type its value into a shell command or shell history. The URL must use `sslmode=verify-full`; do not configure this secret on the long-running API service:
 
 ```bash
-MIGRATION_DATABASE_URL='postgresql://MIGRATION_ROLE:...@HOST/campusforge_app?sslmode=require' npm run db:migrate
+npm run db:migrate
 ```
 
 The migration command applies the repository's embedded SQLx migrations and checks their checksums. Use a controlled migration credential with schema ownership/DDL authority, keep its secret in a protected operator or release environment, and never copy it into application logs or frontend variables. Confirm the expected branch, database and migration journal before running it. The runtime API then starts with the separate read/write role and does not perform schema changes.
+
+
+## 9. Backup and restore evidence (28 November 2026)
+
+A manual snapshot of the production Neon `main` branch was created before further production changes:
+
+- Snapshot: `campusforge-prelaunch-2026-11-28` (`snap-orange-grass-bbu0vwvb`).
+- Restore drill: `campusforge-restore-drill-2026-11-28` (`br-bold-math-bbmdqptf`), restored with `finalize=false`; the original production branch was not replaced.
+- The restored `campusforge_app` had 43 public tables and SQLx migrations 0001–0017 successful, with 48-byte checksums.
+- The selected core data tables contained zero rows in the restored database. The legacy `neondb` core tables were also empty in the source branch during this check. This is schema/journal restore evidence, **not** proof of recovering populated user records.
+- Neon snapshot schedule was empty before and after the manual snapshot; no recurring retention policy is configured. The restored drill branch could not be marked protected because the current Neon plan had reached its protected-branch limit.
+
+Before launch, set and approve an automatic snapshot/PITR retention policy appropriate for the chosen Neon plan and verify restore against a populated test dataset. Do not claim customer-data recovery until a representative populated restore has been exercised.
