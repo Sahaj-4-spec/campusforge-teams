@@ -116,13 +116,24 @@ fn validate_database_tls(database_url: &str, production_mode: bool) -> Result<()
         return Err("Production DATABASE_URL must be a PostgreSQL URL with a verified hostname");
     }
 
-    let ssl_modes = parsed
-        .query_pairs()
-        .filter(|(key, _)| key.eq_ignore_ascii_case("sslmode"))
-        .map(|(_, value)| value.into_owned())
-        .collect::<Vec<_>>();
+    let mut ssl_modes = Vec::new();
+    for (key, value) in parsed.query_pairs() {
+        if key.eq_ignore_ascii_case("sslmode") || key.eq_ignore_ascii_case("ssl-mode") {
+            // Require SQLx's canonical PostgreSQL URL key. Reject aliases and case
+            // variants instead of allowing an unrecognized key to fall back to Prefer.
+            if key != "sslmode" {
+                return Err("Production DATABASE_URL must use the canonical lowercase sslmode parameter");
+            }
+            ssl_modes.push(value.into_owned());
+        }
+    }
     if ssl_modes.len() != 1 || !ssl_modes[0].eq_ignore_ascii_case("verify-full") {
-        return Err("Production DATABASE_URL must set sslmode=verify-full to validate the CA chain and Neon hostname");
+        return Err("Production DATABASE_URL must set exactly one sslmode=verify-full parameter");
+    }
+    if std::env::var("PGSSLMODE")
+        .is_ok_and(|mode| !mode.eq_ignore_ascii_case("verify-full"))
+    {
+        return Err("PGSSLMODE must not weaken production PostgreSQL TLS verification");
     }
     Ok(())
 }
@@ -379,6 +390,22 @@ mod database_tls_configuration_tests {
         assert!(validate_database_tls(HOSTED_URL, true).is_err());
         assert!(validate_database_tls(
             &format!("{HOSTED_URL}?sslmode=verify-full&sslmode=require"),
+            true
+        ).is_err());
+        assert!(validate_database_tls(
+            &format!("{HOSTED_URL}?sslmode=verify-full&ssl-mode=disable"),
+            true
+        ).is_err());
+    }
+
+    #[test]
+    fn production_rejects_noncanonical_ssl_parameter_spelling() {
+        assert!(validate_database_tls(
+            &format!("{HOSTED_URL}?SSLMODE=verify-full"),
+            true
+        ).is_err());
+        assert!(validate_database_tls(
+            &format!("{HOSTED_URL}?ssl-mode=verify-full"),
             true
         ).is_err());
     }
