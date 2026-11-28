@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, Postgres, Transaction};
+use url::Url;
 use uuid::Uuid;
 
 use crate::{auth::{AuthUser, WorkspaceUser}, state::AppState};
@@ -113,6 +114,7 @@ struct CreatedInvitation {
     role: String,
     expires_at: DateTime<Utc>,
     token: String,
+    email_sent: bool,
 }
 
 async fn list_invitations(
@@ -141,6 +143,37 @@ async fn list_invitations(
     Ok(Json(invitations))
 }
 
+
+fn invitation_url(token: &str) -> Option<String> {
+    let origin = std::env::var("FRONTEND_REDIRECT_ORIGIN")
+        .ok()
+        .or_else(|| {
+            std::env::var("FRONTEND_ORIGIN").ok().and_then(|value| {
+                value.split(',').next().map(|entry| entry.trim().to_owned())
+            })
+        })
+        .filter(|value| !value.is_empty())?;
+
+    let mut url = Url::parse(origin.trim_end_matches('/')).ok()?;
+    let production = std::env::var("CAMPUSFORGE_ENV")
+        .is_ok_and(|value| value.eq_ignore_ascii_case("production"));
+    if url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || !matches!(url.path(), "" | "/")
+        || (production && url.scheme() != "https")
+        || !matches!(url.scheme(), "http" | "https")
+    {
+        return None;
+    }
+
+    url.set_path("/");
+    url.query_pairs_mut().append_pair("invite", token);
+    Some(url.to_string())
+}
+
 async fn create_invitation(
     State(state): State<AppState>,
     WorkspaceUser(user_id, workspace_id): WorkspaceUser,
@@ -161,6 +194,18 @@ async fn create_invitation(
         .map_err(|cause| internal_error(cause, "Could not verify invitation permissions"))?;
     if !can_manage {
         return Err(error(StatusCode::FORBIDDEN, "Only workspace owners and admins can invite members"));
+    }
+
+    // Prevent invitation abuse by limiting each inviter and each recipient.
+    // The rate-limit table stores only digests, never raw email addresses.
+    let actor_bucket = hash_token(&format!("workspace-invite-actor:{workspace_id}:{user_id}"));
+    let recipient_bucket = hash_token(&format!("workspace-invite-recipient:{workspace_id}:{email}"));
+    let actor_allowed = state.check_rate_limit(&actor_bucket, 20, 3600).await
+        .map_err(|cause| internal_error(cause, "Could not enforce invitation actor rate limit"))?;
+    let recipient_allowed = state.check_rate_limit(&recipient_bucket, 3, 3600).await
+        .map_err(|cause| internal_error(cause, "Could not enforce invitation recipient rate limit"))?;
+    if !actor_allowed || !recipient_allowed {
+        return Err(error(StatusCode::TOO_MANY_REQUESTS, "Too many invitations. Please wait before trying again"));
     }
 
     let existing_member: bool = sqlx::query_scalar(
@@ -211,6 +256,11 @@ async fn create_invitation(
         .fetch_optional(&mut *tx)
         .await
         .map_err(|cause| internal_error(cause, "Could not find an existing invited account"))?;
+    let workspace_name: String = sqlx::query_scalar("SELECT name FROM workspaces WHERE id=$1")
+        .bind(workspace_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|cause| internal_error(cause, "Could not load workspace name"))?;
     if let Some(invitee_user_id) = invitee_user_id {
         crate::roadmap::create_notification_in_transaction(
             &mut tx,
@@ -234,12 +284,38 @@ async fn create_invitation(
     tx.commit().await.map_err(|cause| internal_error(cause, "Could not save invitation"))?;
     state.publish_workspace_event(workspace_id, None, "invitation_created", format!("invited {email} to the workspace"));
 
+    // Email is best-effort after the invitation commits. If Resend or the
+    // canonical frontend origin is missing, the caller still receives the
+    // shareable link and the pending invitation remains valid.
+    let mut email_sent = false;
+    if let Some(link) = invitation_url(&token) {
+        let subject = format!("You're invited to join {workspace_name} on CampusForge Teams");
+        let message = format!(
+            "You have been invited to join the workspace \"{workspace_name}\" as a {role}.\n\nAccept the invitation using this link:\n{link}\n\nThis link expires in seven days and can only be used once. If you were not expecting this invitation, you can ignore this email."
+        );
+        let idempotency_key = format!("campusforge-workspace-invitation-{}", hash_token(&token));
+        match crate::notifications::send_transactional_email(
+            &email,
+            &subject,
+            &message,
+            &idempotency_key,
+        ).await {
+            Ok(()) => email_sent = true,
+            Err(cause) => tracing::warn!(
+                %cause,
+                invitation_id=%invitation.id,
+                "Invitation email was not delivered; the manual invite link remains available"
+            ),
+        }
+    }
+
     Ok((StatusCode::CREATED, Json(CreatedInvitation {
         id: invitation.id,
         email: invitation.email,
         role: invitation.role,
         expires_at: invitation.expires_at,
         token,
+        email_sent,
     })))
 }
 
