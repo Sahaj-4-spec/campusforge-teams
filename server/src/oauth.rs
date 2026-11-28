@@ -176,8 +176,13 @@ fn callback_uri(provider: Provider) -> Result<String, &'static str> {
 }
 
 fn frontend_redirect(error: Option<&str>) -> Redirect {
-    let origin = std::env::var("FRONTEND_ORIGIN")
-        .unwrap_or_else(|_| "http://localhost:5173".to_owned());
+    // Use an explicit OAuth landing origin, or the first CORS origin for a preview.
+    let configured_origin = std::env::var("FRONTEND_REDIRECT_ORIGIN").ok()
+        .or_else(|| std::env::var("FRONTEND_ORIGIN").ok()
+            .and_then(|value| value.split(',').next().map(|entry| entry.trim().to_owned())))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "http://localhost:5173".to_owned());
+    let origin = configured_origin;
     let mut url = Url::parse(&origin)
         .unwrap_or_else(|_| Url::parse("http://localhost:5173").expect("valid local fallback URL"));
     url.set_path("/");
