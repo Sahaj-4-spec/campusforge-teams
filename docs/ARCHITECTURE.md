@@ -127,7 +127,7 @@ The merged implementation includes authenticated workspace/project/task file lis
 
 **Decision:** Excluded from the Track A baseline; separately implemented behind Track B feature controls.
 
-AI assistant and model-driven project support are excluded from the Track A baseline. Track B is separately scoped and optional; the current integrated candidate adds a feature-flagged assistant and human-approved proposal flow, with no autonomous mutations.
+AI assistant and model-driven project support are excluded from the Track A baseline. Track B is separately scoped and optional; the merged Track B release includes a feature-flagged assistant and human-approved proposal flow, with no autonomous mutations.
 
 ### ADR-010 — Team productivity analytics
 
