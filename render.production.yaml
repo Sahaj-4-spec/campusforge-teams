@@ -1,0 +1,124 @@
+services:
+  # Private TCP scanner. The API is configured to fail closed unless this
+  # internal ClamAV service is reachable and answers its PING probe.
+  - type: pserv
+    name: campusforge-production-clamav
+    runtime: image
+    image:
+      url: docker.io/clamav/clamav:stable
+    region: singapore
+    plan: standard
+
+  # Deliberately separate from the existing preview API. It connects only to
+  # Neon production's DML-only role and never runs schema migrations at startup.
+  - type: web
+    name: campusforge-production-api
+    runtime: rust
+    repo: https://github.com/Sahaj-4-spec/campusforge-teams
+    branch: main
+    region: singapore
+    plan: standard
+    autoDeployTrigger: off
+    buildCommand: cargo build --release --manifest-path server/Cargo.toml
+    startCommand: ./server/target/release/campusforge-server
+    healthCheckPath: /api/health
+    envVars:
+      - key: CAMPUSFORGE_ENV
+        value: production
+      - key: CAMPUSFORGE_AUTO_MIGRATE
+        value: "false"
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: CAMPUSFORGE_STORAGE_MODE
+        value: s3
+      - key: CAMPUSFORGE_REQUIRE_REMOTE_STORAGE
+        value: "true"
+      - key: CAMPUSFORGE_REQUIRE_MALWARE_SCAN
+        value: "true"
+      - key: CAMPUSFORGE_S3_BUCKET
+        value: campusforge-private-uploads
+      - key: CAMPUSFORGE_S3_REGION
+        value: us-east-1
+      - key: CAMPUSFORGE_S3_ENDPOINT_URL
+        value: https://br-sweet-bar-bb9eus1t.storage.c-15.us-east-1.aws.neon.tech
+      - key: CAMPUSFORGE_S3_URL_STYLE
+        value: path
+      - key: CAMPUSFORGE_CLAMAV_ADDR
+        fromService:
+          type: pserv
+          name: campusforge-production-clamav
+          property: hostport
+      - key: CAMPUSFORGE_AI_ENABLED
+        value: "false"
+      - key: CAMPUSFORGE_PROJECT_PULSE_ENABLED
+        value: "false"
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: FRONTEND_REDIRECT_ORIGIN
+        sync: false
+      - key: OAUTH_REDIRECT_BASE_URL
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: DISCORD_CLIENT_ID
+        sync: false
+      - key: DISCORD_CLIENT_SECRET
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+
+  # Public frontend. Its API origin is entered as a protected build variable
+  # after Render assigns the production API's final onrender.com hostname.
+  - type: web
+    name: campusforge-production-web
+    runtime: static
+    repo: https://github.com/Sahaj-4-spec/campusforge-teams
+    branch: main
+    autoDeployTrigger: off
+    buildCommand: npm --prefix client install --no-audit --no-fund && npm --prefix client run build
+    staticPublishPath: ./client/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /*
+        name: Permissions-Policy
+        value: camera=(), microphone=(), geolocation=()
+      - path: /*
+        name: Strict-Transport-Security
+        value: max-age=31536000; includeSubDomains
+    envVars:
+      - key: VITE_CAMPUSFORGE_ENVIRONMENT
+        value: production
+      - key: VITE_CAMPUSFORGE_AI_ENABLED
+        value: "false"
+      - key: VITE_CAMPUSFORGE_PROJECT_PULSE_ENABLED
+        value: "false"
+      - key: VITE_API_BASE_URL
+        sync: false
