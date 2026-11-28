@@ -16,7 +16,7 @@
 body { background: var(--canvas); }
 button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, a:focus-visible { outline-color: rgba(181, 225, 57, .7); }
 .sidebar { background: #ffffff; border-right-color: #e8eaf2; }
-.brand-mark { color: #ffffff; background: #6d5ce7; box-shadow: 0 7px 18px rgba(109, 92, 231, .22); border-radius: 13px; }
+.brand-mark { color: #6d5ce7; background: #f0eeff; border: 1px solid #ded9ff; box-shadow: none; border-radius: 13px; }
 .brand-name { color: #252b42; }
 .workspace-switcher { background: #fafaff; border-color: #e8eaf2; }
 .workspace-avatar { color: #ffffff; background: #6d5ce7; }
