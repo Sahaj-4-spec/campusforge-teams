@@ -8,7 +8,7 @@ Configure these in the API service's secret/environment manager. Never commit cr
 
 | Variable | Required value |
 |---|---|
-| `DATABASE_URL` | Neon PostgreSQL connection URL for the dedicated `campusforge_app` database, using `campusforge_app_runtime`. Never use `neondb_owner` for the long-running API. The runtime role is created and grants DML on all 43 application tables. |
+| `DATABASE_URL` | Neon PostgreSQL connection URL for `campusforge_app` using `campusforge_app_runtime` and `sslmode=verify-full`. Never use `neondb_owner` for the long-running API. The runtime role grants DML on all 43 application tables. |
 | `CAMPUSFORGE_AUTO_MIGRATE` | Set to `false` on the long-running API service. Production defaults to manual migrations. |
 | `JWT_SECRET` | Random high-entropy secret, at least 32 bytes. Do not reuse a development value. |
 | `FRONTEND_ORIGIN` | Comma-separated list of exact frontend origins allowed by credentialed CORS. Production should list only the canonical HTTPS app origin; isolated previews may add their own exact HTTPS origins. Wildcards and URL paths are rejected. |
@@ -89,7 +89,7 @@ The Neon `campusforge_app` and isolated `campusforge_release_preview` databases 
 For future schema releases:
 1. Verify the intended Neon project/branch/database and a recoverable backup.
 2. Pass the relevant integrated CI and security workflows.
-3. Run `MIGRATION_DATABASE_URL=... npm run db:migrate` as a protected release step.
+3. Inject `MIGRATION_DATABASE_URL` from the protected one-off release secret store (never type it into shell history), with `sslmode=verify-full`, then run `npm run db:migrate`.
 4. Verify `_sqlx_migrations` and the migration's expected data effects.
 5. Deploy the matching API with `CAMPUSFORGE_AUTO_MIGRATE=false` and the DML-only runtime role.
 6. Complete an isolated restore and rollback rehearsal before production launch.
@@ -107,10 +107,10 @@ Before applying migration 0016, confirm the matching API build writes `notificat
 
 The API runtime must not connect as `neondb_owner` or another database/schema owner. Use a dedicated Neon role scoped to `campusforge_app` with only the table DML and sequence privileges the application requires. It must not have superuser, role-creation, database-creation, or RLS-bypass privileges.
 
-Keep `CAMPUSFORGE_AUTO_MIGRATE=false` on the Render API service. This prevents ordinary service restarts and rollouts from attempting DDL with the application role. Run migrations as a separate release operation using the protected `MIGRATION_DATABASE_URL` secret, which must not be configured on the long-running API service:
+Keep `CAMPUSFORGE_AUTO_MIGRATE=false` on the Render API service. This prevents ordinary service restarts and rollouts from attempting DDL with the application role. Run migrations as a separate release operation after injecting `MIGRATION_DATABASE_URL` from a protected one-off release secret store. Never type its value into a shell command or shell history. The URL must use `sslmode=verify-full`; do not configure this secret on the long-running API service:
 
 ```bash
-MIGRATION_DATABASE_URL='postgresql://MIGRATION_ROLE:...@HOST/campusforge_app?sslmode=require' npm run db:migrate
+npm run db:migrate
 ```
 
 The migration command applies the repository's embedded SQLx migrations and checks their checksums. Use a controlled migration credential with schema ownership/DDL authority, keep its secret in a protected operator or release environment, and never copy it into application logs or frontend variables. Confirm the expected branch, database and migration journal before running it. The runtime API then starts with the separate read/write role and does not perform schema changes.
