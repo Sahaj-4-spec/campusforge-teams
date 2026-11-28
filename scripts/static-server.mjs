@@ -128,6 +128,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
 
   const server = createStaticServer();
   server.listen(port, "0.0.0.0", () => {
-    process.stdout.write(\`CampusForge frontend listening on 0.0.0.0:\${port}\n\`);
+    process.stdout.write("CampusForge frontend listening on 0.0.0.0:" + port + "\n");
   });
 }
