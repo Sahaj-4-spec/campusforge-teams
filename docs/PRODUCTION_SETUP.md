@@ -10,10 +10,10 @@ Configure these in the API service's secret/environment manager. Never commit cr
 |---|---|
 | `DATABASE_URL` | Neon PostgreSQL connection URL for the dedicated `campusforge_app` database. Use TLS and a least-privilege application role. |
 | `JWT_SECRET` | Random high-entropy secret, at least 32 bytes. Do not reuse a development value. |
-| `FRONTEND_ORIGIN` | Exact HTTPS origin of the deployed frontend, without a trailing path. |
+| `FRONTEND_ORIGIN` | Comma-separated list of exact frontend origins allowed by credentialed CORS. Production should list only the canonical HTTPS app origin; isolated previews may add their own exact HTTPS origins. Wildcards and URL paths are rejected. |
 | `OAUTH_REDIRECT_BASE_URL` | Exact HTTPS origin of the API that receives OAuth callbacks. |
 
-The server appends the provider route to `OAUTH_REDIRECT_BASE_URL`. Register these exact callback URLs with each provider:
+Set `FRONTEND_REDIRECT_ORIGIN` to the canonical frontend URL used after OAuth callbacks. When omitted, the server redirects to the first entry in `FRONTEND_ORIGIN`. The server appends the provider route to `OAUTH_REDIRECT_BASE_URL`. Register these exact callback URLs with each provider:
 
 - Google: `https://<api-host>/api/auth/google/callback`
 - GitHub: `https://<api-host>/api/auth/github/callback`
