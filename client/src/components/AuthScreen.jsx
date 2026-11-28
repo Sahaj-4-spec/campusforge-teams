@@ -41,14 +41,6 @@ const providers = [
   { id: "discord", label: "Discord", icon: DiscordIcon }
 ];
 
-// OAuth actions stay disabled until each provider application is configured
-// in the deployment environment. This prevents sending users into a dead-end.
-const providerAvailability = {
-  google: import.meta.env.VITE_OAUTH_GOOGLE_ENABLED === "true",
-  github: import.meta.env.VITE_OAUTH_GITHUB_ENABLED === "true",
-  discord: import.meta.env.VITE_OAUTH_DISCORD_ENABLED === "true"
-};
-
 function getEmailError(value) {
   const email = value.trim();
   if (!email) return "Enter your email address.";
@@ -65,6 +57,27 @@ export default function AuthScreen({ onAuthenticated, onTryDemo }) {
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState({});
   const [showRecoveryNotice, setShowRecoveryNotice] = useState(false);
+  const [providerAvailability, setProviderAvailability] = useState(null);
+  const providersLoading = providerAvailability === null;
+
+  useEffect(() => {
+    let cancelled = false;
+    authApi.oauthProviders()
+      .then((availability) => {
+        if (cancelled) return;
+        setProviderAvailability({
+          google: availability?.google === true,
+          github: availability?.github === true,
+          discord: availability?.discord === true
+        });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProviderAvailability({ google: false, github: false, discord: false });
+        }
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   const location = useLocation();
   const navigate = useNavigate();
@@ -249,20 +262,20 @@ export default function AuthScreen({ onAuthenticated, onTryDemo }) {
 
         <div className="social-auth-grid" aria-label="Social sign-in providers">
           {providers.map(({ id, label, icon: Icon }) => {
-            const configured = providerAvailability[id];
+            const configured = providerAvailability?.[id] === true;
             return (
               <button
                 className={"social-auth-button social-" + id + (!configured ? " social-auth-unavailable" : "")}
                 type="button"
                 key={id}
                 onClick={() => startOAuth(id)}
-                disabled={!configured || Boolean(busyProvider) || busy}
-                aria-label={(isRegister ? "Sign up with " : "Continue with ") + label + (configured ? "" : ", coming soon")}
-                title={configured ? label : label + " sign-in is not configured yet"}
+                disabled={providersLoading || !configured || Boolean(busyProvider) || busy}
+                aria-label={(isRegister ? "Sign up with " : "Continue with ") + label + (providersLoading ? ", checking availability" : configured ? "" : ", setup required")}
+                title={providersLoading ? "Checking provider configuration" : configured ? label : label + " sign-in needs provider credentials on the API"}
               >
                 {busyProvider === id ? <span className="social-spinner" /> : <Icon size={18} aria-hidden="true" />}
                 <span>{busyProvider === id ? "Connecting..." : label}</span>
-                {!configured && <small className="social-auth-badge">Soon</small>}
+                {!configured && <small className="social-auth-badge">{providersLoading ? "Checking" : "Setup"}</small>}
               </button>
             );
           })}
