@@ -38,6 +38,16 @@ fn internal_error<E: std::fmt::Display>(
     fail(StatusCode::INTERNAL_SERVER_ERROR, "The proposal request could not be completed")
 }
 
+/// Keep proposal rate-limit buckets compatible with api_rate_limits.bucket_key (64 hex chars).
+/// The action, workspace, and user are included in the hash preimage to avoid collisions.
+fn proposal_rate_limit_key(action: &str, workspace_id: Uuid, user_id: Uuid) -> String {
+    let identity = format!("ai-proposal:{action}:{workspace_id}:{user_id}");
+    Sha256::digest(identity.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+}
+
 async fn check_proposal_rate_limit(
     state: &AppState,
     user_id: Uuid,
@@ -45,7 +55,7 @@ async fn check_proposal_rate_limit(
     action: &'static str,
     limit: i32,
 ) -> ApiResult<()> {
-    let key = format!("ai-proposal:{action}:{workspace_id}:{user_id}");
+    let key = proposal_rate_limit_key(action, workspace_id, user_id);
     let allowed = state.check_rate_limit(&key, limit, 60).await
         .map_err(|cause| internal_error(cause, "Could not enforce AI proposal rate limit"))?;
     if !allowed {
@@ -882,4 +892,17 @@ mod tests {
         invalid_estimate[0].estimated_minutes = Some(0);
         assert!(validate_tasks(&mut invalid_estimate).is_err());
     }
+    #[test]
+    fn proposal_rate_limit_keys_match_schema_and_separate_actions() {
+        let workspace_id = Uuid::from_u128(1);
+        let user_id = Uuid::from_u128(2);
+        let read_key = proposal_rate_limit_key("read", workspace_id, user_id);
+        let write_key = proposal_rate_limit_key("write", workspace_id, user_id);
+
+        assert_eq!(read_key.len(), 64);
+        assert!(read_key.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_eq!(read_key, proposal_rate_limit_key("read", workspace_id, user_id));
+        assert_ne!(read_key, write_key);
+    }
+
 }
