@@ -44,11 +44,11 @@ This file establishes the initial product and engineering boundary. The first re
 - Added a provider-neutral OpenAI-compatible chat-completions adapter in `server/src/ai.rs`.
 - Configured model, endpoint, key, timeout, request size, and output limits exclusively through backend environment variables.
 - Added the `CAMPUSFORGE_AI_ENABLED` kill switch; it defaults to disabled and the UI reports an unavailable state when provider settings are missing.
-- Added per-user (10/minute) and shared per-workspace (120/hour) fixed-window request limits using the existing PostgreSQL rate-limit table.
+- Added per-user (10/minute), shared per-workspace (120/hour), and configurable daily request ceilings (defaults: 100/user and 1,000/workspace) for assistant provider requests using the existing PostgreSQL rate-limit table. Daily ceilings are request guardrails, not dollar-denominated billing limits. Proposal endpoints also enforce per-user minute limits plus shared per-workspace hourly limits; every rate-limit key is SHA-256 hashed to the schema's 64-character bucket constraint.
 - Disabled HTTP redirects and require HTTPS provider endpoints, except loopback HTTP for local development.
 - Normalized provider failures and reject empty or oversized responses.
 
-**Still required:** provider selection, processing/retention review, cost/spend budget, and live provider verification.
+**Still required outside the codebase:** select an AI provider, approve its data-processing/retention/training terms and data residency, set a real spend ceiling based on the selected model's pricing, inject a server-side credential, and verify a live provider request. No provider key is committed or sent to the frontend. The global environment kill switch remains off by default.
 
 ### B2 — Authorized context retrieval
 
@@ -60,7 +60,7 @@ This file establishes the initial product and engineering boundary. The first re
 - Treats project records and conversation history as untrusted content in the model prompt.
 - Does not expose SQL, arbitrary query tools, or cross-workspace retrieval. Meeting notes, shared-channel messages, and a selected clean text file are included only in their corresponding modes, after the same explicit data-sharing acknowledgement and scope checks.
 
-**Still required:** dedicated adversarial cross-workspace and per-board role integration tests.
+**Implemented test coverage:** PostgreSQL-backed context integration tests verify workspace isolation, board membership, meeting-note scope, shared-channel scope, and clean-file authorization. Proposal integration tests verify owner/member write access, viewer/outsider denial, assignee membership, and board-fingerprint drift detection. Adversarial prompt-injection tests against a live provider and browser-based two-account testing remain acceptance gates.
 
 ### B3 — Read-only assistant and summaries
 
@@ -76,7 +76,7 @@ This file establishes the initial product and engineering boundary. The first re
 - Changing project, mode, file, or workspace clears the in-memory conversation and resets acknowledgement. Changing workspaces remounts the assistant.
 - The assistant cannot autonomously mutate projects. Task plans are persisted as structured proposals and require explicit approval through the separate proposal review endpoint; permissions, destination membership, expiry and source state are revalidated at approval time.
 
-**Not yet implemented:** persistent conversations, streaming, and user preferences. Meeting-note, shared-channel chat, and clean UTF-8 file summaries are supported through separate modes with mode-specific context.
+**Intentionally deferred:** persistent conversations and user preferences remain off until an explicit retention/export/deletion policy and access model are approved; prompts and answers are not stored by default. Streaming remains deferred until incremental response parsing, output validation, and sensitive-data redaction can be guaranteed before any content reaches the browser. Meeting-note, shared-channel chat, and clean UTF-8 file summaries are supported through separate modes with mode-specific context.
 
 ### B4 — Human-approved action proposals
 
@@ -164,7 +164,7 @@ Hosted endpoints must use HTTPS. HTTP loopback is accepted only when both `CAMPU
 
 ### Existing safety controls
 
-- Fixed-window rate limits: 10 requests/user/minute and 120 requests/workspace/hour, shared through the existing PostgreSQL rate-limit table.
+- Fixed-window rate limits: 10 requests/user/minute and 120 requests/workspace/hour, plus configurable daily ceilings (defaults 100/user and 1,000/workspace). Proposal endpoints have per-user minute and shared workspace-hour limits.
 - Provider call timeout: 45 seconds; output limit: 1,200 tokens and 12,000 characters.
 - Provider response body is capped at 256 KB before JSON parsing. Provider DNS resolution and HTTP exchange share a 45-second request deadline; private, loopback (except explicitly opted-in unauthenticated development), link-local and metadata destinations are blocked, DNS results are pinned, ambient proxies are disabled, and redirects are not followed.
 - File-summary storage reads are capped at 128 KB while streaming from local/S3 storage, then checked against recorded byte length and SHA-256. Only clean UTF-8 text files are eligible; no PDF parsing or OCR is implemented.
@@ -211,7 +211,7 @@ Track B is not ready for production until all applicable checks pass:
 
 ## 8. Current execution status
 
-**Implemented and merged in main:** seven assistant modes; authorized, bounded board/task, meeting-note, shared-channel and clean text-file context; provider URL/DNS protections; pattern-based sensitive-data redaction; explicit data-sharing consent; validated task-plan previews with per-task user-approved creation; Project Pulse analytics; rate limits; and responsive accessible dialogs.
+**Implemented in main:** seven assistant modes; authorized, bounded board/task, meeting-note, shared-channel and clean text-file context; provider URL/DNS protections; pattern-based sensitive-data redaction; explicit data-sharing consent; validated task-plan previews with human-approved proposal creation; Project Pulse analytics; provider rate limits; and responsive accessible dialogs. **Pending review in PR #49:** SHA-256 proposal rate-limit keys, shared workspace proposal throttling, configurable daily AI request ceilings, PostgreSQL-backed role/assignee/fingerprint regression tests, and environment documentation. These changes are not part of `main` until the PR passes checks and is merged.
 
 **Still gated before a production release:**
 - External AI provider selection, data-processing/retention terms, training-use confirmation, DPA/legal review, encrypted provider key, cost ceilings and live-provider verification. The feature stays disabled by default until an operator provisions these items.
