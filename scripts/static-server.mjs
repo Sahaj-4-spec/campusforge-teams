@@ -57,14 +57,14 @@ export function createStaticServer({ rootDir = DEFAULT_ROOT } = {}) {
       return;
     }
 
-    if (pathname.includes("\\0") || pathname.includes("\\\\")) {
+    if (pathname.includes("\0") || pathname.includes("\\")) {
       response.writeHead(400);
       response.end("Bad request");
       return;
     }
 
-    const relativePath = pathname.replace(/^\\/+/, "") || "index.html";
-    const candidate = resolve(root, relativePath);
+    const relativePath = pathname.startsWith("/") ? pathname.slice(1) : pathname;
+    const candidate = resolve(root, relativePath || "index.html");
     if (!isInsideRoot(root, candidate)) {
       response.writeHead(404);
       response.end("Not found");
@@ -100,15 +100,12 @@ export function createStaticServer({ rootDir = DEFAULT_ROOT } = {}) {
     }
 
     const extension = extname(filePath).toLowerCase();
-    const headers = {
+    response.writeHead(200, {
       "Content-Type": MIME_TYPES.get(extension) ?? "application/octet-stream",
       "Content-Length": fileInfo.size,
-      "Cache-Control": filePath === indexPath
-        ? "no-cache"
-        : "public, max-age=3600",
-    };
+      "Cache-Control": filePath === indexPath ? "no-cache" : "public, max-age=3600",
+    });
 
-    response.writeHead(200, headers);
     if (request.method === "HEAD") {
       response.end();
       return;
@@ -131,6 +128,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
 
   const server = createStaticServer();
   server.listen(port, "0.0.0.0", () => {
-    process.stdout.write(`CampusForge frontend listening on 0.0.0.0:${port}\\n`);
+    process.stdout.write(\`CampusForge frontend listening on 0.0.0.0:\${port}\n\`);
   });
 }
