@@ -27,7 +27,7 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::state::AppState;
 
-fn parse_frontend_origins(raw: &str) -> Result<Vec<HeaderValue>, Box<dyn std::error::Error>> {
+fn parse_frontend_origins(raw: &str, require_https: bool) -> Result<Vec<HeaderValue>, Box<dyn std::error::Error>> {
     let mut origins = Vec::new();
 
     for entry in raw.split(',').map(str::trim).filter(|entry| !entry.is_empty()) {
@@ -37,6 +37,7 @@ fn parse_frontend_origins(raw: &str) -> Result<Vec<HeaderValue>, Box<dyn std::er
 
         let parsed = url::Url::parse(entry)?;
         if !matches!(parsed.scheme(), "http" | "https")
+            || (require_https && parsed.scheme() != "https")
             || parsed.host_str().is_none()
             || !parsed.username().is_empty()
             || parsed.password().is_some()
@@ -133,7 +134,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // weakening credentialed CORS to a wildcard.
     let frontend_origin = std::env::var("FRONTEND_ORIGIN")
         .unwrap_or_else(|_| "http://localhost:5173".to_string());
-    let allowed_frontend_origins = parse_frontend_origins(&frontend_origin)?;
+    let production_mode = std::env::var("CAMPUSFORGE_ENV")
+        .is_ok_and(|value| value.eq_ignore_ascii_case("production"));
+    let allowed_frontend_origins = parse_frontend_origins(&frontend_origin, production_mode)?;
 
     // Log only non-secret database identity fields so the live target can be verified
     // without ever exposing DATABASE_URL or its credentials.
@@ -244,7 +247,8 @@ mod cors_origin_tests {
     #[test]
     fn accepts_multiple_exact_origins_and_deduplicates() {
         let origins = parse_frontend_origins(
-            "https://app.example.com, https://preview.example.com/, https://app.example.com"
+            "https://app.example.com, https://preview.example.com/, https://app.example.com",
+            true,
         ).expect("valid origins");
         assert_eq!(origins.len(), 2);
         assert_eq!(origins[0].to_str().unwrap(), "https://app.example.com");
@@ -253,17 +257,18 @@ mod cors_origin_tests {
 
     #[test]
     fn rejects_wildcard_for_credentialed_cors() {
-        assert!(parse_frontend_origins("*").is_err());
+        assert!(parse_frontend_origins("*", false).is_err());
     }
 
     #[test]
     fn rejects_paths_and_non_http_schemes() {
-        assert!(parse_frontend_origins("https://example.com/dashboard").is_err());
-        assert!(parse_frontend_origins("javascript:alert(1)").is_err());
+        assert!(parse_frontend_origins("https://example.com/dashboard", false).is_err());
+        assert!(parse_frontend_origins("javascript:alert(1)", false).is_err());
+        assert!(parse_frontend_origins("http://example.com", true).is_err());
     }
 
     #[test]
     fn rejects_an_empty_origin_list() {
-        assert!(parse_frontend_origins(" , , ").is_err());
+        assert!(parse_frontend_origins(" , , ", false).is_err());
     }
 }
