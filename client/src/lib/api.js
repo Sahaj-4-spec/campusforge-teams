@@ -95,9 +95,22 @@ async function authorizedFetch(path, options = {}) {
 }
 
 export const authApi = {
+  oauthProviders: () => request("/api/auth/providers"),
   login: (values) => request("/api/auth/login", { method: "POST", body: values }),
   logout: () => request("/api/auth/logout", { method: "POST" }),
   oauthStartUrl: (provider) => (API_BASE || window.location.origin) + "/api/auth/" + encodeURIComponent(provider) + "/start"
+};
+
+export const aiApi = {
+  status: () => request("/api/ai/status"),
+  ask: (values) => request("/api/ai/assistant", { method: "POST", body: values }),
+  insights: (boardId = null) => request("/api/ai/insights" + (boardId ? "?board_id=" + encodeURIComponent(boardId) : "")),
+  files: (boardId = null) => request("/api/ai/files" + (boardId ? "?board_id=" + encodeURIComponent(boardId) : "")),
+  proposals: () => request("/api/ai/proposals"),
+  proposalAudit: () => request("/api/ai/proposals/audit"),
+  createProposal: (values) => request("/api/ai/proposals", { method: "POST", body: values }),
+  applyProposal: (proposalId) => request("/api/ai/proposals/" + encodeURIComponent(proposalId) + "/apply", { method: "POST", body: {} }),
+  rejectProposal: (proposalId) => request("/api/ai/proposals/" + encodeURIComponent(proposalId) + "/reject", { method: "POST", body: {} })
 };
 
 export const workspaceApi = {

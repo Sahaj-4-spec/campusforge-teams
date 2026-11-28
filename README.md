@@ -80,7 +80,11 @@ The current non-AI completion branch adds:
 - PostgreSQL LISTEN/NOTIFY to relay workspace change signals across API instances, plus expiring presence leases.
 - An idempotency ledger for recurring task generation.
 
-These additional features are in draft PR #21 and are not in the deployed Render preview. The AI project assistant is intentionally excluded from this delivery. Production file storage still requires a private S3-compatible bucket and credentials. To require malware scanning, configure a reachable ClamAV TCP service and set `CAMPUSFORGE_REQUIRE_MALWARE_SCAN=true`; without that flag, uploads are marked unscanned and can be downloaded. Resend email and Google/GitHub/Discord login also require provider accounts, callback URLs, and backend secrets. See the [roadmap](docs/ROADMAP.md), [architecture](docs/ARCHITECTURE.md), [operations](docs/OPERATIONS.md), and [social sign-in setup](docs/SOCIAL_AUTH_SETUP.md).
+These additional features are part of the integrated review candidate and are not yet deployed to the hosted Render preview. Track B includes a read-only AI assistant, Project Pulse, and a persistent proposal review flow (PRs #39–#40), all feature-flagged off by default until an administrator configures a compatible provider and approves privacy, retention, and spending controls. The preview API has verified access to a private S3-compatible bucket and passed basic PUT/GET/DELETE checks. Production still needs a review of bucket access policies, encryption, lifecycle/versioning, and restore. To require malware scanning, configure a reachable ClamAV TCP service and set `CAMPUSFORGE_REQUIRE_MALWARE_SCAN=true`; without that flag, uploads are marked unscanned and can be downloaded. Resend email and Google/GitHub/Discord login also require provider accounts, callback URLs, and backend secrets. See the [roadmap](docs/ROADMAP.md), [architecture](docs/ARCHITECTURE.md), [operations](docs/OPERATIONS.md), and [social sign-in setup](docs/SOCIAL_AUTH_SETUP.md).
+
+### 8. Optional AI assistant (Track B)
+
+The integrated candidate includes a provider-neutral, workspace/board-scoped AI assistant for questions, summaries, task plans, risk reviews, and human-approved task proposals. Project Pulse is provider-independent and summarizes permitted project metrics; it has its own API/frontend feature flag and remains hidden and blocked by default until explicitly enabled. Every provider request requires an explicit data-sharing acknowledgement; provider access is restricted to bounded workspace context. Proposed task mutations are saved for review and revalidated at approval time; the model cannot autonomously write to the project. The assistant is disabled by default and must remain off until provider credentials, privacy/retention terms, and spending limits are approved. See [Track B implementation and safety guide](docs/track-b/README.md).
 
 ## 🛠️ Technology Stack
 
@@ -216,6 +220,9 @@ Edit `.env` and replace placeholder values with your local configuration. Never 
 | `CAMPUSFORGE_S3_ENDPOINT_URL` | Optional S3-compatible endpoint for R2/MinIO-style providers |
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Optional server-side credentials; use a dedicated S3 access key and secret in backend secrets |
 | `RESEND_API_KEY` / `EMAIL_FROM` | Optional server-side email provider key and verified sender; leave blank to keep email delivery disabled |
+| `CAMPUSFORGE_AI_ENABLED` | Track B assistant kill switch; defaults to `false` |
+| `CAMPUSFORGE_AI_API_BASE_URL` / `CAMPUSFORGE_AI_MODEL` | Server-only OpenAI-compatible chat-completions endpoint and model |
+| `CAMPUSFORGE_AI_API_KEY` | Server-only provider credential; never use a `VITE_*` variable or commit a real key |
 
 > For Neon, use the pooled or direct PostgreSQL connection string supplied by your Neon project and retain `sslmode=require`. Keep secrets in environment files or the hosting provider's secret store; never commit them.
 
@@ -256,7 +263,7 @@ The frontend milestone is connected to the authenticated Rust API.
 
 The active React application reads workspace, project, task, assignment, comment, and activity records from the authenticated Rust API backed by PostgreSQL. `client/src/data/demoData.js` remains as an unused legacy sample-data reference and is not the active application data source.
 
-**Connected in the merged collaboration suite and its non-AI completion branch:** calendar editing, filters, attendee invitations and reminders; advanced task filters, subtasks, checklists, labels, dependencies and idempotent recurrence; paginated notifications and task/channel mentions; shared file preview, quotas, content checks, optional malware scanning and audit; daily analytics snapshots and CSV export; team chat, direct messages, pins, edits/deletes, presence, typing, meeting notes and structured action items. Cross-instance workspace change signals use PostgreSQL LISTEN/NOTIFY. The latest non-AI additions are in draft PR #21 and are not live on the hosted preview. **Still pending before public release:** configure and test Google/GitHub/Discord OAuth applications and callback URLs, provision a private S3-compatible bucket and credentials, configure ClamAV and require scans, verify the Resend sender domain, complete browser/two-user acceptance and backup/restore tests, approve retention/privacy policies, and add fine-grained per-board authorization.
+**Included in the integrated collaboration candidate:** calendar editing, filters, attendee invitations and reminders; advanced task filters, subtasks, checklists, labels, dependencies and idempotent recurrence; paginated notifications and task/channel mentions; shared file preview, quotas, content checks, optional malware scanning and audit; daily analytics snapshots and CSV export; team chat, direct messages, pins, edits/deletes, presence, typing, meeting notes and structured action items. Cross-instance workspace change signals use PostgreSQL LISTEN/NOTIFY. The integrated candidate still requires fresh combined-branch checks and is not live on the hosted preview. **Still pending before public release:** configure and test Google/GitHub/Discord OAuth applications and callback URLs, provision a private S3-compatible bucket and credentials, configure ClamAV and require scans, verify the Resend sender domain, complete browser/two-user acceptance and backup/restore tests, approve retention/privacy policies, and finish two-account negative tests for the implemented per-board authorization rules.
 
 ## 🎨 UI Design System
 
@@ -274,7 +281,7 @@ The Cal.com reference is an independent visual analysis and is not affiliated wi
 
 - Store passwords using Argon2 password hashing.
 - Keep secrets in environment variables.
-- Authenticate API requests and authorize workspace membership on the server; fine-grained per-board permissions are not implemented yet.
+- Authenticate API requests on the server. The integrated candidate enforces board membership and role checks across board-scoped reads and writes; workspace owners/admins retain elevated access and board viewers are read-only. Two-account negative authorization acceptance remains pending.
 - Validate all incoming request data.
 - Use parameterized SQL queries through SQLx.
 - Keep S3-compatible buckets private and stream file downloads only after workspace authorization.
@@ -301,11 +308,11 @@ AI-assisted tools may be used to understand concepts, explore implementation app
 
 ## 🚧 Current Project Status
 
-**Status:** PR #12's six collaboration feature areas are merged into main. Provider-verified sign-up is in PR #19, and the remaining non-AI completion work is in draft PR #21 (which includes the PR #19 change). The existing Render preview is still an older deployment. PR #20 is the SQLx rollback-compatibility prerequisite. The release order is #20 first, then #21; do not deploy until CI, provider configuration, storage/scanning/email setup, and acceptance tests are complete and the user explicitly authorizes release.
+**Status:** The isolated `release/campusforge-integrated-candidate` branch consolidates the current `main` product with Track A session hardening and Track B AI assistant/proposal work; it is under integrated review in draft PR #41 and is not merged. The Render API rollout previously failed on a SQLx checksum mismatch; the Neon journal has since been corrected, but the API has not yet been redeployed against Neon. Production OAuth, mandatory malware scanning, email, verified backups/restore, perimeter controls, privacy review, multi-account acceptance and accessibility remain release gates. No deployment is authorized by this repository.
 
 The React client authenticates against the Rust API and loads workspace records from PostgreSQL. Task creation, editing, deletion, assignments, comments, project creation, column management, invitation workflows, and drag-and-drop ordering call protected Axum endpoints; they no longer rely on browser-local demo records. New accounts receive a starter workspace and project board when the workspace endpoint is first loaded. Authenticated WebSocket sessions receive workspace-scoped events after committed mutations, and the frontend reloads the snapshot when remote changes arrive.
 
-**Known release limitations:** browser end-to-end tests and a two-account WebSocket acceptance test have not been completed; invitation links are created for manual sharing and are not emailed; the workspace selector is not yet a functional workspace switcher; fine-grained per-board roles are not implemented. WebSocket events use an in-process broadcast channel, so run one API instance until shared pub/sub is added. The current Render database is a temporary free test database and expires on December 22, 2026; migrate to durable database hosting and configure backups before production use.
+**Known release limitations:** browser end-to-end tests and a two-account WebSocket acceptance test have not been completed; invitation links are created for manual sharing and are not emailed; the workspace selector is not yet a functional workspace switcher; fine-grained per-board roles are enforced in the integrated candidate; two-account negative authorization acceptance remains pending. WebSocket events use an in-process broadcast channel, so run one API instance until shared pub/sub is added. The current Render database is a temporary free test database and expires on December 22, 2026; migrate to durable database hosting and configure backups before production use.
 
 ## 🌐 Hosted Preview
 
@@ -344,4 +351,17 @@ The product roadmap and the decisions for the target data model, API boundaries,
 - [Architecture and project decisions](docs/ARCHITECTURE.md)
 - [Storage and email operations](docs/OPERATIONS.md)
 
-The non-AI completion work is in draft PR #21 and is not merged or deployed. The AI project assistant is intentionally excluded from this delivery. PR #20 is the SQLx rollback-compatibility prerequisite; PR #21 includes the provider-verified sign-up work from PR #19 and the remaining non-AI collaboration additions. The roadmap and operations guide record production configuration gates.
+The integrated candidate adds Track B's optional AI assistant and human-approved proposal workflow without enabling provider calls by default. Track A's session hardening is migration 0015; Track B's durable proposal/audit schema is migration 0014 and already exists on Neon `campusforge_app`. The board-level authorization policy now filters project snapshots and analytics, denies writes to board viewers, restricts task/board notifications and email to authorized recipients, and validates task assignees against board membership. Do not merge or deploy until the combined CI, migration/session checks, privacy and operational acceptance gates pass and the release owner explicitly authorizes release.
+
+
+## Track B — AI project assistant
+
+Track B is included in the integrated review candidate in [draft PR #41](https://github.com/Sahaj-4-spec/campusforge-teams/pull/41), with source work preserved in [PR #39](https://github.com/Sahaj-4-spec/campusforge-teams/pull/39) and [PR #40](https://github.com/Sahaj-4-spec/campusforge-teams/pull/40). It includes workspace/board-scoped context, four response modes (ask, summary, task breakdown, risk review), source references, prompt-injection boundaries, bounded context, and shared rate limits. Task plans are stored as proposals; applying them requires explicit human approval and a fresh permission/resource-state check.
+
+The API uses an OpenAI-compatible `/chat/completions` endpoint configured only on the Rust server. `CAMPUSFORGE_AI_ENABLED=false` keeps the feature disabled until provider terms, privacy controls, and production settings are approved. See [Track B implementation notes](docs/track-b/README.md) and the root `.env.example`. Conversation history is held in the current browser panel only; it is not persisted to PostgreSQL. Structured task proposals and metadata-only approval/rejection audit events are persisted; original prompts and raw model completions are not.
+
+
+Production configuration and release steps: see [docs/PRODUCTION_SETUP.md](docs/PRODUCTION_SETUP.md) and [the final acceptance checklist](docs/TRACK_A_FINAL_ACCEPTANCE.md).
+
+
+**Notification privacy:** task and project activity notifications are board-scoped. Only board members and workspace owners/admins can view the inbox item or receive its email; workspace invitation notifications use a separate invitation check. Migration 0016 adds the persisted board scope required for this enforcement.

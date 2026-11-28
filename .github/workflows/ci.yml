@@ -6,9 +6,9 @@ concurrency:
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'track-a/**', 'track-b/**', 'feature/**', 'release/**']
   pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read

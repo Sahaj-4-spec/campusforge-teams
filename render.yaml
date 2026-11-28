@@ -11,14 +11,67 @@ services:
     healthCheckPath: /api/health
     autoDeployTrigger: commit
     envVars:
+      # Supply the managed Neon application database through the service secret store.
+      # Keep this unsynchronized so a Blueprint refresh cannot replace the selected database.
       - key: DATABASE_URL
-        fromDatabase:
-          name: campusforge-test-db
-          property: connectionString
+        sync: false
       - key: JWT_SECRET
         generateValue: true
       - key: FRONTEND_ORIGIN
         value: https://campusforge-preview.onrender.com
+      - key: OAUTH_REDIRECT_BASE_URL
+        value: https://campusforge-api-test.onrender.com
+      - key: CAMPUSFORGE_AI_ENABLED
+        value: "false"
+      - key: CAMPUSFORGE_PROJECT_PULSE_ENABLED
+        value: "false"
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: DISCORD_CLIENT_ID
+        sync: false
+      - key: DISCORD_CLIENT_SECRET
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      # Preview defaults stay local/optional. Production must set
+      # CAMPUSFORGE_ENV=production, use S3, require remote storage and malware
+      # scanning, and provide a reachable private ClamAV service.
+      - key: CAMPUSFORGE_ENV
+        value: preview
+      - key: CAMPUSFORGE_STORAGE_MODE
+        value: local
+      - key: CAMPUSFORGE_REQUIRE_REMOTE_STORAGE
+        value: "false"
+      - key: CAMPUSFORGE_REQUIRE_MALWARE_SCAN
+        value: "false"
+      - key: CAMPUSFORGE_S3_BUCKET
+        sync: false
+      - key: CAMPUSFORGE_S3_REGION
+        sync: false
+      - key: CAMPUSFORGE_S3_ENDPOINT_URL
+        sync: false
+      - key: CAMPUSFORGE_S3_URL_STYLE
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: CAMPUSFORGE_CLAMAV_ADDR
+        sync: false
+      - key: CAMPUSFORGE_AI_API_BASE_URL
+        sync: false
+      - key: CAMPUSFORGE_AI_API_KEY
+        sync: false
+      - key: CAMPUSFORGE_AI_MODEL
+        sync: false
 
   - type: web
     name: campusforge-preview
@@ -31,6 +84,8 @@ services:
     envVars:
       - key: VITE_API_BASE_URL
         value: https://campusforge-api-test.onrender.com
+      - key: VITE_CAMPUSFORGE_PROJECT_PULSE_ENABLED
+        value: "false"
     routes:
       - type: rewrite
         source: /*

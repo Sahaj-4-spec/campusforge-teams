@@ -5,6 +5,7 @@ use reqwest::{
 };
 use sha2::{Digest, Sha256};
 use std::{env, path::{Component, Path, PathBuf}};
+use tokio::io::AsyncReadExt;
 use tokio_util::io::ReaderStream;
 use url::Url;
 
@@ -362,6 +363,50 @@ impl StorageService {
         }
     }
 
+    /// Read an object under a strict byte ceiling. Used for AI context and other
+    /// bounded consumers so incorrect metadata or a replaced object cannot cause
+    /// an unbounded allocation.
+    pub async fn get_limited(&self, key: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
+        Self::validate_key(key)?;
+        match &self.backend {
+            Backend::Local { directory } => {
+                let path = directory.join(key);
+                let file = tokio::fs::File::open(path).await.map_err(|error| error.to_string())?;
+                let mut bytes = Vec::with_capacity(max_bytes.min(64 * 1024));
+                file.take(max_bytes as u64 + 1).read_to_end(&mut bytes).await.map_err(|error| error.to_string())?;
+                if bytes.len() > max_bytes {
+                    return Err("Stored object exceeds the allowed read size".to_string());
+                }
+                Ok(bytes)
+            }
+            Backend::S3(backend) => {
+                let method = Method::GET;
+                let url = object_url(backend, key)?;
+                let payload_hash = sha256_hex(&[]);
+                let headers = signed_headers(backend, &method, &url, &payload_hash, None)?;
+                let mut response = backend.client.get(url)
+                    .headers(headers)
+                    .send().await
+                    .map_err(|error| format!("S3 download request failed: {error}"))?;
+                if !response.status().is_success() {
+                    // Do not buffer an untrusted S3 error body on a bounded-read path.
+                    return Err(format!("S3 download returned HTTP {}", response.status()));
+                }
+                if response.content_length().is_some_and(|length| length > max_bytes as u64) {
+                    return Err("Stored object exceeds the allowed read size".to_string());
+                }
+                let mut bytes = Vec::new();
+                while let Some(chunk) = response.chunk().await.map_err(|error| format!("Could not read S3 download response: {error}"))? {
+                    if bytes.len().saturating_add(chunk.len()) > max_bytes {
+                        return Err("Stored object exceeds the allowed read size".to_string());
+                    }
+                    bytes.extend_from_slice(&chunk);
+                }
+                Ok(bytes)
+            }
+        }
+    }
+
     pub async fn get(&self, key: &str) -> Result<Vec<u8>, String> {
         Self::validate_key(key)?;
         match &self.backend {
@@ -411,5 +456,29 @@ impl StorageService {
                 Err(s3_error(response, "delete").await)
             }
         }
+    }
+}
+
+
+#[cfg(test)]
+mod bounded_read_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn local_storage_reads_respect_the_requested_byte_ceiling() {
+        let directory = env::temp_dir().join(format!("campusforge-ai-read-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&directory).await.unwrap();
+        let key = "nested/document.md";
+        let source = directory.join(key);
+        tokio::fs::create_dir_all(source.parent().unwrap()).await.unwrap();
+        tokio::fs::write(&source, b"0123456789").await.unwrap();
+
+        let storage = StorageService {
+            backend: Backend::Local { directory: directory.clone() },
+        };
+        assert_eq!(storage.get_limited(key, 10).await.unwrap(), b"0123456789");
+        assert!(storage.get_limited(key, 9).await.is_err());
+
+        tokio::fs::remove_dir_all(directory).await.unwrap();
     }
 }

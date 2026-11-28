@@ -12,7 +12,7 @@ use axum::{
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
+use sqlx::{FromRow, PgPool};
 use validator::Validate;
 use sha2::{Digest, Sha256};
 
@@ -62,6 +62,8 @@ struct Claims {
     email: String,
     exp: usize,
     iat: usize,
+    #[serde(default)]
+    jti: String,
 }
 
 const SESSION_COOKIE_NAME: &str = "campusforge_session";
@@ -148,17 +150,94 @@ impl FromRequestParts<AppState> for AuthUser {
             ));
         }
 
-        let (user_id, _) = verify_token(&token, &state.jwt_secret).map_err(|_| {
+        let (user_id, _, session_id) =
+            verify_session_token(&token, &state.jwt_secret).map_err(|_| {
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(ApiError {
+                        error: "Your session is invalid or has expired",
+                    }),
+                )
+            })?;
+
+        let active: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+                SELECT 1 FROM auth_sessions
+                 WHERE id=$1 AND user_id=$2
+                   AND revoked_at IS NULL AND expires_at > NOW()
+            )",
+        )
+        .bind(session_id)
+        .bind(user_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "Could not validate authentication session");
             (
-                StatusCode::UNAUTHORIZED,
+                StatusCode::SERVICE_UNAVAILABLE,
                 Json(ApiError {
-                    error: "Your session is invalid or has expired",
+                    error: "Authentication is temporarily unavailable",
                 }),
             )
         })?;
 
+        if !active {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(ApiError {
+                    error: "Your session is invalid or has expired",
+                }),
+            ));
+        }
+
         Ok(Self(user_id))
     }
+}
+
+/// Board viewers may read board resources but cannot make changes.
+/// Explicit board membership is required for ordinary members; workspace owners and admins retain workspace-wide access.
+fn logout_request_allowed(
+    has_cookie: bool,
+    has_bearer: bool,
+    valid_bearer: bool,
+    trusted_origin: bool,
+) -> bool {
+    if has_cookie || !has_bearer {
+        trusted_origin
+    } else {
+        valid_bearer
+    }
+}
+
+pub(crate) fn board_role_allows(role: Option<&str>, write: bool) -> bool {
+    match (role, write) {
+        (Some("admin" | "member" | "viewer"), false) => true,
+        (Some("admin" | "member"), true) => true,
+        _ => false,
+    }
+}
+
+/// Return the caller's role on a board in the selected workspace.
+/// Ordinary members require explicit board membership; workspace owners and admins are elevated to board admin.
+pub(crate) async fn board_role(
+    pool: &PgPool,
+    user_id: uuid::Uuid,
+    workspace_id: uuid::Uuid,
+    board_id: uuid::Uuid,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT CASE WHEN wm.role IN ('owner','admin') THEN 'admin' ELSE bm.role END
+         FROM boards b
+         JOIN workspace_members wm ON wm.workspace_id=b.workspace_id AND wm.user_id=$1
+         LEFT JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id
+         WHERE b.workspace_id=$2 AND b.id=$3
+           AND (wm.role IN ('owner','admin') OR bm.user_id IS NOT NULL)",
+    )
+    .bind(user_id)
+    .bind(workspace_id)
+    .bind(board_id)
+    .fetch_optional(pool)
+    .await
 }
 
 /// Authenticated user scoped to one explicitly selected workspace.
@@ -235,27 +314,86 @@ impl FromRequestParts<AppState> for WorkspaceUser {
     }
 }
 
-/// Verify a bearer JWT and return the authenticated user ID.
-pub fn verify_token(token: &str, secret: &str) -> Result<(uuid::Uuid, usize), StatusCode> {
-    let decoded = decode::<Claims>(
+/// Decode a signed JWT. Tokens without a session identifier remain decodable for
+/// diagnostics, but are rejected by verify_session_token after revocation is enabled.
+fn decode_claims(token: &str, secret: &str) -> Result<Claims, StatusCode> {
+    decode::<Claims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
         &Validation::default(),
     )
-    .map_err(|_| StatusCode::UNAUTHORIZED)?;
-
-    let user_id = uuid::Uuid::parse_str(&decoded.claims.sub).map_err(|_| StatusCode::UNAUTHORIZED)?;
-    Ok((user_id, decoded.claims.exp))
+    .map(|decoded| decoded.claims)
+    .map_err(|_| StatusCode::UNAUTHORIZED)
 }
 
-pub(crate) fn issue_token(user_id: uuid::Uuid, email: &str, secret: &str) -> Result<(String, i64), StatusCode> {
+/// Verify a bearer JWT and return the authenticated user ID and expiry.
+pub fn verify_token(token: &str, secret: &str) -> Result<(uuid::Uuid, usize), StatusCode> {
+    let claims = decode_claims(token, secret)?;
+    let user_id = uuid::Uuid::parse_str(&claims.sub).map_err(|_| StatusCode::UNAUTHORIZED)?;
+    Ok((user_id, claims.exp))
+}
+
+/// Verify a JWT and require its JTI to be a valid server-recorded session ID.
+pub(crate) fn verify_session_token(
+    token: &str,
+    secret: &str,
+) -> Result<(uuid::Uuid, usize, uuid::Uuid), StatusCode> {
+    let claims = decode_claims(token, secret)?;
+    let user_id = uuid::Uuid::parse_str(&claims.sub).map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let session_id = uuid::Uuid::parse_str(&claims.jti).map_err(|_| StatusCode::UNAUTHORIZED)?;
+    Ok((user_id, claims.exp, session_id))
+}
+
+/// Persist only the non-secret session ID and lifecycle metadata, never the JWT.
+pub(crate) async fn persist_session(
+    db: &PgPool,
+    user_id: uuid::Uuid,
+    session_id: uuid::Uuid,
+    expires_at: usize,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO auth_sessions (id, user_id, expires_at)
+         VALUES ($1, $2, to_timestamp($3::bigint::double precision))",
+    )
+    .bind(session_id)
+    .bind(user_id)
+    .bind(expires_at as i64)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn run_session_cleanup(db: PgPool) {
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        if let Err(error) = sqlx::query(
+            "DELETE FROM auth_sessions
+             WHERE expires_at < NOW() - INTERVAL '7 days'
+                OR revoked_at < NOW() - INTERVAL '7 days'",
+        )
+        .execute(&db)
+        .await
+        {
+            tracing::warn!(%error, "Could not clean expired authentication sessions");
+        }
+    }
+}
+
+pub(crate) fn issue_token(
+    user_id: uuid::Uuid,
+    email: &str,
+    secret: &str,
+) -> Result<(String, i64, uuid::Uuid, usize), StatusCode> {
     let now = Utc::now();
     let expires_in = Duration::hours(24).num_seconds();
+    let expires_at = (now + Duration::seconds(expires_in)).timestamp() as usize;
+    let session_id = uuid::Uuid::new_v4();
     let claims = Claims {
         sub: user_id.to_string(),
         email: email.to_owned(),
         iat: now.timestamp() as usize,
-        exp: (now + Duration::seconds(expires_in)).timestamp() as usize,
+        exp: expires_at,
+        jti: session_id.to_string(),
     };
 
     let token = encode(
@@ -265,7 +403,7 @@ pub(crate) fn issue_token(user_id: uuid::Uuid, email: &str, secret: &str) -> Res
     )
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Ok((token, expires_in))
+    Ok((token, expires_in, session_id, expires_at))
 }
 
 
@@ -383,12 +521,23 @@ async fn login(
         ));
     }
 
-    let (token, expires_in) = issue_token(user.id, &user.email, &state.jwt_secret)
-        .map_err(|status| {
+    let (token, expires_in, session_id, expires_at) =
+        issue_token(user.id, &user.email, &state.jwt_secret).map_err(|status| {
             (
                 status,
                 Json(ApiError {
                     error: "Unable to create session",
+                }),
+            )
+        })?;
+    persist_session(&state.db, user.id, session_id, expires_at)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "Could not persist authentication session");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ApiError {
+                    error: "Sign-in is temporarily unavailable",
                 }),
             )
         })?;
@@ -410,16 +559,74 @@ async fn login(
     Ok(response)
 }
 
-async fn logout(headers: HeaderMap) -> Result<Response, StatusCode> {
-    if !frontend_origin_matches(&headers) {
-        return Err(StatusCode::FORBIDDEN);
+fn session_or_bearer_token_from_headers(headers: &HeaderMap) -> Option<(String, bool)> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(|token| (token.to_owned(), false))
+        .or_else(|| session_token_from_headers(headers).map(|token| (token, true)))
+}
+
+async fn logout(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, StatusCode> {
+    let bearer_token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+    let cookie_token = session_token_from_headers(&headers);
+
+    // A request may carry two distinct sessions. Revoke both before clearing the
+    // cookie; a bad bearer must never suppress revocation of a valid cookie.
+    let valid_bearer = bearer_token
+        .and_then(|token| verify_session_token(token, &state.jwt_secret).ok())
+        .is_some();
+    if !logout_request_allowed(
+        cookie_token.is_some(),
+        bearer_token.is_some(),
+        valid_bearer,
+        frontend_origin_matches(&headers),
+    ) {
+        return Err(if cookie_token.is_some() || bearer_token.is_none() {
+            StatusCode::FORBIDDEN
+        } else {
+            StatusCode::UNAUTHORIZED
+        });
     }
+
+    let mut tokens = Vec::new();
+    if let Some(token) = bearer_token { tokens.push(token.to_owned()); }
+    if let Some(token) = cookie_token {
+        if !tokens.iter().any(|existing| existing == &token) {
+            tokens.push(token);
+        }
+    }
+
+    for token in tokens {
+        if let Ok((user_id, _, session_id)) = verify_session_token(&token, &state.jwt_secret) {
+            sqlx::query(
+                "UPDATE auth_sessions
+                    SET revoked_at = COALESCE(revoked_at, NOW())
+                  WHERE id=$1 AND user_id=$2",
+            )
+            .bind(session_id)
+            .bind(user_id)
+            .execute(&state.db)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, "Could not revoke authentication session");
+                StatusCode::SERVICE_UNAVAILABLE
+            })?;
+        }
+    }
+
     let mut response = StatusCode::NO_CONTENT.into_response();
     response.headers_mut().append(header::SET_COOKIE, clear_session_cookie_header());
     Ok(response)
 }
 
-/// Public authentication endpoints; OAuth routes are merged by the application router.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/register", post(register))
@@ -431,15 +638,133 @@ pub fn router() -> Router<AppState> {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn board_role_lookup_uses_real_workspace_and_board_memberships() {
+        let Ok(database_url) = std::env::var("DATABASE_URL") else {
+            eprintln!("Skipping board role integration test: DATABASE_URL is not configured");
+            return;
+        };
+        let pool = sqlx::PgPool::connect(&database_url).await
+            .expect("test PostgreSQL service should accept connections");
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .expect("board-role integration test schema should be migrated");
+        let user_id = uuid::Uuid::new_v4();
+        let workspace_id = uuid::Uuid::new_v4();
+        let board_id = uuid::Uuid::new_v4();
+        let email = format!("{}@example.test", uuid::Uuid::new_v4());
+        let provider_user_id = format!("board-role-{}", uuid::Uuid::new_v4());
+
+        let mut tx = pool.begin().await.expect("fixture transaction should start");
+        sqlx::query(
+            "INSERT INTO users(id,email,password_hash,full_name)
+             VALUES($1,$2,NULL,'Board Role Test User')",
+        ).bind(user_id).bind(&email).execute(&mut *tx).await
+            .expect("OAuth fixture user should be inserted");
+        sqlx::query(
+            "INSERT INTO oauth_accounts(provider,provider_user_id,user_id,email)
+             VALUES('google',$1,$2,$3)",
+        ).bind(provider_user_id).bind(user_id).bind(&email).execute(&mut *tx).await
+            .expect("verified provider identity should be attached");
+        sqlx::query("INSERT INTO workspaces(id,name,owner_id) VALUES($1,'Board Role Test',$2)")
+            .bind(workspace_id).bind(user_id).execute(&mut *tx).await
+            .expect("workspace fixture should be inserted");
+        sqlx::query("INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner')")
+            .bind(workspace_id).bind(user_id).execute(&mut *tx).await
+            .expect("workspace owner membership should be inserted");
+        sqlx::query("INSERT INTO boards(id,workspace_id,name,created_by) VALUES($1,$2,'Role Test',$3)")
+            .bind(board_id).bind(workspace_id).bind(user_id).execute(&mut *tx).await
+            .expect("board fixture should be inserted");
+        sqlx::query("INSERT INTO board_members(board_id,user_id,role) VALUES($1,$2,'admin')")
+            .bind(board_id).bind(user_id).execute(&mut *tx).await
+            .expect("board administrator membership should be inserted");
+        tx.commit().await.expect("board role fixture should commit");
+
+        assert_eq!(board_role(&pool,user_id,workspace_id,board_id).await.unwrap().as_deref(),Some("admin"));
+        sqlx::query("UPDATE board_members SET role='viewer' WHERE board_id=$1 AND user_id=$2")
+            .bind(board_id).bind(user_id).execute(&pool).await
+            .expect("board role should be changeable");
+        sqlx::query("UPDATE workspace_members SET role='member' WHERE workspace_id=$1 AND user_id=$2")
+            .bind(workspace_id).bind(user_id).execute(&pool).await
+            .expect("workspace role should be demoted for board-viewer assertion");
+        let role = board_role(&pool,user_id,workspace_id,board_id).await.unwrap();
+        assert_eq!(role.as_deref(),Some("viewer"));
+        assert!(board_role_allows(role.as_deref(),false));
+        assert!(!board_role_allows(role.as_deref(),true));
+
+        sqlx::query("UPDATE workspace_members SET role='owner' WHERE workspace_id=$1 AND user_id=$2")
+            .bind(workspace_id).bind(user_id).execute(&pool).await
+            .expect("workspace owner role should restore elevated access");
+        let owner_role = board_role(&pool,user_id,workspace_id,board_id).await.unwrap();
+        assert_eq!(owner_role.as_deref(),Some("admin"));
+        assert!(board_role_allows(owner_role.as_deref(),true));
+
+        sqlx::query("DELETE FROM workspaces WHERE id=$1").bind(workspace_id).execute(&pool).await
+            .expect("workspace fixture should be removed");
+        sqlx::query("DELETE FROM users WHERE id=$1").bind(user_id).execute(&pool).await
+            .expect("OAuth fixture user should be removed");
+        pool.close().await;
+    }
+
+    #[test]
+    fn cookie_logout_requires_trusted_origin_even_with_a_bearer() {
+        assert!(!logout_request_allowed(true, true, true, false));
+        assert!(!logout_request_allowed(true, true, false, false));
+        assert!(logout_request_allowed(true, true, true, true));
+        assert!(logout_request_allowed(true, false, false, true));
+        assert!(logout_request_allowed(false, true, true, false));
+        assert!(!logout_request_allowed(false, true, false, true));
+        assert!(logout_request_allowed(false, false, false, true));
+        assert!(!logout_request_allowed(false, false, false, false));
+    }
+
+    #[test]
+    fn board_roles_allow_viewers_to_read_but_not_write() {
+        assert!(board_role_allows(Some("viewer"), false));
+        assert!(!board_role_allows(Some("viewer"), true));
+        assert!(board_role_allows(Some("member"), false));
+        assert!(board_role_allows(Some("member"), true));
+        assert!(board_role_allows(Some("admin"), false));
+        assert!(board_role_allows(Some("admin"), true));
+        assert!(!board_role_allows(None, false));
+        assert!(!board_role_allows(None, true));
+        assert!(!board_role_allows(Some("unknown"), false));
+    }
+
+    #[test]
+    fn logout_resolves_bearer_tokens_and_cookie_sessions() {
+        let mut bearer_headers = HeaderMap::new();
+        bearer_headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer bearer-token"));
+        bearer_headers.insert(header::COOKIE, HeaderValue::from_static("campusforge_session=cookie-token"));
+        assert_eq!(
+            session_or_bearer_token_from_headers(&bearer_headers),
+            Some(("bearer-token".to_owned(), false))
+        );
+
+        let mut cookie_headers = HeaderMap::new();
+        cookie_headers.insert(header::COOKIE, HeaderValue::from_static("campusforge_session=cookie-token"));
+        assert_eq!(
+            session_or_bearer_token_from_headers(&cookie_headers),
+            Some(("cookie-token".to_owned(), true))
+        );
+    }
+
     #[test]
     fn issued_hs256_token_verifies_user_and_expiration() {
         let user_id = uuid::Uuid::new_v4();
         let secret = "test-only-secret-with-more-than-32-characters";
-        let (token, lifetime) = issue_token(user_id, "student@example.edu", secret).unwrap();
+        let (token, lifetime, session_id, token_expires_at) =
+            issue_token(user_id, "student@example.edu", secret).unwrap();
 
         let (verified_user, expires_at) = verify_token(&token, secret).unwrap();
+        let (session_user, session_expiry, verified_session_id) =
+            verify_session_token(&token, secret).unwrap();
 
         assert_eq!(verified_user, user_id);
+        assert_eq!(session_user, user_id);
+        assert_eq!(verified_session_id, session_id);
+        assert_eq!(session_expiry, token_expires_at);
         assert!(lifetime > 0);
         assert!(expires_at > Utc::now().timestamp() as usize);
     }
@@ -448,7 +773,7 @@ mod tests {
     fn token_with_a_modified_signature_is_rejected() {
         let user_id = uuid::Uuid::new_v4();
         let secret = "test-only-secret-with-more-than-32-characters";
-        let (mut token, _) = issue_token(user_id, "student@example.edu", secret).unwrap();
+        let (mut token, _, _, _) = issue_token(user_id, "student@example.edu", secret).unwrap();
 
         let signature_start = token.rfind('.').unwrap() + 1;
         let first_signature_byte = token.as_bytes()[signature_start];
@@ -489,7 +814,7 @@ mod tests {
     #[test]
     fn token_signed_with_a_different_secret_is_rejected() {
         let user_id = uuid::Uuid::new_v4();
-        let (token, _) = issue_token(
+        let (token, _, _, _) = issue_token(
             user_id,
             "student@example.edu",
             "original-test-secret-with-more-than-32-chars",

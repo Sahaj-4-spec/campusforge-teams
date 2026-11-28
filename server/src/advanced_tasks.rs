@@ -29,8 +29,10 @@ async fn task_scope(state: &AppState, user_id: Uuid, task_id: Uuid) -> ApiResult
     sqlx::query_as(
         "SELECT b.workspace_id, b.id, t.list_id
          FROM tasks t JOIN lists l ON l.id=t.list_id JOIN boards b ON b.id=l.board_id
-         JOIN workspace_members wm ON wm.workspace_id=b.workspace_id
-         WHERE t.id=$1 AND wm.user_id=$2",
+         JOIN workspace_members wm ON wm.workspace_id=b.workspace_id AND wm.user_id=$2
+         LEFT JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id
+         WHERE t.id=$1
+           AND (wm.role IN ('owner','admin') OR bm.user_id IS NOT NULL)",
     )
     .bind(task_id)
     .bind(user_id)
@@ -40,17 +42,33 @@ async fn task_scope(state: &AppState, user_id: Uuid, task_id: Uuid) -> ApiResult
     .ok_or_else(|| fail(StatusCode::NOT_FOUND, "Task not found"))
 }
 
-async fn task_in_workspace(state: &AppState, task_id: Uuid, workspace_id: Uuid) -> ApiResult<()> {
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM tasks t JOIN lists l ON l.id=t.list_id
-         JOIN boards b ON b.id=l.board_id WHERE t.id=$1 AND b.workspace_id=$2)",
-    )
-    .bind(task_id)
-    .bind(workspace_id)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|error| internal(error, "Could not validate task relationship"))?;
-    if exists { Ok(()) } else { Err(fail(StatusCode::BAD_REQUEST, "The selected task is outside this project")) }
+async fn task_write_scope(state: &AppState, user_id: Uuid, task_id: Uuid) -> ApiResult<(Uuid, Uuid, Uuid)> {
+    let scope = task_scope(state, user_id, task_id).await?;
+    let role = crate::auth::board_role(&state.db, user_id, scope.0, scope.1)
+        .await
+        .map_err(|error| internal(error, "Could not verify board write permissions"))?;
+    if crate::auth::board_role_allows(role.as_deref(), true) {
+        Ok(scope)
+    } else if role.as_deref() == Some("viewer") {
+        Err(fail(StatusCode::FORBIDDEN, "This project is read-only for your account"))
+    } else {
+        Err(fail(StatusCode::NOT_FOUND, "Task not found"))
+    }
+}
+
+async fn task_in_workspace(
+    state: &AppState, user_id: Uuid, task_id: Uuid, workspace_id: Uuid,
+) -> ApiResult<()> {
+    let (_, board_id, _) = task_scope(state, user_id, task_id).await
+        .map_err(|_| fail(StatusCode::BAD_REQUEST, "The selected task is outside an accessible project"))?;
+    let role = crate::auth::board_role(&state.db, user_id, workspace_id, board_id)
+        .await
+        .map_err(|error| internal(error, "Could not validate dependency board permissions"))?;
+    if crate::auth::board_role_allows(role.as_deref(), true) {
+        Ok(())
+    } else {
+        Err(fail(StatusCode::BAD_REQUEST, "The selected task is outside a writable project"))
+    }
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -182,7 +200,7 @@ async fn subtask_create(
     Path(parent_task_id): Path<Uuid>,
     Json(input): Json<SubtaskInput>,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
-    let (workspace_id, board_id, list_id) = task_scope(&state, user_id, parent_task_id).await?;
+    let (workspace_id, board_id, list_id) = task_write_scope(&state, user_id, parent_task_id).await?;
     let title = input.title.trim();
     if title.is_empty() || title.chars().count() > 180 {
         return Err(fail(StatusCode::BAD_REQUEST, "Subtask title must be between 1 and 180 characters"));
@@ -230,7 +248,7 @@ async fn subtask_update(
     Path(subtask_id): Path<Uuid>,
     Json(input): Json<SubtaskUpdate>,
 ) -> ApiResult<StatusCode> {
-    let (workspace_id, board_id, _) = task_scope(&state, user_id, subtask_id).await?;
+    let (workspace_id, board_id, _) = task_write_scope(&state, user_id, subtask_id).await?;
     let is_child: bool = sqlx::query_scalar("SELECT parent_task_id IS NOT NULL FROM tasks WHERE id=$1")
         .bind(subtask_id).fetch_one(&state.db).await
         .map_err(|error| internal(error, "Could not verify subtask"))?;
@@ -276,7 +294,7 @@ async fn subtask_delete(
     AuthUser(user_id): AuthUser,
     Path(subtask_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let (workspace_id, board_id, _) = task_scope(&state, user_id, subtask_id).await?;
+    let (workspace_id, board_id, _) = task_write_scope(&state, user_id, subtask_id).await?;
     let is_child: bool = sqlx::query_scalar("SELECT parent_task_id IS NOT NULL FROM tasks WHERE id=$1")
         .bind(subtask_id).fetch_one(&state.db).await
         .map_err(|error| internal(error, "Could not verify subtask"))?;
@@ -311,7 +329,7 @@ async fn checklist_create(
     Path(task_id): Path<Uuid>,
     Json(input): Json<ChecklistInput>,
 ) -> ApiResult<(StatusCode, Json<ChecklistItem>)> {
-    let (workspace_id, board_id, _) = task_scope(&state, user_id, task_id).await?;
+    let (workspace_id, board_id, _) = task_write_scope(&state, user_id, task_id).await?;
     let title = input.title.trim();
     if title.is_empty() || title.chars().count()>240 {
         return Err(fail(StatusCode::BAD_REQUEST,"Checklist item must be between 1 and 240 characters"));
@@ -343,26 +361,33 @@ async fn checklist_update(
     Path(item_id):Path<Uuid>,
     Json(input):Json<ChecklistUpdate>,
 )->ApiResult<StatusCode>{
-    let scope:Option<(Uuid,Uuid)>=sqlx::query_as(
-        "SELECT b.workspace_id,b.id FROM task_checklist_items c JOIN tasks t ON t.id=c.task_id
-         JOIN lists l ON l.id=t.list_id JOIN boards b ON b.id=l.board_id
-         JOIN workspace_members wm ON wm.workspace_id=b.workspace_id
-         WHERE c.id=$1 AND wm.user_id=$2")
-        .bind(item_id).bind(user_id).fetch_optional(&state.db).await
-        .map_err(|error|internal(error,"Could not verify checklist item"))?;
-    let Some((workspace_id,board_id))=scope else{return Err(fail(StatusCode::NOT_FOUND,"Checklist item not found"));};
     let title=input.title.as_deref().map(str::trim);
     if title.is_some_and(|value|value.is_empty()||value.chars().count()>240){
         return Err(fail(StatusCode::BAD_REQUEST,"Checklist item title is invalid"));
     }
-    sqlx::query(
-        "UPDATE task_checklist_items SET title=COALESCE($1,title),
-          is_done=COALESCE($2,is_done),
-          completed_by=CASE WHEN $2 IS TRUE THEN $3 WHEN $2 IS FALSE THEN NULL ELSE completed_by END,
-          completed_at=CASE WHEN $2 IS TRUE THEN NOW() WHEN $2 IS FALSE THEN NULL ELSE completed_at END
-         WHERE id=$4")
-        .bind(title).bind(input.is_done).bind(user_id).bind(item_id).execute(&state.db).await
+    let scope:Option<(Uuid,Uuid)>=sqlx::query_as(
+        "UPDATE task_checklist_items c
+            SET title=COALESCE($1,c.title),
+                is_done=COALESCE($2,is_done),
+                completed_by=CASE WHEN $2 IS TRUE THEN $3 WHEN $2 IS FALSE THEN NULL ELSE completed_by END,
+                completed_at=CASE WHEN $2 IS TRUE THEN NOW() WHEN $2 IS FALSE THEN NULL ELSE completed_at END
+           FROM tasks t
+           JOIN lists l ON l.id=t.list_id
+           JOIN boards b ON b.id=l.board_id
+           JOIN workspace_members wm ON wm.workspace_id=b.workspace_id AND wm.user_id=$3
+          WHERE c.id=$4 AND c.task_id=t.id
+            AND (
+                wm.role IN ('owner','admin')
+                OR EXISTS (
+                    SELECT 1 FROM board_members bm
+                     WHERE bm.board_id=b.id AND bm.user_id=$3 AND bm.role IN ('admin','member')
+                )
+            )
+          RETURNING b.workspace_id,b.id")
+        .bind(title).bind(input.is_done).bind(user_id).bind(item_id)
+        .fetch_optional(&state.db).await
         .map_err(|error|internal(error,"Could not update checklist item"))?;
+    let Some((workspace_id,board_id))=scope else{return Err(fail(StatusCode::NOT_FOUND,"Checklist item not found"));};
     state.publish_workspace_event(workspace_id,Some(board_id),"checklist_item_updated","updated a checklist item");
     Ok(StatusCode::NO_CONTENT)
 }
@@ -371,14 +396,23 @@ async fn checklist_delete(
     State(state):State<AppState>,AuthUser(user_id):AuthUser,Path(item_id):Path<Uuid>,
 )->ApiResult<StatusCode>{
     let scope:Option<(Uuid,Uuid)>=sqlx::query_as(
-        "SELECT b.workspace_id,b.id FROM task_checklist_items c JOIN tasks t ON t.id=c.task_id
-         JOIN lists l ON l.id=t.list_id JOIN boards b ON b.id=l.board_id
-         JOIN workspace_members wm ON wm.workspace_id=b.workspace_id WHERE c.id=$1 AND wm.user_id=$2")
+        "DELETE FROM task_checklist_items c
+          USING tasks t
+          JOIN lists l ON l.id=t.list_id
+          JOIN boards b ON b.id=l.board_id
+          JOIN workspace_members wm ON wm.workspace_id=b.workspace_id AND wm.user_id=$2
+         WHERE c.id=$1 AND c.task_id=t.id
+           AND (
+                wm.role IN ('owner','admin')
+                OR EXISTS (
+                    SELECT 1 FROM board_members bm
+                     WHERE bm.board_id=b.id AND bm.user_id=$2 AND bm.role IN ('admin','member')
+                )
+           )
+         RETURNING b.workspace_id,b.id")
         .bind(item_id).bind(user_id).fetch_optional(&state.db).await
-        .map_err(|error|internal(error,"Could not verify checklist item"))?;
-    let Some((workspace_id,board_id))=scope else{return Err(fail(StatusCode::NOT_FOUND,"Checklist item not found"));};
-    sqlx::query("DELETE FROM task_checklist_items WHERE id=$1").bind(item_id).execute(&state.db).await
         .map_err(|error|internal(error,"Could not delete checklist item"))?;
+    let Some((workspace_id,board_id))=scope else{return Err(fail(StatusCode::NOT_FOUND,"Checklist item not found"));};
     state.publish_workspace_event(workspace_id,Some(board_id),"checklist_item_deleted","deleted a checklist item");
     Ok(StatusCode::NO_CONTENT)
 }
@@ -420,7 +454,7 @@ async fn task_label_add(
     State(state):State<AppState>,AuthUser(user_id):AuthUser,
     Path((task_id,label_id)):Path<(Uuid,Uuid)>,
 )->ApiResult<StatusCode>{
-    let (workspace_id,board_id,_)=task_scope(&state,user_id,task_id).await?;
+    let (workspace_id,board_id,_)=task_write_scope(&state,user_id,task_id).await?;
     let label_valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM labels WHERE id=$1 AND workspace_id=$2)")
         .bind(label_id).bind(workspace_id).fetch_one(&state.db).await.map_err(|error|internal(error,"Could not validate label"))?;
     if !label_valid{return Err(fail(StatusCode::BAD_REQUEST,"Label is outside this workspace"));}
@@ -434,7 +468,7 @@ async fn task_label_remove(
     State(state):State<AppState>,AuthUser(user_id):AuthUser,
     Path((task_id,label_id)):Path<(Uuid,Uuid)>,
 )->ApiResult<StatusCode>{
-    let (workspace_id,board_id,_)=task_scope(&state,user_id,task_id).await?;
+    let (workspace_id,board_id,_)=task_write_scope(&state,user_id,task_id).await?;
     sqlx::query("DELETE FROM task_labels WHERE task_id=$1 AND label_id=$2")
         .bind(task_id).bind(label_id).execute(&state.db).await.map_err(|error|internal(error,"Could not remove label"))?;
     state.publish_workspace_event(workspace_id,Some(board_id),"task_label_removed","removed a task label");
@@ -450,8 +484,8 @@ async fn dependency_add(
     Path(task_id): Path<Uuid>,
     Json(input): Json<DependencyInput>,
 ) -> ApiResult<StatusCode> {
-    let (workspace_id, board_id, _) = task_scope(&state, user_id, task_id).await?;
-    task_in_workspace(&state, input.depends_on_task_id, workspace_id).await?;
+    let (workspace_id, board_id, _) = task_write_scope(&state, user_id, task_id).await?;
+    task_in_workspace(&state, user_id, input.depends_on_task_id, workspace_id).await?;
     if task_id == input.depends_on_task_id {
         return Err(fail(StatusCode::BAD_REQUEST, "A task cannot depend on itself"));
     }
@@ -524,7 +558,7 @@ async fn dependency_remove(
     State(state):State<AppState>,AuthUser(user_id):AuthUser,
     Path((task_id,depends_on_task_id)):Path<(Uuid,Uuid)>,
 )->ApiResult<StatusCode>{
-    let (workspace_id,board_id,_)=task_scope(&state,user_id,task_id).await?;
+    let (workspace_id,board_id,_)=task_write_scope(&state,user_id,task_id).await?;
     sqlx::query("DELETE FROM task_dependencies WHERE task_id=$1 AND depends_on_task_id=$2")
         .bind(task_id).bind(depends_on_task_id).execute(&state.db).await
         .map_err(|error|internal(error,"Could not remove task dependency"))?;
@@ -539,7 +573,7 @@ async fn estimate_update(
     State(state):State<AppState>,AuthUser(user_id):AuthUser,
     Path(task_id):Path<Uuid>,Json(input):Json<EstimateInput>,
 )->ApiResult<StatusCode>{
-    let (workspace_id,board_id,_)=task_scope(&state,user_id,task_id).await?;
+    let (workspace_id,board_id,_)=task_write_scope(&state,user_id,task_id).await?;
     if input.estimated_minutes.is_some_and(|value|value<1||value>100000){
         return Err(fail(StatusCode::BAD_REQUEST,"Estimated time must be between 1 and 100000 minutes"));
     }
@@ -561,7 +595,7 @@ async fn recurrence_update(
     State(state):State<AppState>,AuthUser(user_id):AuthUser,
     Path(task_id):Path<Uuid>,Json(input):Json<RecurrenceInput>,
 )->ApiResult<StatusCode>{
-    let (workspace_id,board_id,_)=task_scope(&state,user_id,task_id).await?;
+    let (workspace_id,board_id,_)=task_write_scope(&state,user_id,task_id).await?;
     match input.interval_days {
         None=>{
             sqlx::query("DELETE FROM task_recurrence_rules WHERE template_task_id=$1").bind(task_id).execute(&state.db).await
@@ -743,10 +777,10 @@ async fn process_recurrences(state:&AppState){
 }
 
 async fn process_deadline_notifications(state:&AppState){
-    let approaching=sqlx::query_as::<_,(Uuid,Uuid)>(
+    let approaching=sqlx::query_as::<_,(Uuid,Uuid,Uuid)>(
         "WITH inserted AS (
-            INSERT INTO notifications(workspace_id,recipient_user_id,notification_type,title,body,resource_type,resource_id,dedupe_key)
-            SELECT b.workspace_id,ta.user_id,'deadline_approaching','Deadline approaching',
+            INSERT INTO notifications(workspace_id,board_id,recipient_user_id,notification_type,title,body,resource_type,resource_id,dedupe_key)
+            SELECT b.workspace_id,b.id,ta.user_id,'deadline_approaching','Deadline approaching',
                 'A task assigned to you is due within the next 24 hours.','task',t.id,
                 'deadline:'||t.id::text||':'||ta.user_id::text||':'||to_char(t.due_at AT TIME ZONE 'UTC','YYYY-MM-DD')
             FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id
@@ -756,8 +790,11 @@ async fn process_deadline_notifications(state:&AppState){
             WHERE t.due_at>NOW() AND t.due_at<=NOW()+INTERVAL '24 hours'
               AND lower(l.name) NOT IN ('done','complete','completed')
               AND (COALESCE(p.in_app_enabled,TRUE) OR COALESCE(p.email_enabled,FALSE))
+              AND (wm.role IN ('owner','admin') OR EXISTS(
+                    SELECT 1 FROM board_members bm WHERE bm.board_id=b.id AND bm.user_id=ta.user_id
+              ))
             ON CONFLICT(dedupe_key) DO NOTHING
-            RETURNING id,workspace_id,recipient_user_id
+            RETURNING id,workspace_id,recipient_user_id,board_id
          ),
          queued_emails AS (
             INSERT INTO notification_email_outbox(notification_id,recipient_user_id)
@@ -767,15 +804,15 @@ async fn process_deadline_notifications(state:&AppState){
             ON CONFLICT(notification_id) DO NOTHING
             RETURNING notification_id
          )
-         SELECT workspace_id,recipient_user_id FROM inserted")
+         SELECT workspace_id,recipient_user_id,board_id FROM inserted")
         .fetch_all(&state.db).await;
     if let Ok(rows)=approaching{
-        for (workspace_id,_) in rows{state.publish_workspace_event(workspace_id,None,"notification_created","a deadline reminder is available");}
+        for (workspace_id,_,board_id) in rows{state.publish_workspace_event(workspace_id,Some(board_id),"notification_created","a deadline reminder is available");}
     }
-    let overdue=sqlx::query_as::<_,(Uuid,Uuid)>(
+    let overdue=sqlx::query_as::<_,(Uuid,Uuid,Uuid)>(
         "WITH inserted AS (
-            INSERT INTO notifications(workspace_id,recipient_user_id,notification_type,title,body,resource_type,resource_id,dedupe_key)
-            SELECT b.workspace_id,ta.user_id,'overdue_task','Task overdue',
+            INSERT INTO notifications(workspace_id,board_id,recipient_user_id,notification_type,title,body,resource_type,resource_id,dedupe_key)
+            SELECT b.workspace_id,b.id,ta.user_id,'overdue_task','Task overdue',
                 'A task assigned to you is overdue.','task',t.id,
                 'overdue:'||t.id::text||':'||ta.user_id::text||':'||to_char(t.due_at AT TIME ZONE 'UTC','YYYY-MM-DD')
             FROM tasks t JOIN task_assignees ta ON ta.task_id=t.id
@@ -785,8 +822,11 @@ async fn process_deadline_notifications(state:&AppState){
             WHERE t.due_at<NOW() AND t.due_at>=NOW()-INTERVAL '24 hours'
               AND lower(l.name) NOT IN ('done','complete','completed')
               AND (COALESCE(p.in_app_enabled,TRUE) OR COALESCE(p.email_enabled,FALSE))
+              AND (wm.role IN ('owner','admin') OR EXISTS(
+                    SELECT 1 FROM board_members bm WHERE bm.board_id=b.id AND bm.user_id=ta.user_id
+              ))
             ON CONFLICT(dedupe_key) DO NOTHING
-            RETURNING id,workspace_id,recipient_user_id
+            RETURNING id,workspace_id,recipient_user_id,board_id
          ),
          queued_emails AS (
             INSERT INTO notification_email_outbox(notification_id,recipient_user_id)
@@ -796,10 +836,10 @@ async fn process_deadline_notifications(state:&AppState){
             ON CONFLICT(notification_id) DO NOTHING
             RETURNING notification_id
          )
-         SELECT workspace_id,recipient_user_id FROM inserted")
+         SELECT workspace_id,recipient_user_id,board_id FROM inserted")
         .fetch_all(&state.db).await;
     if let Ok(rows)=overdue{
-        for (workspace_id,_) in rows{state.publish_workspace_event(workspace_id,None,"notification_created","an overdue task reminder is available");}
+        for (workspace_id,_,board_id) in rows{state.publish_workspace_event(workspace_id,Some(board_id),"notification_created","an overdue task reminder is available");}
     }
 }
 

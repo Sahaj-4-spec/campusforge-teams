@@ -177,12 +177,35 @@ async fn send_one(
         }
     };
 
+    // Calendar moves lock the event before updating its notification scope.
+    // Take the same lock first so a reminder is sent wholly before the move or
+    // re-authorized wholly after it, never against a stale board assignment.
+    let calendar_event_lock = sqlx::query(
+        "SELECT e.id
+           FROM notifications n
+           JOIN calendar_events e ON e.id=n.resource_id AND e.workspace_id=n.workspace_id
+          WHERE n.id=$1 AND n.recipient_user_id=$2
+            AND n.resource_type='calendar_event'
+            AND n.notification_type IN ('calendar_invitation','calendar_reminder')
+          FOR SHARE OF e"
+    )
+    .bind(job.notification_id)
+    .bind(job.recipient_user_id)
+    .fetch_optional(&mut *transaction)
+    .await;
+    if let Err(error) = calendar_event_lock {
+        drop(transaction);
+        tracing::error!(%error, notification_id=%job.notification_id, "Could not lock calendar event during email authorization");
+        update_email_job(state, job, false, Some("Could not verify current calendar event scope".to_string())).await;
+        return;
+    }
+
     let content = sqlx::query_as::<_, EmailContent>(
         "SELECT u.email AS recipient_email, n.title, n.body,
                 COALESCE(np.email_enabled,FALSE) AS email_enabled
            FROM notifications n
            JOIN users u ON u.id=n.recipient_user_id
-           JOIN workspace_members wm
+           LEFT JOIN workspace_members wm
              ON wm.workspace_id=n.workspace_id AND wm.user_id=n.recipient_user_id
            LEFT JOIN notification_preferences np
              ON np.user_id=n.recipient_user_id AND np.notification_type=n.notification_type
@@ -190,7 +213,74 @@ async fn send_one(
              ON outbox.notification_id=n.id AND outbox.recipient_user_id=n.recipient_user_id
           WHERE n.id=$1 AND n.recipient_user_id=$2
             AND outbox.id=$3 AND outbox.status='processing' AND outbox.attempts=$4
-          FOR UPDATE OF outbox",
+            AND (
+                (n.board_id IS NOT NULL AND wm.user_id IS NOT NULL AND EXISTS(
+                    SELECT 1 FROM boards b
+                     WHERE b.id=n.board_id AND b.workspace_id=n.workspace_id
+                       AND (
+                            wm.role IN ('owner','admin')
+                            OR EXISTS(
+                                SELECT 1 FROM board_members bm
+                                 WHERE bm.board_id=b.id AND bm.user_id=n.recipient_user_id
+                            )
+                       )
+                )
+                AND (
+                    n.notification_type NOT IN ('calendar_invitation','calendar_reminder')
+                    OR (
+                        n.resource_type='calendar_event'
+                        AND EXISTS (
+                            SELECT 1 FROM calendar_events e
+                            JOIN calendar_event_attendees a ON a.event_id=e.id
+                             WHERE e.id=n.resource_id AND e.workspace_id=n.workspace_id
+                               AND e.board_id=n.board_id AND a.user_id=n.recipient_user_id
+                               AND a.response <> 'declined'
+                        )
+                    )
+                ))
+                OR (n.notification_type='workspace_invitation' AND EXISTS(
+                    SELECT 1 FROM invitations i
+                     WHERE i.id=n.resource_id AND i.workspace_id=n.workspace_id
+                       AND lower(i.email)=lower(u.email)
+                       AND i.revoked_at IS NULL AND i.expires_at>NOW() AND i.accepted_at IS NULL
+                ))
+                OR (
+                    n.board_id IS NULL AND wm.user_id IS NOT NULL AND (
+                        (
+                            n.notification_type IN ('calendar_invitation','calendar_reminder')
+                            AND n.resource_type='calendar_event'
+                            AND EXISTS (
+                                SELECT 1 FROM calendar_events e
+                                JOIN calendar_event_attendees a ON a.event_id=e.id
+                                 WHERE e.id=n.resource_id AND e.workspace_id=n.workspace_id
+                                   AND e.board_id IS NULL AND a.user_id=$2
+                                   AND a.response <> 'declined'
+                            )
+                        )
+                        OR (
+                            n.notification_type='task_assigned'
+                            AND n.resource_type='meeting_action_item'
+                            AND EXISTS (
+                                SELECT 1 FROM meeting_note_action_items ai
+                                JOIN meeting_notes mn ON mn.id=ai.meeting_note_id
+                                 WHERE ai.id=n.resource_id AND ai.workspace_id=n.workspace_id
+                                   AND ai.assigned_to=$2 AND mn.board_id IS NULL
+                            )
+                        )
+                        OR (
+                            n.notification_type='mention'
+                            AND n.resource_type='chat_message'
+                            AND EXISTS (
+                                SELECT 1 FROM chat_messages cm
+                                 WHERE cm.id=n.resource_id AND cm.workspace_id=n.workspace_id
+                                   AND cm.board_id IS NULL AND cm.conversation_id IS NULL
+                                   AND cm.deleted_at IS NULL
+                            )
+                        )
+                    )
+                )
+            )
+          FOR UPDATE OF outbox, n",
     )
     .bind(job.notification_id)
     .bind(job.recipient_user_id)

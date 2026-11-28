@@ -1,6 +1,6 @@
 # CampusForge Teams — Storage and Notification Operations
 
-This guide covers the configurable file storage adapter and optional transactional email delivery added to the collaboration-suite branch. These services are server-side integrations. Do not add their secrets to Vite variables, commit them, or expose them to the browser.
+This guide covers the merged file-storage adapter, transactional email delivery, shared authentication rate limiting, and the Track A server-side session-hardening change. These services are server-side integrations. Do not add their secrets to Vite variables, commit them, or expose them to the browser.
 
 ## 1. File storage
 
@@ -113,7 +113,7 @@ Set `CAMPUSFORGE_ENV=production` only after all production dependencies below ar
 
 This is intentionally fail-closed: do not enable production mode on the current preview service until the S3 bucket/credentials and scanner are provisioned and tested. Configure the production API and a staging API separately.
 
-Before public traffic, also configure an ingress/WAF rate limit for login, OAuth start/callback, and invitation endpoints. The application currently does not provide a shared distributed per-IP rate limiter; do not rely on a process-local limiter when running multiple instances. Ensure the ingress overwrites client-IP forwarding headers and never trusts user-supplied values.
+The API now enforces PostgreSQL-backed fixed-window limits shared across instances: password login is limited to 30 attempts per client IP per 15 minutes and 10 attempts per normalized account email per 15 minutes; OAuth initiation is limited to 30 attempts per client IP per 10 minutes. If PostgreSQL cannot enforce a limit, the affected sign-in action fails closed. This does not replace ingress/WAF protection for OAuth callbacks, invitations, file uploads, or other public endpoints. Before public traffic, configure a trusted edge rate limit, ensure the ingress overwrites client-IP forwarding headers, and ensure the API trusts only headers supplied by that ingress (never client-supplied values).
 
 ### ClamAV scanner configuration
 
@@ -139,3 +139,27 @@ When the require-scan flag is false and no scanner is configured, uploaded files
 
 Before public launch, test clean and infected samples, scanner unavailability, timeouts, quotas during concurrent uploads, interrupted uploads, deletion retries, S3 object lifecycle and restore behavior.
 
+
+
+## 7. Authentication session revocation
+
+The integrated candidate keeps migration 0014 for AI proposal persistence and adds `0015_revocable_auth_sessions.sql` plus `0016_notification_board_scope.sql`. When the integrated session-aware release is approved:
+
+- Password and OAuth sign-in issue a random session identifier in the JWT `jti` claim and insert the corresponding session ID, user ID, and expiry into PostgreSQL. The raw JWT is not stored.
+- Protected HTTP endpoints require a matching, unexpired, non-revoked row in `auth_sessions`.
+- Logout revokes the current session in PostgreSQL before clearing the browser's HttpOnly cookie.
+- WebSocket handshakes check session activity, and connected sockets re-check the session during their 30-second presence heartbeat. A revoked session is disconnected on the next heartbeat.
+- A scheduled cleanup removes expired/revoked session records after a seven-day retention buffer.
+- Tokens issued by the pre-0015 application do not carry a session ID and will require a fresh sign-in after rollout. Plan that re-authentication as part of the release notice.
+
+Do not apply migrations 0015 or 0016 to a production database until the matching integrated application release has passed CI and its migration rollout/rollback plan is approved. The Render services `campusforge-preview` and `campusforge-api-test` are preview/test services, not a production environment. The API environment was updated to use Neon `campusforge_app`; Render reported an automatic rollout and its status must be confirmed before assuming the new connection is active. Do not treat the database switch as production acceptance.
+
+
+## Track B AI operations
+
+The AI assistant remains disabled by default. Do not set `CAMPUSFORGE_AI_ENABLED=true` until a provider is selected, HTTPS endpoint and API key are configured as server-only secrets, data-processing/retention and model-training terms are approved, and request/token/cost budgets are defined. The assistant requires a per-request data-sharing acknowledgement; task mutations require a human-approved proposal. The proposal migration is version 0014, session revocation is version 0015, and notification board scope is version 0016. Keep prompts and raw model completions out of persistent proposal audit logs.
+
+
+### Board-scoped notifications
+
+Task and board activity notifications are delivered only to board members and workspace owners/admins. The inbox and unread count re-check that scope; email dispatch checks it again immediately before sending so stale outbox rows cannot disclose a task to unrelated workspace members. Workspace invitation notifications remain recipient/email/expiry validated. If a historical task notification cannot be resolved to a surviving board during migration 0016, it is hidden and suppressed rather than treated as a workspace-wide notification.

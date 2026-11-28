@@ -36,11 +36,16 @@ import {
   Zap
 } from "lucide-react";
 import AuthScreen from "./components/AuthScreen.jsx";
+import AiAssistantPanel from "./components/AiAssistantPanel.jsx";
+import ProjectPulseDashboard from "./components/ProjectPulseDashboard.jsx";
 import {
   authApi, boardApi, clearStoredWorkspaceId, createWorkspaceSocket,
   getStoredWorkspaceId, setStoredWorkspaceId, setWorkspaceSocketBoard,
   workspaceApi, taskApi, listApi, invitationApi, notificationApi
 } from "./lib/api.js";
+
+const projectPulseEnabled = import.meta.env.VITE_CAMPUSFORGE_PROJECT_PULSE_ENABLED === "true";
+const aiAssistantEnabled = import.meta.env.VITE_CAMPUSFORGE_AI_ENABLED === "true";
 import { buildOptimisticTaskMove } from "./lib/taskMove.js";
 import { createDemoData, createId, loadDemoData, STORAGE_KEY } from "./data/demoData.js";
 
@@ -706,6 +711,8 @@ export default function App() {
   const [boardDialogOpen, setBoardDialogOpen] = useState(false);
   const [projectDialogReady, setProjectDialogReady] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [aiAssistantOpen, setAiAssistantOpen] = useState(false);
+  const [projectPulseOpen, setProjectPulseOpen] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState(null);
   const [defaultListId, setDefaultListId] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -722,6 +729,7 @@ export default function App() {
   useEffect(() => {
     function handleGlobalShortcut(event) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k" && isAuthenticated) {
+        if (projectPulseOpen || aiAssistantOpen) return;
         event.preventDefault();
         setCommandPaletteOpen((open) => !open);
       }
@@ -729,7 +737,7 @@ export default function App() {
     }
     window.addEventListener("keydown", handleGlobalShortcut);
     return () => window.removeEventListener("keydown", handleGlobalShortcut);
-  }, [isAuthenticated]);
+  }, [isAuthenticated, projectPulseOpen, aiAssistantOpen]);
 
   useEffect(() => {
     if (!mobileMenuOpen) return undefined;
@@ -1580,6 +1588,16 @@ export default function App() {
               <span>Search tasks, projects, and actions</span>
               <kbd>⌘ K</kbd>
             </button>
+            {projectPulseEnabled && (
+            <button className="ai-assistant-trigger pulse-trigger" type="button" onClick={() => setProjectPulseOpen(true)} aria-haspopup="dialog" aria-expanded={projectPulseOpen} disabled={demoMode} title={demoMode ? "Project Pulse is available for connected workspaces" : "Open Project Pulse"}>
+              <Activity size={15} /><span>Project Pulse</span>
+            </button>
+            )}
+            {aiAssistantEnabled && (
+              <button className="ai-assistant-trigger" type="button" onClick={() => setAiAssistantOpen(true)} aria-haspopup="dialog" aria-expanded={aiAssistantOpen} disabled={demoMode} title={demoMode ? "AI assistant is available for connected workspaces" : "Open AI project assistant"}>
+                <Sparkles size={15} /><span>AI assistant</span>
+              </button>
+            )}
             <button className="icon-button notification-button" type="button" aria-label={"Notifications" + (unreadNotifications ? ", " + unreadNotifications + " unread" : "")} onClick={() => navigate("Notifications")}><Bell size={18} />{unreadNotifications > 0 && <span className="notification-count-badge">{Math.min(unreadNotifications, 99)}</span>}</button>
             <button
               className="topbar-profile-button"
@@ -1681,6 +1699,35 @@ export default function App() {
             tasks={data.tasks}
           />
         </Suspense>
+      )}
+      {projectPulseEnabled && projectPulseOpen && (
+        <ProjectPulseDashboard
+          key={data.current_workspace_id}
+          onClose={() => setProjectPulseOpen(false)}
+          boards={data.boards}
+          onOpenTask={(taskId) => {
+            const task = data.tasks.find((item) => item.id === taskId);
+            if (task) {
+              setProjectPulseOpen(false);
+              openTask(task);
+            } else {
+              setNotice("This task is not in your current workspace snapshot. Refresh the workspace and try again.");
+            }
+          }}
+        />
+      )}
+      {aiAssistantOpen && (
+        <AiAssistantPanel
+          key={data.current_workspace_id}
+          onClose={() => setAiAssistantOpen(false)}
+          boards={data.boards}
+          lists={data.lists}
+          activeBoardId={activeBoardId}
+          onTaskCreated={async () => {
+            try { await refreshWorkspace(); } catch {}
+            setNotice("AI task proposal created after your approval");
+          }}
+        />
       )}
       {notice && (
         <div

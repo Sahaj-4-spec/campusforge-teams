@@ -76,9 +76,10 @@ async fn create_list(
     let mut tx = state.db.begin().await.map_err(|cause| internal_error(cause, "Could not begin column creation"))?;
 
     let scope: Option<(Uuid, String)> = sqlx::query_as(
-        "SELECT b.workspace_id, wm.role FROM boards b
+        "SELECT b.workspace_id, CASE WHEN wm.role IN ('owner','admin') THEN wm.role ELSE bm.role END AS role FROM boards b
          JOIN workspace_members wm ON wm.workspace_id = b.workspace_id
-         WHERE b.id = $1 AND wm.user_id = $2
+         LEFT JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id
+         WHERE b.id = $1 AND wm.user_id = $2 AND (bm.role='admin' OR wm.role IN ('owner','admin'))
          FOR UPDATE OF b",
     )
     .bind(board_id)
@@ -128,10 +129,11 @@ async fn update_list(
     let name = validate_name(&input.name)?;
     let mut tx = state.db.begin().await.map_err(|cause| internal_error(cause, "Could not begin column update"))?;
     let scope: Option<(Uuid, Uuid, String, String)> = sqlx::query_as(
-        "SELECT b.workspace_id, b.id, wm.role, l.name FROM lists l
+        "SELECT b.workspace_id, b.id, CASE WHEN wm.role IN ('owner','admin') THEN wm.role ELSE bm.role END AS role, l.name FROM lists l
          JOIN boards b ON b.id = l.board_id
          JOIN workspace_members wm ON wm.workspace_id = b.workspace_id
-         WHERE l.id = $1 AND wm.user_id = $2
+         LEFT JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id
+         WHERE l.id = $1 AND wm.user_id = $2 AND (bm.role='admin' OR wm.role IN ('owner','admin'))
          FOR UPDATE OF b, l",
     )
     .bind(list_id)
@@ -168,10 +170,11 @@ async fn delete_list(
 ) -> ApiResult<StatusCode> {
     let mut tx = state.db.begin().await.map_err(|cause| internal_error(cause, "Could not begin column deletion"))?;
     let scope: Option<(Uuid, Uuid, String, String)> = sqlx::query_as(
-        "SELECT b.workspace_id, b.id, wm.role, l.name FROM lists l
+        "SELECT b.workspace_id, b.id, CASE WHEN wm.role IN ('owner','admin') THEN wm.role ELSE bm.role END AS role, l.name FROM lists l
          JOIN boards b ON b.id = l.board_id
          JOIN workspace_members wm ON wm.workspace_id = b.workspace_id
-         WHERE l.id = $1 AND wm.user_id = $2
+         LEFT JOIN board_members bm ON bm.board_id=b.id AND bm.user_id=wm.user_id
+         WHERE l.id = $1 AND wm.user_id = $2 AND (bm.role='admin' OR wm.role IN ('owner','admin'))
          FOR UPDATE OF b, l",
     )
     .bind(list_id)
@@ -202,6 +205,19 @@ async fn delete_list(
         .map_err(|cause| internal_error(cause, "Could not check column tasks"))?;
     if task_count > 0 {
         return Err(error(StatusCode::CONFLICT, "Move or remove the tasks in this column before deleting it"));
+    }
+
+    // Preserve durable AI proposal history and its audit linkage even after
+    // approved tasks are later removed from this column.
+    let has_proposal_history: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM ai_action_proposals WHERE target_list_id=$1 AND status='pending' AND expires_at>NOW())",
+    )
+    .bind(list_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|cause| internal_error(cause, "Could not check proposal history before column deletion"))?;
+    if has_proposal_history {
+        return Err(error(StatusCode::CONFLICT, "A pending AI proposal still targets this column"));
     }
 
     let ordered_ids: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM lists WHERE board_id = $1 AND id <> $2 ORDER BY position")
