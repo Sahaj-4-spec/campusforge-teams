@@ -3,8 +3,8 @@
 **Status date:** 28 November 2026  
 **Scope:** Track A collaboration product plus optional Track B AI assistant and human-approved task proposals.  
 **Integrated source commit:** `bced1af502303b86bfb17d0eabdac18ea2985dc1` (PR #41)  
-**Current hardened main commit:** `39fc48635d2d063ce016bb99d0d03637cbd2d46f` (PR #49)  
-**Release status:** Track A/B source and Track B hardening are merged to `main`. The canonical Render frontend preview and Rust API preview are both deployed `live` on the current main commit. Production acceptance is still incomplete.
+**Current Track A main commit:** `fdfaf8038c08afcec62d19eaf2dca331c63d190b` (PR #54)  
+**Release status:** Track A/B source, Track B hardening, secure password recovery and Resend-backed invitation delivery are merged to `main`. The canonical Render frontend and Rust API preview are deployed `live` on the current main commit. Production acceptance is still incomplete.
 
 ## 1. What the candidate contains
 
@@ -14,6 +14,8 @@ CampusForge Teams is built on React/Vite, Rust/Axum, PostgreSQL and SQLx. The ca
 - Workspaces, project boards, lists, task management, assignment, comments, invitations and activity.
 - Calendar, milestones, advanced task controls, notifications, files, chat, meeting notes, analytics and the encrypted Save Locker.
 - Track A session hardening: random JWT `jti` identifiers, PostgreSQL-backed active-session checks, logout revocation and WebSocket session revalidation.
+- Track A account recovery: SHA-256-hashed, one-time password-reset tokens with 30-minute expiry, Argon2 password updates and revocation of active sessions. Migration 0018 is applied to the isolated preview database; production migration remains pending.
+- Track A invitations: email delivery through the server-side Resend transport when configured, with a manual-link fallback and per-actor/per-recipient rate limits. Email delivery remains disabled until a verified Resend sender is configured.
 - Track B: feature-flagged AI assistant, Project Pulse, structured task proposals and explicit human review/approval.
 
 The AI assistant remains disabled by default. Provider calls require an explicit data-sharing acknowledgement. Proposals store structured task suggestions and metadata-only audit events, not prompts or raw model completions. Model output cannot autonomously mutate projects.
@@ -24,13 +26,15 @@ The AI assistant remains disabled by default. Provider calls require an explicit
 
 - Default branch `main` contains integrated commit `bced1af502303b86bfb17d0eabdac18ea2985dc1` (PR #41, squash-merged on 28 November 2026).
 - PRs #38, #39, #40 and #42 were closed as superseded because their changes are included in the integrated commit; they were not merged separately.
-- The PR #49 head commit passed the frontend build, Rust backend compilation/unit tests, frontend/Rust dependency vulnerability audits and CodeQL. PR #49 was squash-merged as main commit `39fc48635d2d063ce016bb99d0d03637cbd2d46f`; the main-branch Render frontend and Rust API previews both reached `live` on that commit.
+- PR #49 passed frontend build, Rust backend compilation/unit tests, dependency vulnerability audits and CodeQL, then was merged as `39fc486`.
+- PR #52 added password recovery and migration 0018; frontend build, Rust compile/tests, dependency audits and CodeQL passed. It was merged as `5fd2bdb`, and the preview API/frontend reached `live`.
+- PR #54 added invitation email delivery/rate limiting; frontend build/tests, Rust compilation/unit tests, dependency audits and CodeQL passed. It was merged as `fdfaf80`; the preview pair reached `live` on the current main commit.
 - PR #43 (`2bfa2a105d6986fa9ac79679fc15614360edf9d1`) is merged. It separates runtime database privileges from schema migrations, adds a protected one-off SQLx migration runner, and defaults production API startup to no DDL.
 
 ### Database
 
 - Neon project `neon-rose-book`; default branch `main`; application database `campusforge_app`.
-- SQLx journal versions 0001–0017 were verified successful. Versions 0014–0017 are respectively AI proposals, revocable auth sessions, board-scoped notifications and proposal-history retention. Each recorded migration is successful and has the expected 48-byte SQLx SHA-384 checksum.
+- Production SQLx journal versions 0001–0017 were verified successful. Integrated preview journal versions 0001–0018 are successful; migration 0018 adds `password_reset_tokens` with 48-byte SQLx SHA-384 checksum `48ba867f4a253f2f3568ee053269b9fec2f6099d64059d35924e766abcdaf6457e322e82d3cb6597e97b83537c12cee8`.
 - The merged API started against `campusforge_app` and applied pending migrations 0015–0017 at startup. The `auth_sessions` migration is therefore applied; do not rerun or rename prior versions.
 - The initial post-PR #41 rollout temporarily connected `campusforge-api-test` to `campusforge_app` as `neondb_owner` and applied migrations 0015–0017 there. It was subsequently moved to isolated child branch `campusforge-track-a-b-preview` and database `campusforge_release_preview`. Its DML-only `campusforge_release_runtime` role has been verified against all 43 preview tables and lacks superuser, role-creation, database-creation, RLS-bypass and schema-CREATE privileges. The production database has a separate `campusforge_app_runtime` role. A direct connection as that role was verified against `campusforge_app`; it can read and write all 42 application tables, cannot TRUNCATE, has schema USAGE but no schema CREATE, and is not superuser, CREATEDB, CREATEROLE or BYPASSRLS. Default table/sequence privileges are configured for future owner-created objects. No production Rust API service is attached to that role yet.
 - The isolated Neon branch `campusforge-track-a-b-preview` and database `campusforge_release_preview` remain separate from the default branch.
@@ -39,11 +43,11 @@ The AI assistant remains disabled by default. Provider calls require an explicit
 ### Render
 
 - Integrated frontend preview: `campusforge-preview` — `https://campusforge-preview.onrender.com`; it is now configured to call the integrated API preview at `https://campusforge-api-test.onrender.com`, with AI and Project Pulse frontend flags disabled.
-- Integrated Rust API preview: `campusforge-api-test` — `https://campusforge-api-test.onrender.com`; it uses the isolated Neon child branch database `campusforge_release_preview`, whose SQLx journal contains successful migrations 0001–0017. The DML-only `campusforge_release_runtime` role is configured for the service; the runtime/migration separation code is now in `main` and automatic migrations are disabled for this hosted preview.
+- Integrated Rust API preview: `campusforge-api-test` — `https://campusforge-api-test.onrender.com`; on main commit `fdfaf80` it uses the isolated Neon child branch database `campusforge_release_preview`, whose SQLx journal contains successful migrations 0001–0018. The DML-only `campusforge_release_runtime` role is configured for the service; automatic migrations are disabled.
 - Track A-only API preview: `https://campusforge-track-a-api-preview.onrender.com`, backed by Neon `campusforge_track_a_preview` and role `campusforge_track_a_app`; it remains separate from both the production database and integrated preview database.
 - Neon Object Storage is enabled on both branches and the bucket `campusforge-private-uploads` is private. The integrated API preview uses a child-branch-only `storage:read`/`storage:write` credential, path-style requests and `CAMPUSFORGE_REQUIRE_REMOTE_STORAGE=true`. Render deploy `dep-dc5c0e4o3iic73d8k5g0` is live and its startup log confirms successful S3 PUT/GET/DELETE verification. This is preview evidence only; no production API is using a production-branch storage credential. No private production ClamAV service is configured.
 - The older `campusforge-teams` Node service completed a main-branch deploy on commit `39fc48635d2d063ce016bb99d0d03637cbd2d46f` after the root package scripts and client build were corrected; its current Render deploy is `live`, so the previous `vite: not found` failure is no longer the current deployment state. It has not been accepted as the production topology or independently verified as the canonical frontend/API pair. Keep the separate static frontend (`campusforge-preview`) and Rust API (`campusforge-api-test`) preview as the documented test pair until a dedicated production service topology is provisioned.
-- End-to-end account, OAuth, cross-account, mobile and accessibility acceptance remains outstanding.
+- End-to-end account, OAuth, cross-account, mobile and accessibility acceptance remains outstanding. Password-reset and invitation email flows are implemented in source, but real email delivery is unverified until Resend credentials and a verified sender are configured.
 
 ## 3. Migration and release ordering
 
@@ -73,14 +77,14 @@ JWTs issued before session migration 0015 do not contain `jti`; users will need 
 | Google/GitHub/Discord OAuth | **Not configured/verified** | Supply client IDs/secrets, register exact HTTPS callback URLs, and pass verified-email sign-up tests for each provider. |
 | Private object storage | **Preview I/O verified; production pending** | Integrated preview passes private Neon Object Storage PUT/GET/DELETE using a branch-scoped credential. Production API, production-branch credential and real user upload/download/deletion acceptance remain pending. Confirm provider retention/restore features before promising versioning/lifecycle behavior. |
 | Malware scanning | **Not configured/verified** | Provision reachable ClamAV, require scanning in production, and prove infected/unscanned uploads and downloads are blocked. |
-| Email delivery | **Not configured/verified** | Configure Resend API key, verified sender, SPF/DKIM/DMARC and test delivery, bounce/suppression and retry handling. |
+| Invitation and password-reset email | **Code merged; delivery not configured** | Invitation email and account reset email use server-side Resend when configured; add Resend key, verified sender and SPF/DKIM/DMARC, then test delivery and bounce/retry handling. Manual invitation-link fallback remains available. |
 | Perimeter protection | **Not configured/verified** | Configure trusted proxy/edge rate limits and validate forwarded-client-IP handling. |
 | Two-account authorization | **Pending** | Test member/viewer/admin boundaries, board visibility, invitations, files, chat/DM isolation, comments, calendar and task mutations. |
 | Browser/mobile/accessibility | **Pending** | Test supported browsers and real mobile devices, keyboard, screen reader, focus, contrast and error/empty/loading states. |
 | Privacy and retention | **Pending** | Approve policies for personal data, files, messages, meeting notes, AI provider processing, export and deletion. |
 | Fine-grained authorization | **Enforced in candidate; acceptance pending** | Project snapshots, task mutations, advanced task actions, files, calendar, chat, meeting notes, analytics, AI proposals and task/board notifications check board membership/roles; viewers are read-only. Database-backed board-role tests and two-account end-to-end negative tests must pass before release. Workspace-level channels remain workspace-scoped. |
-| Account recovery/provider linking | **Not complete** | Add or document supported recovery and secure account-linking paths before broad launch. |
-| Production hosting | **Not accepted** | Main-branch frontend and Rust API previews are live. The older `campusforge-teams` Node service also deployed successfully, but no dedicated production Rust API/frontend topology, custom domain, monitoring and operational acceptance are in place. |
+| Account recovery/provider linking | **Password recovery implemented; production rollout pending** | Preview migration 0018 and API/frontend recovery routes are live. Apply 0018 to production through the protected migration workflow, configure Resend, test one-time expiry/revocation flows, and complete secure provider-linking acceptance. |
+| Production hosting | **Not accepted** | Main-branch frontend and Rust API previews are live on `fdfaf80`. The isolated production Blueprint is prepared but Render requires payment information for the private ClamAV service and standard API plan; no production resources were created. Dedicated production domains, monitoring and operational acceptance remain open. |
 | Production release | **Preview deployed; production not accepted** | The integrated source is merged and the preview API is live on an isolated Neon child database. No production API service is deployed; production OAuth/email, malware scanning, backup/restore and multi-account acceptance gates remain open. |
 
 ## 5. Current release decision
