@@ -68,7 +68,7 @@ test("does not serve files through symlinks that escape the publish root", async
 test("does not route unavailable API paths to the SPA entry", async () => {
   const response = await fetch(baseUrl + "/api/health");
   assert.equal(response.status, 404);
-  assert.match(response.headers.get("content-type"), /application\\/json/);
+  assert.match(response.headers.get("content-type"), /application\/json/);
   assert.doesNotMatch(await response.text(), /CampusForge/);
 });
 
