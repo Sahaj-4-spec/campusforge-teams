@@ -1,28 +1,28 @@
 ---
 version: alpha
-name: Cal.com-design-analysis
-description: A clean, calendar-software-first interface anchored on white canvas with black primary CTAs and custom Cal Sans display typography. The system reads as friendly modern SaaS — generous whitespace, soft-rounded cards (~12px), product UI fragments shown directly inside cards, and a dark navy footer that visually closes long-scroll pages. Brand voltage comes from the Cal Sans display headline (a custom geometric face) and from product UI artifacts shown in-card rather than from accent colors.
+name: CampusForge-design-system
+description: A collaborative project workspace for student teams: off-white canvas, crisp white cards, confident violet primary actions, and restrained lime highlights for completion and live status. The visual system prioritizes readable task density, clear hierarchy, accessible focus states, and responsive board interactions.
 
 colors:
-  primary: "#111111"
-  primary-active: "#242424"
+  primary: "#6D5CE7"
+  primary-active: "#5847D6"
   primary-disabled: "#e5e7eb"
-  ink: "#111111"
-  body: "#374151"
-  muted: "#6b7280"
+  ink: "#252B42"
+  body: "#4D566E"
+  muted: "#717A90"
   muted-soft: "#898989"
-  hairline: "#e5e7eb"
+  hairline: "#E8EAF2"
   hairline-soft: "#f3f4f6"
-  canvas: "#ffffff"
-  surface-soft: "#f8f9fa"
-  surface-card: "#f5f5f5"
+  canvas: "#F7F7FB"
+  surface-soft: "#FAFAFF"
+  surface-card: "#FFFFFF"
   surface-strong: "#e5e7eb"
   surface-dark: "#101010"
   surface-dark-elevated: "#1a1a1a"
   on-primary: "#ffffff"
   on-dark: "#ffffff"
   on-dark-soft: "#a1a1aa"
-  brand-accent: "#3b82f6"
+  brand-accent: "#B6E642"
   success: "#10b981"
   warning: "#f59e0b"
   error: "#ef4444"
@@ -273,54 +273,38 @@ components:
 
 ## Overview
 
-Cal.com's marketing surface is a clean, friendly modern-SaaS interface — white canvas (`{colors.canvas}` — #ffffff) with black primary CTAs (`{colors.primary}` — #111111), custom **Cal Sans** display typography, and `{colors.surface-card}` (#f5f5f5) light-gray cards holding product UI fragments. The system reads as confidently engineered without trying to impress — every band has clear hierarchy, generous whitespace, and a single primary action.
+CampusForge Teams uses a calm, high-clarity workspace aesthetic: an off-white canvas, white work surfaces, dark slate typography, and a confident violet primary action. Bright lime is reserved for meaningful signals such as completion, live presence and small brand highlights. This creates a recognizable identity without competing with task content.
 
-Type voice splits cleanly into two roles: **Cal Sans** (the brand's custom geometric display face — used for h1, h2, h3, and hero headlines) and **Inter** (used for everything else — body, buttons, nav, captions). Cal Sans uses weight 600 with negative letter-spacing (-0.5px to -2px depending on size) — it feels modern, slightly condensed, distinctly Cal.com.
+Inter is used throughout the interface because it remains legible at dense board and calendar sizes. Headings use stronger weight and restrained negative letter spacing; body text remains neutral and readable. The product UI itself—boards, task cards, calendars, workload views and activity—is the visual centerpiece.
 
-Component voltage comes from **product UI fragments shown directly inside cards** — calendar widgets, scheduling forms, automation diagrams, integration tiles. Cal.com doesn't paint marketing illustrations of the product; it shows the actual product chrome at small scale embedded in the marketing flow.
-
-The footer flips to `{colors.surface-dark}` (#101010) — a deep near-black that visually closes every long-scroll page. The footer is the only dark surface in the system; everything above stays white-with-light-gray-cards.
-
-**Key Characteristics:**
-- White canvas with black primary CTA (`{colors.primary}` — #111111). Buttons are `{rounded.md}` (8px) with confident weight-600 labels. Standard friendly-SaaS button.
-- Custom `Cal Sans` display typeface for headlines (substituted with Inter weight 600 here). Negative letter-spacing on display sizes — geometric, precise, slightly condensed.
-- Light-gray card surfaces (`{colors.surface-card}` — #f5f5f5) for feature cards, testimonials, and pricing tiers (non-featured). The featured pricing tier flips to `{colors.surface-dark}` (the only dark card on light pages).
-- Product UI fragments embedded directly in cards — Cal.com shows real schedule pickers, calendar widgets, integration grids inside its marketing cards. Brand voltage from real product chrome at small scale.
-- Nav-pill-group (`{component.nav-pill-group}`) — a small pill-radius wrapper around grouped nav segments (e.g., the sub-nav switcher between product views). The pill wrapper is one of the system's signature interactive components.
-- Avatars are circular (`{rounded.full}`), 36px diameter, used in testimonial rows and team-listing surfaces.
-- Footer is dark navy (`{colors.surface-dark}` — #101010) with light text (`{colors.on-dark-soft}` — #a1a1aa). The dark footer closes every page even though the body above is white.
-- Spacing rhythm is `{spacing.section}` (96px) between major bands — tight enough to feel modern-SaaS but generous enough to breathe.
-- Border radius is hierarchical: `{rounded.md}` (8px) for buttons + inputs, `{rounded.lg}` (12px) for content cards, `{rounded.xl}` (16px) for the hero app-mockup container, `{rounded.pill}` for nav-pill-group + badges, `{rounded.full}` for avatars + icon buttons.
+**Key characteristics:**
+- Off-white canvas with white task cards and panels.
+- Violet primary actions and pale violet selection/focus states; dark slate remains the text color.
+- Lime is deliberately rare: completion, live status and small high-signal moments, never large primary buttons.
+- Rounded controls at 8–10px and content cards at 12–16px, with fine cool-gray borders and restrained shadows.
+- Board columns remain visually distinct from white task cards and horizontally scroll on narrow screens.
+- Focus rings are visible, singular and use the violet accent; validation errors remain red.
+- Inter handles the wordmark, headings, navigation, body, labels and compact data.
 
 ## Colors
 
-### Brand & Accent
-- **Primary** (`{colors.primary}` — #111111): The dominant action color. All primary CTAs, h1/h2 display type. Press state shifts to `{colors.primary-active}` (#242424).
-- **Brand Accent** (`{colors.brand-accent}` — #3b82f6): Used sparely on inline links and on a small badge / "Customer story" highlight. Cal.com is a near-monochrome brand — the blue appears rarely.
-- **Badge Pastels** — A small pastel set for category badges and avatar fills: `{colors.badge-orange}` (#fb923c), `{colors.badge-pink}` (#ec4899), `{colors.badge-violet}` (#8b5cf6), `{colors.badge-emerald}` (#34d399). These appear on tag pills and small accent moments inside product UI fragments — never on hero CTAs.
+### Brand & accent
+- **Primary:** violet (#6D5CE7) for primary actions, active navigation, selected filters and interactive states; press state shifts to #5847D6.
+- **Brand accent:** lime (#B6E642) for completion, live presence and small high-signal moments.
+- **Semantic accents:** red, amber and green remain reserved for errors, warnings and success states.
 
-### Surface
-- **Canvas** (`{colors.canvas}` — #ffffff): The default page floor.
-- **Surface Soft** (`{colors.surface-soft}` — #f8f9fa): Nav-pill-group background, very-soft section dividers.
-- **Surface Card** (`{colors.surface-card}` — #f5f5f5): Feature cards, testimonial cards, badge pills, default avatar fills.
-- **Surface Strong** (`{colors.surface-strong}` — #e5e7eb): Hairline border alternative; disabled button background.
-- **Surface Dark** (`{colors.surface-dark}` — #101010): The footer background — the only dark surface on every page. Also used for the featured pricing tier card.
-- **Surface Dark Elevated** (`{colors.surface-dark-elevated}` — #1a1a1a): Used for nested cards inside the dark footer or featured pricing card.
-- **Hairline** (`{colors.hairline}` — #e5e7eb): The 1px border tone on light surfaces. Used on input borders, table dividers, content card outlines (sometimes).
-- **Hairline Soft** (`{colors.hairline-soft}` — #f3f4f6): A barely-visible divider used between sections that share the white canvas.
+### Surfaces
+- **Canvas:** off-white (#F7F7FB) for the workspace background.
+- **Surface soft:** a very pale violet-tinted white (#FAFAFF) for secondary regions.
+- **Surface card:** white (#FFFFFF) for task cards and content panels.
+- **Hairline:** cool-gray (#E8EAF2) for borders and dividers.
+- **Surface dark:** deep charcoal for high-contrast footer/dialog elements only.
 
 ### Text
-- **Ink** (`{colors.ink}` — #111111): All headlines and primary text.
-- **Body** (`{colors.body}` — #374151): Default running-text color.
-- **Muted** (`{colors.muted}` — #6b7280): Secondary text — sub-headings, breadcrumbs, footer body.
-- **Muted Soft** (`{colors.muted-soft}` — #898989): Tertiary text — captions, fine-print, copyright lines.
-- **On Primary / On Dark** (`{colors.on-primary}` / `{colors.on-dark}` — #ffffff): Text on primary buttons and dark footer.
-- **On Dark Soft** (`{colors.on-dark-soft}` — #a1a1aa): Footer body text — slightly muted white for the link rows.
-
-### Semantic
-- **Success** (`{colors.success}` — #10b981): Confirmation states, success badges in product UI.
-- **Warning** (`{colors.warning}` — #f59e0b): Warning callouts.
-- **Error** (`{colors.error}` — #ef4444): Validation errors.
+- **Ink:** dark slate (#252B42) for headlines and primary text.
+- **Body:** slate (#4D566E) for running text.
+- **Muted:** cool gray (#717A90) for supporting labels and metadata.
+- **On primary:** white (#FFFFFF) on violet primary actions.
 
 ## Typography
 
