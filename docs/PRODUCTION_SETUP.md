@@ -8,7 +8,8 @@ Configure these in the API service's secret/environment manager. Never commit cr
 
 | Variable | Required value |
 |---|---|
-| `DATABASE_URL` | Neon PostgreSQL connection URL for the dedicated `campusforge_app` database. Use TLS and a least-privilege application role. |
+| `DATABASE_URL` | Neon PostgreSQL connection URL for the dedicated `campusforge_app` database. Use a least-privilege read/write application role; never use the database owner. |
+| `CAMPUSFORGE_AUTO_MIGRATE` | Set to `false` on the long-running API service. Production defaults to manual migrations. |
 | `JWT_SECRET` | Random high-entropy secret, at least 32 bytes. Do not reuse a development value. |
 | `FRONTEND_ORIGIN` | Comma-separated list of exact frontend origins allowed by credentialed CORS. Production should list only the canonical HTTPS app origin; isolated previews may add their own exact HTTPS origins. Wildcards and URL paths are rejected. |
 | `OAUTH_REDIRECT_BASE_URL` | Exact HTTPS origin of the API that receives OAuth callbacks. |
@@ -99,3 +100,15 @@ Before public launch, additionally verify a production custom domain/TLS, truste
 
 
 Before applying migration 0016, confirm the matching API build writes `notifications.board_id` and checks it during inbox reads and email dispatch. Do not deploy the migration separately from that code.
+
+## Database migration and runtime privilege separation
+
+The API runtime must not connect as `neondb_owner` or another database/schema owner. Use a dedicated Neon role scoped to `campusforge_app` with only the table DML and sequence privileges the application requires. It must not have superuser, role-creation, database-creation, or RLS-bypass privileges.
+
+Keep `CAMPUSFORGE_AUTO_MIGRATE=false` on the Render API service. This prevents ordinary service restarts and rollouts from attempting DDL with the application role. Run migrations as a separate release operation using the protected `MIGRATION_DATABASE_URL` secret, which must not be configured on the long-running API service:
+
+```bash
+MIGRATION_DATABASE_URL='postgresql://MIGRATION_ROLE:...@HOST/campusforge_app?sslmode=require' npm run db:migrate
+```
+
+The migration command applies the repository's embedded SQLx migrations and checks their checksums. Use a controlled migration credential with schema ownership/DDL authority, keep its secret in a protected operator or release environment, and never copy it into application logs or frontend variables. Confirm the expected branch, database and migration journal before running it. The runtime API then starts with the separate read/write role and does not perform schema changes.

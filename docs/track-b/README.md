@@ -1,10 +1,10 @@
 # Track B — AI Project Assistant and Intelligent Collaboration
 
-**Status:** Integrated candidate — read-only assistant, Project Pulse, and human-approved proposals implemented  
+**Status:** Integrated into `main` — read-only assistant, Project Pulse, and human-approved proposals merged; AI remains disabled by default  
 **Repository:** `Sahaj-4-spec/campusforge-teams`  
-**Working branch:** `track-b/ai-assistant-foundation`  
-**Base:** `main`  
-**Track A relationship:** Consolidated with session-revocation hardening in the integrated candidate; production acceptance gates remain in force.
+**Merged commit:** `bced1af502303b86bfb17d0eabdac18ea2985dc1` (PR #41)  
+**Current branch:** `main`  
+**Track A relationship:** Session-revocation hardening and Track B capabilities are included in the same integrated release; production acceptance gates remain in force.
 
 ## 1. Purpose
 
@@ -16,7 +16,7 @@ Track A deliberately delivered the non-AI CampusForge Teams product. Track B beg
 - Task breakdown and subtask proposals.
 - Explanations of blockers, overdue work, workload patterns, and project progress.
 
-This file establishes the initial product and engineering boundary. The first read-only assistant slice is implemented on this branch, but no provider is configured and the feature remains disabled by default.
+This file establishes the initial product and engineering boundary. The first read-only assistant slice, Project Pulse and human-approved proposal workflow are merged into `main`. No provider is configured; AI remains disabled by default.
 
 ## 2. Initial product principles
 
@@ -211,7 +211,7 @@ Track B is not ready for production until all applicable checks pass:
 
 ## 8. Current execution status
 
-**Implemented on the Track B branch:** seven assistant modes; authorized, bounded board/task, meeting-note, shared-channel and clean text-file context; provider URL/DNS protections; pattern-based sensitive-data redaction; explicit data-sharing consent; validated task-plan previews with per-task user-approved creation; Project Pulse analytics; rate limits; and responsive accessible dialogs.
+**Implemented and merged in main:** seven assistant modes; authorized, bounded board/task, meeting-note, shared-channel and clean text-file context; provider URL/DNS protections; pattern-based sensitive-data redaction; explicit data-sharing consent; validated task-plan previews with per-task user-approved creation; Project Pulse analytics; rate limits; and responsive accessible dialogs.
 
 **Still gated before a production release:**
 - External AI provider selection, data-processing/retention terms, training-use confirmation, DPA/legal review, encrypted provider key, cost ceilings and live-provider verification. The feature stays disabled by default until an operator provisions these items.
@@ -219,13 +219,13 @@ Track B is not ready for production until all applicable checks pass:
 - Streaming responses remain deferred. The current bounded response path preserves full-response validation and redaction; streaming needs an incremental redaction/validation design before it is safe.
 - File summaries support clean UTF-8 text only. PDF parsing, OCR, image understanding and archive extraction are not implemented.
 - Automated tests run in CI; separate two-account browser acceptance, accessibility testing, cost/load testing, provider egress testing and production backup/restore sign-off remain release gates.
-- No provider credentials are present in the repository; no production merge or deployment is performed by this branch.
+- No provider credentials are present in the repository. The code is merged and the integrated API is deployed, but provider activation remains withheld pending privacy, spend, data-processing and acceptance gates.
 
 
 
 ## B4 — Durable human-approved proposals (integrated candidate)
 
-The integrated candidate adds a durable review workflow on top of the existing authenticated API and SQLx/PostgreSQL data model.
+The integrated main release adds a durable review workflow on top of the existing authenticated API and SQLx/PostgreSQL data model. Migration 0014 is applied on the current `campusforge_app` database; migrations 0015–0017 are also recorded successful.
 
 - The assistant still produces a read-only task plan. Saving the plan creates a structured proposal; it does not create tasks.
 - A proposal is scoped to the authenticated workspace, board, and destination list, and expires after 24 hours.
@@ -235,11 +235,11 @@ The integrated candidate adds a durable review workflow on top of the existing a
 - Rejection, expiry, stale detection, creation, and application are recorded in `ai_action_audit_events`. The audit contains event metadata and task identifiers/counts only; prompts, model answers, secrets, and raw workspace content are not persisted.
 - Existing `WorkspaceUser` authentication and the existing session issuer are reused. No parallel JWT format or client-supplied identity is introduced.
 
-Migration: `server/migrations/0014_ai_action_proposals.sql`.
+Migration: `server/migrations/0014_ai_action_proposals.sql` (applied and retained in SQLx journal).
 
 Endpoints:
 - `GET /api/ai/proposals` and `POST /api/ai/proposals`
 - `POST /api/ai/proposals/{proposal_id}/apply` and `POST /api/ai/proposals/{proposal_id}/reject`
 - `GET /api/ai/proposals/audit`
 
-The migration is additive and is applied by the repository's existing SQLx migration runner. Migration 0014 adds proposal history; migration 0015 adds revocable auth sessions. The connected Neon `campusforge_app` database already records version 0014, so keep it unchanged and apply 0015 only with the integrated application release. Production release still requires the provider/legal/privacy gates, deployment configuration, CI, and multi-account browser acceptance checks described above.
+The migration is additive and recorded as applied by the SQLx migration journal. Migration 0014 adds AI proposals; migration 0015 adds revocable auth sessions; migration 0016 scopes notifications by board; migration 0017 preserves proposal history. Keep all applied migration versions unchanged. Production use still requires the provider/legal/privacy gates, least-privilege runtime credential rollout, backup/restore proof, deployment configuration and multi-account browser acceptance checks described above.

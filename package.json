@@ -10,6 +10,7 @@
     "build": "npm --prefix client run build && cargo build --release --manifest-path server/Cargo.toml",
     "build:client": "npm --prefix client run build",
     "build:server": "cargo build --release --manifest-path server/Cargo.toml",
+    "db:migrate": "cargo run --manifest-path server/Cargo.toml --bin migrate",
     "start": "cargo run --release --manifest-path server/Cargo.toml"
   },
   "devDependencies": {

@@ -1,23 +1,23 @@
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use std::time::Duration;
 
-/// Create a PostgreSQL connection pool and apply all pending SQLx migrations.
-///
-/// Missing migration versions are tolerated so an older, additive-schema-compatible
-/// application binary can be rolled back after a newer release has applied a forward
-/// migration. SQLx still checks checksums for migration versions present in this binary.
-pub async fn connect_and_migrate(database_url: &str) -> Result<PgPool, sqlx::Error> {
-    let pool = PgPoolOptions::new()
+/// Open a PostgreSQL pool for normal application queries without schema-owner privileges.
+pub async fn connect(database_url: &str) -> Result<PgPool, sqlx::Error> {
+    PgPoolOptions::new()
         .max_connections(10)
         .min_connections(1)
         .acquire_timeout(Duration::from_secs(10))
         .connect(database_url)
-        .await?;
+        .await
+}
 
+/// Apply pending SQLx migrations using a protected release credential.
+/// The long-running API should use `connect` with a DML-only runtime role.
+pub async fn connect_and_migrate(database_url: &str) -> Result<PgPool, sqlx::Error> {
+    let pool = connect(database_url).await?;
     let mut migrator = sqlx::migrate!("./migrations");
     migrator.set_ignore_missing(true);
     migrator.run(&pool).await?;
-
     Ok(pool)
 }
 
