@@ -1991,7 +1991,7 @@ pub fn router() -> Router<AppState> {
 
 #[cfg(test)]
 mod clamav_health_probe_tests {
-    use super::clamav_pong_received;
+    use super::{clamav_pong_received, scanner_ip_is_private};
 
     #[test]
     fn accepts_clamav_pong_response() {
