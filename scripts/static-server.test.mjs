@@ -5,15 +5,18 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { createStaticServer } from "./static-server.mjs";
 
+let tempRoot;
 let root;
 let server;
 let baseUrl;
 
 before(async () => {
-  root = await mkdtemp(join(tmpdir(), "campusforge-static-"));
-  await mkdir(join(root, "assets"));
+  tempRoot = await mkdtemp(join(tmpdir(), "campusforge-static-"));
+  root = join(tempRoot, "public");
+  await mkdir(join(root, "assets"), { recursive: true });
   await writeFile(join(root, "index.html"), "<!doctype html><title>CampusForge</title>");
   await writeFile(join(root, "assets", "app.js"), "console.log('ok')");
+  await writeFile(join(tempRoot, "secret.txt"), "outside-root-sentinel");
   server = createStaticServer({ rootDir: root });
   await new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -25,7 +28,7 @@ before(async () => {
 
 after(async () => {
   if (server?.listening) await new Promise((resolve) => server.close(resolve));
-  if (root) await rm(root, { recursive: true, force: true });
+  if (tempRoot) await rm(tempRoot, { recursive: true, force: true });
 });
 
 test("serves the SPA entry point with non-cacheable HTML", async () => {
@@ -66,9 +69,11 @@ test("serves HEAD requests without a response body", async () => {
   assert.equal(await response.text(), "");
 });
 
-test("rejects a path traversal request", async () => {
-  const response = await fetch(baseUrl + "/%2e%2e/secret.txt");
-  assert.notEqual(await response.text(), "secret");
+test("rejects encoded traversal to a real file outside the served root", async () => {
+  const response = await fetch(baseUrl + "/%2e%2e%2fsecret.txt");
+  const body = await response.text();
+  assert.equal(response.status, 404);
+  assert.equal(body.includes("outside-root-sentinel"), false);
 });
 
 test("sets baseline browser security headers", async () => {
