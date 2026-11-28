@@ -35,6 +35,54 @@ fn create_private_upload_file(path: &PathBuf) -> std::io::Result<std::fs::File> 
     std::fs::OpenOptions::new().write(true).create_new(true).open(path)
 }
 
+fn clamav_pong_received(response: &[u8]) -> bool {
+    let response = String::from_utf8_lossy(response);
+    response.contains("PONG") && !response.contains("ERROR")
+}
+
+/// Verify the configured ClamAV TCP service before production begins accepting requests.
+/// ClamAV's null-delimited zPING command should receive a zPONG response.
+pub async fn verify_clamav_from_env() -> Result<(), String> {
+    let required = std::env::var("CAMPUSFORGE_REQUIRE_MALWARE_SCAN")
+        .ok()
+        .is_some_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes"));
+    if !required {
+        return Ok(());
+    }
+
+    let address = std::env::var("CAMPUSFORGE_CLAMAV_ADDR")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "Malware scanning is required but CAMPUSFORGE_CLAMAV_ADDR is not configured".to_string())?;
+
+    let mut stream = tokio::time::timeout(std::time::Duration::from_secs(5), TcpStream::connect(&address))
+        .await
+        .map_err(|_| "ClamAV health probe connection timed out".to_string())?
+        .map_err(|error| format!("ClamAV health probe could not connect: {error}"))?;
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        stream.write_all(b"zPING\0"),
+    )
+    .await
+    .map_err(|_| "ClamAV health probe write timed out".to_string())?
+    .map_err(|error| format!("ClamAV health probe write failed: {error}"))?;
+
+    let mut response = [0_u8; 64];
+    let read = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        stream.read(&mut response),
+    )
+    .await
+    .map_err(|_| "ClamAV health probe response timed out".to_string())?
+    .map_err(|error| format!("ClamAV health probe response failed: {error}"))?;
+
+    if !clamav_pong_received(&response[..read]) {
+        return Err("ClamAV health probe returned an unexpected response".to_string());
+    }
+    Ok(())
+}
+
 async fn scan_upload(path: &PathBuf) -> Result<&'static str, String> {
     let scanner = std::env::var("CAMPUSFORGE_CLAMAV_ADDR")
         .ok().filter(|value| !value.trim().is_empty());
@@ -1913,4 +1961,22 @@ pub fn router() -> Router<AppState> {
         .route("/meeting-notes", get(meeting_notes_list).post(meeting_note_create))
         .route("/meeting-notes/{note_id}", patch(meeting_note_update).delete(meeting_note_delete))
         .route("/analytics", get(analytics))
+}
+
+
+#[cfg(test)]
+mod clamav_health_probe_tests {
+    use super::clamav_pong_received;
+
+    #[test]
+    fn accepts_clamav_pong_response() {
+        assert!(clamav_pong_received(b"zPONG\0"));
+    }
+
+    #[test]
+    fn rejects_error_and_unexpected_responses() {
+        assert!(!clamav_pong_received(b"zERROR\0"));
+        assert!(!clamav_pong_received(b"READY"));
+        assert!(!clamav_pong_received(b""));
+    }
 }
