@@ -43,25 +43,24 @@ services:
         sync: false
       - key: EMAIL_FROM
         sync: false
-      # Preview defaults stay local/optional. Production must set
-      # CAMPUSFORGE_ENV=production, use S3, require remote storage and malware
-      # scanning, and provide a reachable private ClamAV service.
+      # Integrated preview uses its branch-scoped Neon private bucket.
+      # Keep preview malware scanning optional; production requires private ClamAV.
       - key: CAMPUSFORGE_ENV
         value: preview
       - key: CAMPUSFORGE_STORAGE_MODE
-        value: local
+        value: s3
       - key: CAMPUSFORGE_REQUIRE_REMOTE_STORAGE
-        value: "false"
+        value: "true"
       - key: CAMPUSFORGE_REQUIRE_MALWARE_SCAN
         value: "false"
       - key: CAMPUSFORGE_S3_BUCKET
-        sync: false
+        value: campusforge-private-uploads
       - key: CAMPUSFORGE_S3_REGION
-        sync: false
+        value: us-east-1
       - key: CAMPUSFORGE_S3_ENDPOINT_URL
-        sync: false
+        value: https://br-jolly-cell-bbbaqs0o.storage.c-15.us-east-1.aws.neon.tech
       - key: CAMPUSFORGE_S3_URL_STYLE
-        sync: false
+        value: path
       - key: AWS_ACCESS_KEY_ID
         sync: false
       - key: AWS_SECRET_ACCESS_KEY
@@ -87,6 +86,8 @@ services:
       - key: VITE_API_BASE_URL
         value: https://campusforge-api-test.onrender.com
       - key: VITE_CAMPUSFORGE_PROJECT_PULSE_ENABLED
+        value: "false"
+      - key: VITE_CAMPUSFORGE_AI_ENABLED
         value: "false"
     routes:
       - type: rewrite
