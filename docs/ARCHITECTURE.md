@@ -1,8 +1,8 @@
 # CampusForge Teams — Architecture and Project Decisions
 
-**Document status:** Architecture decisions for the current Track A product and the integrated Track A/Track B release candidate.  
+**Document status:** Architecture decisions for the merged Track A product and integrated Track B release.  
 **Status date:** 28 November 2026.  
-**Release status:** `release/campusforge-integrated-candidate` consolidates the current `main` source with Track A session hardening and Track B AI assistant/proposal work. It is a review candidate, not `main`; PRs #38–#40 remain separate draft PRs. The combined branch must pass fresh CI and runtime migration/session checks before review. Render currently hosts preview/test services; the API's latest environment update started a rollout that was still reported `update_in_progress` at the last check. No production deployment or merge is authorized.
+**Release status:** Track A/B application code and subsequent hardening, password-reset, invitation-email, and production-Blueprint changes are merged to `main`. The Render frontend and Rust API are isolated preview services, not production. The API preview uses a child-branch Neon database and restricted runtime role. The production Blueprint is registered with auto-sync disabled but has no provisioned resources because its first plan requires Render billing information. Production acceptance remains incomplete.
 
 ## 1. Product direction
 
@@ -16,7 +16,7 @@ The merged Track A implementation includes:
 5. Team productivity analytics.
 6. Team chat and meeting notes.
 
-AI project assistance is a separately scoped, optional Track B capability. The integrated candidate includes a feature-flagged read-only assistant, Project Pulse insights, and human-approved task proposals. The feature remains disabled until an administrator configures a supported provider and completes privacy, retention, and cost reviews. Delivery status and acceptance gates are recorded in docs/ROADMAP.md, docs/track-b/README.md, and docs/TRACK_A_FINAL_ACCEPTANCE.md.
+AI project assistance is a separately scoped, optional Track B capability. The merged release includes a feature-flagged read-only assistant, Project Pulse insights, and human-approved task proposals. The feature remains disabled until an administrator configures a supported provider and completes privacy, retention, and cost reviews. Delivery status and acceptance gates are recorded in docs/ROADMAP.md, docs/track-b/README.md, and docs/TRACK_A_FINAL_ACCEPTANCE.md.
 
 ## 2. Current architecture decisions
 
@@ -27,7 +27,7 @@ AI project assistance is a separately scoped, optional Track B capability. The i
 | Backend | Rust + Axum | Typed asynchronous HTTP and WebSocket API |
 | Database | PostgreSQL | System of record for workspace/product data |
 | Database access | SQLx | Parameterized SQL, pooling, migrations |
-| Authentication | Argon2 verification for existing password accounts; provider-verified Google, GitHub, and Discord sign-up; HttpOnly JWT cookies | Provider secrets remain server-side; the integrated candidate adds PostgreSQL-backed session revocation |
+| Authentication | Argon2 verification for existing password accounts; provider-verified Google, GitHub, and Discord sign-up; HttpOnly JWT cookies | Provider secrets remain server-side; PostgreSQL-backed `jti` session revocation is implemented |
 | Real-time transport | Native Axum WebSockets | Not Socket.IO |
 | File bytes | Storage adapter with local-development and S3-compatible backends | Production S3 bucket, credentials/IAM role, backups and malware scanning still require setup |
 | Version control | GitHub | Branch-based work, draft PRs, CI |
@@ -55,7 +55,7 @@ The collaboration-suite migration adds:
 | chat_messages | Workspace-wide or project-specific message history |
 | meeting_notes | Meeting title, time, attendees, agenda, notes and action items |
 
-The schema is applied through ordered SQLx migrations in `server/migrations/`. The Neon `campusforge_app` database has successful journal entries 0001–0014; 0014 is the durable AI proposal/audit schema. The integrated candidate adds 0015 for revocable sessions and 0016 for board-scoped notification authorization. Never edit an applied migration; add a new migration instead.
+The schema is applied through ordered SQLx migrations in `server/migrations/`. Production Neon `campusforge_app` has successful journal entries 0001–0017; the isolated preview `campusforge_release_preview` has successful entries 0001–0018. Migration 0014 is the durable AI proposal/audit schema; 0015 adds revocable sessions; 0016 adds board-scoped notification authorization; 0017 preserves proposal history; and 0018 adds password-reset tokens (preview only). Never edit an applied migration; add a new migration instead.
 
 ## 4. Feature architecture decisions
 
@@ -127,7 +127,7 @@ The merged implementation includes authenticated workspace/project/task file lis
 
 **Decision:** Excluded from the Track A baseline; separately implemented behind Track B feature controls.
 
-AI assistant and model-driven project support are excluded from the Track A baseline. Track B is separately scoped and optional; the current integrated candidate adds a feature-flagged assistant and human-approved proposal flow, with no autonomous mutations.
+AI assistant and model-driven project support are excluded from the Track A baseline. Track B is separately scoped and optional; the merged Track B release includes a feature-flagged assistant and human-approved proposal flow, with no autonomous mutations.
 
 ### ADR-010 — Team productivity analytics
 
@@ -156,7 +156,7 @@ Workspace presence and typing use expiring per-connection leases. PostgreSQL LIS
 
 ## 5. API and real-time conventions
 
-Protected REST routes require a valid bearer token or HttpOnly cookie session unless explicitly public. Requests validate the authenticated user's workspace membership and the relationship between referenced IDs; integrated candidate adds an active server-side session record check.
+Protected REST routes require a valid bearer token or HttpOnly cookie session unless explicitly public. Requests validate the authenticated user's workspace membership and the relationship between referenced IDs; protected requests also require an active server-side session record.
 
 Implemented route groups include:
 - Calendar events, attendee management, attendee responses and all-day date ranges.
@@ -181,15 +181,15 @@ PostgreSQL is the source of truth. Mutations use SQLx; recurrence, reminder, ana
 - Do not enable email delivery without opt-in, unsubscribe, retry, and provider configuration.
 - Do not send unauthorized workspace data to future AI services.
 - Define backups, retention, export, and deletion before public launch.
-- The integrated candidate enforces per-board roles for project data, task mutations, advanced task actions, files, calendar, chat, meeting notes, analytics, AI proposals, and activity notifications. Workspace owners/admins retain elevated access; board viewers are read-only. Two-account negative authorization tests remain required. PostgreSQL LISTEN/NOTIFY is implemented for cross-instance workspace update signals; presence, typing, and other ephemeral connection state still require operational multi-instance verification.
+- The merged main release enforces per-board roles for project data, task mutations, advanced task actions, files, calendar, chat, meeting notes, analytics, AI proposals, and activity notifications. Workspace owners/admins retain elevated access; board viewers are read-only. Two-account negative authorization tests remain required. PostgreSQL LISTEN/NOTIFY is implemented for cross-instance workspace update signals; presence, typing, and other ephemeral connection state still require operational multi-instance verification.
 
 ## 7. Deployment decision
 
-Track A's baseline product and migrations 0001–0013 are on `main`. The integrated candidate combines those with Track B's migration 0014 for AI proposal persistence, Track A's migration 0015 for revocable sessions, and migration 0016 for board-scoped notification authorization. The Neon `campusforge_app` database has successful migration journal entries through version 14. Migrations 0015 and 0016 remain pending integrated CI and runtime acceptance.
+The integrated Track A/Track B application and migrations 0001–0018 are on `main`. Direct Neon checks on 28 November 2026 confirm production `campusforge_app` has successful journal entries through 0017, while the isolated preview `campusforge_release_preview` has successful entries through 0018; the preview migration adds password-reset tokens and has not yet been applied to production. The production DML-only role `campusforge_app_runtime` exists, but no production Rust API service is attached to it.
 
-The repository's Render Blueprint tracks `main` and uses commit-triggered auto-deploy. Therefore, do not merge the integrated candidate to `main` or alter production infrastructure until the user explicitly authorizes release. The live preview is a test environment; verify its deployed source revision and database migration state before any rollout. A migration file in source control does not prove that a hosted database has applied it.
+The main-branch Render preview services use commit-triggered auto-deploy. The separate production Blueprint (`render.production.yaml`) is registered with auto-sync disabled and has no resources. Its initial plan is blocked by Render billing requirements for the paid Rust API and private ClamAV scanner. The live preview is not production; migration files do not prove application to a database, so always verify the Neon journal before deployment.
 
-Before public release, configure provider OAuth applications and callbacks, durable Neon PostgreSQL, private Neon Object Storage, ClamAV with scan enforcement, Resend sender-domain credentials, trusted ingress/WAF controls, backups and restore procedures, privacy/retention policies, and two-account/browser/accessibility acceptance. See [Track A Final Acceptance](TRACK_A_FINAL_ACCEPTANCE.md) and [Operations](OPERATIONS.md).
+Before public release, provision and verify the dedicated production API/frontend and branch-scoped private storage, private ClamAV with scan enforcement, Google/GitHub/Discord OAuth applications and callbacks, Resend sender-domain credentials, trusted ingress/WAF controls, recurring backups and populated-data restore, privacy/retention policies, and two-account/browser/accessibility acceptance. Apply migration 0018 through the protected migration process before deploying production password-reset handlers. See [Track A Final Acceptance](TRACK_A_FINAL_ACCEPTANCE.md) and [Operations](OPERATIONS.md).
 
 ### ADR-012 — Calendar attendees, time zones and reminders
 
@@ -213,7 +213,7 @@ Before public release, configure provider OAuth applications and callbacks, dura
 
 **Decision:** Keep browser authentication in an HttpOnly JWT cookie, but make each JWT reference a database-recorded session ID through its `jti` claim. Never store the raw JWT in PostgreSQL.
 
-- The integrated candidate adds `auth_sessions` with a UUID session ID, owning user, expiry, and optional revocation timestamp.
+- The merged release includes `auth_sessions` with a UUID session ID, owning user, expiry, and optional revocation timestamp.
 - Password and OAuth sign-in persist a session row before returning the session cookie.
 - Protected HTTP requests require a matching session row that is not revoked and has not expired.
 - Logout revokes the corresponding row before clearing the cookie.
@@ -221,4 +221,4 @@ Before public release, configure provider OAuth applications and callbacks, dura
 - A background cleanup removes expired/revoked rows after a seven-day buffer.
 - JWTs issued before this migration have no `jti` and must be renewed by signing in again after rollout.
 
-Migration 0015 and its application changes are in `release/campusforge-integrated-candidate`; it is not yet merged into `main` or live on the hosted service. The feature-flagged Track B assistant remains disabled until provider and privacy controls are approved.
+Migration 0015 and its application changes are merged into `main` and applied on both production and preview databases. The feature-flagged Track B assistant remains disabled until provider and privacy controls are approved.

@@ -4,32 +4,27 @@
 
 CampusForge Teams is a project and collaboration workspace for student teams and small delivery groups. The product combines project boards, task planning, coordination, shared resources, calendar workflows, team communications, and measurable project progress.
 
-**AI project assistance is a separate optional Track B scope.** The integrated candidate adds a read-only assistant, Project Pulse, and durable human-approved task proposals. AI stays disabled by default pending provider/privacy/cost approvals.
+**AI project assistance is a separate optional Track B scope.** The merged Track B release includes a read-only assistant, Project Pulse, and durable human-approved task proposals. The features remain disabled by default pending provider/privacy/cost approvals.
 
 ## Delivery status — 28 November 2026
 
-The non-AI feature implementation described in Phases 1–8 is merged into `main`. The release history is:
+Track A's non-AI collaboration features and Track B's optional AI assistant/proposal implementation are merged into `main`. The latest security, recovery, invitation, release-infrastructure and documentation updates have also been merged.
 
-- **PR #12:** collaboration suite — merged.
-- **PR #20:** SQLx rollback-compatible migration runner — merged.
-- **PR #21:** provider-verified sign-up plus remaining non-AI collaboration roadmap features — merged.
-- **PR #23:** live board presence, active card editing indicators, and threaded task discussion — merged.
-- **PR #24:** owner-only workspace teammate role editing — merged.
-- **PR #26:** encrypted personal Save Locker — merged.
-- **PR #30:** optimistic Kanban drag-and-drop with rollback — merged.
-- **PR #32–#34:** auth/Kanban UI polish, command palette/performance, and mobile navigation — merged.
-- **PR #35–#36:** Neon database/object-storage verification and fail-closed production startup guards — merged.
-- **PR #37:** shared PostgreSQL-backed rate limits for password login and OAuth initiation — merged.
+- **PR #41:** integrated Track A/Track B release — merged.
+- **PR #43:** DML-only runtime role and protected migration/runtime separation — merged.
+- **PR #49:** static-host path/symlink hardening, Track B quota/permission hardening — merged; frontend build, Rust checks/tests, dependency audit and CodeQL passed.
+- **PR #52:** single-use password-reset tokens, session invalidation and password-recovery UI — merged; frontend build, Rust checks/tests, dependency audit and CodeQL passed.
+- **PR #53:** isolated production Render Blueprint with paid Rust API and private ClamAV scanner — merged; Blueprint registered with auto-sync disabled.
+- **PR #54:** Resend-backed workspace invitation delivery, throttling and manual-link fallback — merged; frontend build, Rust checks/tests, dependency audit and CodeQL passed.
+- **PR #55 and #56:** release documentation corrections — merged.
 
-PR #19 was closed without merging; its verified-provider sign-up implementation was included in PR #21. PR #20 and #21 are no longer pending. The historical order remains important: the SQLx compatibility bridge was merged before the provider-sign-up migrations were introduced.
+The latest main commit is `205ab6bec8da3cf31824798bd943147e46c35738`; it is a documentation-only commit after the application/production-Blueprint commit `4f27ee69e4d90ea9292859090c3f435235d66715`. The integrated Render frontend and Rust API preview are separate from production. The frontend's deployment of the documentation commit reached `live`; at the last API check, Render had completed the build and was still applying the documentation-only revision. The previous application API revision on `4f27ee6` was confirmed live. The API configuration remains connected to the isolated Neon preview database, not production.
 
-The latest recorded CI and security workflows for main commit `2b0c5bf` passed on 24 November 2026. The separate Track A/Track B component PRs also reported green frontend build, Rust, dependency and CodeQL checks. Draft PR #41 now runs the integrated checks; its CI state is tracked separately and must pass before merge. Browser-based two-account acceptance, accessibility review, backup/restore exercises, and production integration tests are separate release gates.
+Direct Neon journal checks on 28 November 2026 show production `campusforge_app` at migrations 0001–0017 and isolated preview `campusforge_release_preview` at 0001–0018. Both journals report zero failed migrations. Migration 0018 is the password-reset token table and is preview-only; production migration must be run through the protected one-off migration process after backup verification.
 
-The integrated candidate `release/campusforge-integrated-candidate` combines the Track A session-revocation code with Track B assistant and proposal approval work. Migration 0014 is the AI proposal/audit migration already present in Neon; revocable sessions are migration 0015; board-scoped notification authorization is migration 0016. The separate feature branches have green component checks, but the integrated candidate still needs fresh CI and runtime PostgreSQL session-revocation acceptance. Pre-0015 JWTs lack a session ID and require fresh sign-in after rollout.
+**Production release status:** the separate `CampusForge Production (isolated)` Render Blueprint is registered against `main` and `render.production.yaml`, with auto-sync disabled and no resources created. Its first plan failed with `need_payment_info` for the paid Rust API and private ClamAV services. No paid production services have been created and the preview must not be treated as production.
 
-**Hosting status:** the Render preview and API are test services. The repository's `render.yaml` currently tracks `main` with commit-triggered auto-deploy. Therefore, do not merge finalization changes to `main` until the user explicitly authorizes the corresponding deployment and the external production gates below are met. The current source branch being complete does not prove that the deployed database or services have been upgraded.
-
-**External release gates:** configure production Google/GitHub/Discord OAuth applications and exact HTTPS callbacks; migrate to durable Neon PostgreSQL and verify row counts, backups, and restoration; provision private Neon Object Storage; configure a private ClamAV service and require clean scans; verify Resend sender-domain authentication and delivery; configure trusted ingress/WAF controls; finish two-user/browser/accessibility tests for the implemented per-board/channel authorization rules; approve privacy, data-retention, export, and deletion policies; and close the account-recovery/provider-linking gap.
+**External release gates:** provision the dedicated production API/frontend after reviewing Render costs; configure the production Neon DML-only runtime URL and separate private object-storage credential; provision private ClamAV scanning; configure Google/GitHub/Discord OAuth credentials and exact HTTPS callbacks; configure Resend, a verified sender, SPF/DKIM/DMARC; apply migration 0018 through the protected release operation; establish recurring backups/PITR and verify a populated-data restore; configure custom domain, trusted ingress/WAF, monitoring and incident response; and complete two-account authorization, WebSocket, browser/mobile, accessibility and privacy/retention acceptance. Password recovery is implemented in source/preview; provider linking through account settings remains a separate unimplemented enhancement.
 
 ## Phase 1 — Core workspaces and project boards
 
@@ -48,7 +43,7 @@ Implemented in PR #19 and included in PR #21:
 - Google uses the `email_verified` claim, GitHub uses the verified email list, and Discord uses its verified-email flag.
 - Existing email/password accounts can continue to log in; password-only registration returns `403 Forbidden`.
 - Shared PostgreSQL-backed fixed-window limits protect password login by client IP and normalized email, and OAuth initiation by client IP.
-- The integrated candidate adds server-recorded JWT session IDs, active-session checks on protected API requests, logout revocation, WebSocket revalidation, and scheduled session cleanup. Its combined CI and PostgreSQL runtime acceptance remain pending.
+- The merged main release implements server-recorded JWT session IDs, active-session checks on protected API requests, logout revocation, WebSocket revalidation, and scheduled session cleanup. Migrations 0015–0017 are applied in production and preview. Two-account runtime acceptance remains pending.
 - OAuth state is one-time, hashed in PostgreSQL, and bound to a short-lived HttpOnly browser cookie.
 - Provider identities are not silently linked to existing accounts solely because the email matches.
 - PostgreSQL records `email_verified_at`; migration 0009 includes database-side guards so password-only user inserts from old API instances are rejected.
@@ -138,7 +133,7 @@ Implemented:
 Acceptance gates:
 - Run multi-browser/two-account tests for private-message isolation, member removal, presence reconnect and typing behavior.
 - Add end-user-facing retention/export/delete rules for chat and meeting records.
-- Per-board/channel authorization is implemented in the integrated candidate; two-account negative tests remain a release-acceptance item.
+- Per-board/channel authorization is implemented in the merged main release; two-account negative tests remain a release-acceptance item.
 
 ## Phase 8 — Team productivity analytics
 
@@ -177,21 +172,14 @@ The following items are intentionally not part of the current delivery:
 
 ## Deployment gate
 
-The non-AI implementation is merged into `main`; production deployment is still withheld. The current Render preview uses a temporary free PostgreSQL database (documented expiry: 22 December 2026) and must not be treated as durable production storage. Check the actual deployed migration version before any release; source migrations being present in GitHub does not mean they have been applied to the running database.
+The integrated Track A/Track B source is merged into `main` and deployed to the isolated Render preview. The main-branch preview auto-deploys on commits; a successful build or preview deployment is not production approval.
 
-The integrated candidate adds migration 0015 for revocable sessions and migration 0016 for board-scoped notification authorization after migration 0014 for AI proposal persistence; the combined branch must pass CI/review and runtime database checks before release. Because `render.yaml` uses commit-triggered auto-deploy from `main`, do not merge it to `main` until the user has explicitly authorized the release and the production configuration is prepared. No deployment is authorized by the roadmap or this branch.
+The production stack is defined separately in `render.production.yaml`. Its registered Blueprint has auto-sync disabled and has no resources. The first plan is blocked because Render requires billing information for the paid API and private scanner. Do not connect the public frontend to the preview API or production database until the production stack has been provisioned, its required credentials are configured through protected provider dashboards, and the checklist in [Track A Final Acceptance](TRACK_A_FINAL_ACCEPTANCE.md) is evidenced.
 
-The release owner must sign off every item in [Track A Final Acceptance](TRACK_A_FINAL_ACCEPTANCE.md): durable database and restore drill, private object storage, mandatory malware scanning, OAuth, email delivery, edge protection, privacy/retention, two-account end-to-end tests, accessibility, and operational monitoring. The AI project assistant remains optional, feature-flagged, and disabled until provider/privacy/cost controls are approved.
+The API must keep `CAMPUSFORGE_AUTO_MIGRATE=false` and use the DML-only runtime role. Production migration 0018 must run through the protected one-off `MIGRATION_DATABASE_URL` release procedure only after a current backup/restore point is confirmed. Do not copy production secrets into Git or chat.
 
-
-### Integrated candidate state — 28 November 2026
-
-- Code is consolidated on `release/campusforge-integrated-candidate`; it is not merged into `main`.
-- The Neon `campusforge_app` SQLx journal records successful migrations 0001–0014, including the AI proposal tables. Migration 0015 adds revocable sessions and migration 0016 adds board-scoped notification authorization; both are awaiting integrated validation before application.
-- Render still identifies the Rust API and frontend as preview/test services. The most recent API deploy built successfully but was still reported `update_in_progress` at the last observation; do not assume the new database connection is serving traffic.
-- No production release is authorized. Merge/deploy remains gated on the release owner’s explicit approval and the checklist in `TRACK_A_FINAL_ACCEPTANCE.md`.
-
+The release owner must sign off every applicable item in [Track A Final Acceptance](TRACK_A_FINAL_ACCEPTANCE.md): production infrastructure, OAuth/email, private storage and required malware scanning, migration 0018, backup/PITR and populated-data restore, privacy/retention, two-account end-to-end tests, accessibility, monitoring and incident response. The AI project assistant and Project Pulse remain optional, feature-flagged, and disabled until provider/privacy/cost controls are approved.
 
 ### Board-scoped notification authorization
 
-The integrated candidate now records the board on each activity notification and applies the same board access rule when selecting recipients, listing inbox items, updating read state, and dispatching email. Migration 0016 adds the required column/index and backfills task notifications when the task still exists. Workspace invitations keep their separate invitation validation.
+The merged main release records the board on each activity notification and applies the same board access rule when selecting recipients, listing inbox items, updating read state, and dispatching email. Migration 0016 added the required column/index and backfilled task notifications when the task still existed. Workspace invitations keep their separate invitation validation.
