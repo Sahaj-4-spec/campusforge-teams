@@ -84,6 +84,8 @@ export default function AuthScreen({ onAuthenticated, onTryDemo }) {
   const isRegister = location.pathname === "/signup";
 
   useEffect(() => {
+    if (["/forgot-password", "/reset-password"].includes(location.pathname)) return;
+
     const query = new URLSearchParams(location.search);
     const hasOAuthError = query.has("oauth_error");
     const oauthError = query.get("oauth_error");
