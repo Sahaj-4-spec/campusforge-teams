@@ -80,7 +80,7 @@ The current non-AI completion branch adds:
 - PostgreSQL LISTEN/NOTIFY to relay workspace change signals across API instances, plus expiring presence leases.
 - An idempotency ledger for recurring task generation.
 
-These additional features are part of the integrated review candidate and are not yet deployed to the hosted Render preview. Track B includes a read-only AI assistant, Project Pulse, and a persistent proposal review flow (PRs #39–#40), all feature-flagged off by default until an administrator configures a compatible provider and approves privacy, retention, and spending controls. The preview API has verified access to a private S3-compatible bucket and passed basic PUT/GET/DELETE checks. Production still needs a review of bucket access policies, encryption, lifecycle/versioning, and restore. To require malware scanning, configure a reachable ClamAV TCP service and set `CAMPUSFORGE_REQUIRE_MALWARE_SCAN=true`; without that flag, uploads are marked unscanned and can be downloaded. Resend email and Google/GitHub/Discord login also require provider accounts, callback URLs, and backend secrets. See the [roadmap](docs/ROADMAP.md), [architecture](docs/ARCHITECTURE.md), [operations](docs/OPERATIONS.md), and [social sign-in setup](docs/SOCIAL_AUTH_SETUP.md).
+These features are merged into `main` through PR #41. The integrated Render preview uses a separate Neon child-branch database, a DML-only runtime role, and a private S3-compatible bucket; startup verified PUT/GET/DELETE access. Track B includes a read-only AI assistant, Project Pulse, and human-approved proposal review. AI and Project Pulse remain disabled by default until an administrator configures a compatible provider and approves privacy, retention, and spending controls. Production still requires its own API service, production-scoped storage credential, private malware scanner, OAuth/email provider credentials, and backup/restore acceptance. The public Node frontend host is being corrected in PR #47; do not treat the preview API or preview database as production. See the [roadmap](docs/ROADMAP.md), [architecture](docs/ARCHITECTURE.md), [operations](docs/OPERATIONS.md), and [social sign-in setup](docs/SOCIAL_AUTH_SETUP.md).
 
 ### 8. Optional AI assistant (Track B)
 
@@ -235,17 +235,25 @@ npm run dev
 - Frontend: `http://localhost:5173`
 - Backend health check: `http://localhost:5000/api/health`
 
-Build both applications:
+Build the React frontend for static hosting:
 
 ```bash
 npm run build
 ```
 
-Run the Rust backend in release mode:
+Build the Rust API separately:
 
 ```bash
-npm start
+npm run build:server
 ```
+
+Run the Rust API in release mode (with the required server environment variables configured):
+
+```bash
+cargo run --release --manifest-path server/Cargo.toml
+```
+
+The Node-based Render frontend host serves only the files in `client/dist`; it does not start the API. For a local development session, use `npm run dev` to start Vite and the Rust API together. For a compiled API binary, build it with `npm run build:server` and run `./server/target/release/campusforge-server`.
 
 ## 🖥️ Frontend Milestone
 
@@ -308,7 +316,7 @@ AI-assisted tools may be used to understand concepts, explore implementation app
 
 ## 🚧 Current Project Status
 
-**Status:** The isolated `release/campusforge-integrated-candidate` branch consolidates the current `main` product with Track A session hardening and Track B AI assistant/proposal work; it is under integrated review in draft PR #41 and is not merged. The Render API rollout previously failed on a SQLx checksum mismatch; the Neon journal has since been corrected, but the API has not yet been redeployed against Neon. Production OAuth, mandatory malware scanning, email, verified backups/restore, perimeter controls, privacy review, multi-account acceptance and accessibility remain release gates. No deployment is authorized by this repository.
+**Status:** Track A and Track B are merged into `main` through PR #41; database runtime/migration separation is merged through PR #43. The integrated Render preview is deployed against the isolated Neon child branch and its restricted runtime role, with private object-storage I/O verified. PR #47 fixes the legacy Render Node frontend host and is awaiting final CI/merge. This preview is not a production release. Production OAuth credentials, email delivery, mandatory private malware scanning, a production API using the production DML-only database role and storage credential, recurring backups or a paid retention plan, populated-data restore verification, two-account acceptance and accessibility testing remain launch gates.
 
 The React client authenticates against the Rust API and loads workspace records from PostgreSQL. Task creation, editing, deletion, assignments, comments, project creation, column management, invitation workflows, and drag-and-drop ordering call protected Axum endpoints; they no longer rely on browser-local demo records. New accounts receive a starter workspace and project board when the workspace endpoint is first loaded. Authenticated WebSocket sessions receive workspace-scoped events after committed mutations, and the frontend reloads the snapshot when remote changes arrive.
 

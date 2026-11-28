@@ -7,11 +7,12 @@
     "dev": "concurrently -k -n client,server -c blue,green \"npm:dev:client\" \"npm:dev:server\"",
     "dev:client": "npm --prefix client run dev",
     "dev:server": "cargo run --manifest-path server/Cargo.toml",
-    "build": "npm --prefix client run build && cargo build --release --manifest-path server/Cargo.toml",
-    "build:client": "npm --prefix client run build",
+    "build": "npm --prefix client install --no-audit --no-fund && npm --prefix client run build",
+    "build:client": "npm --prefix client install --no-audit --no-fund && npm --prefix client run build",
     "build:server": "cargo build --release --manifest-path server/Cargo.toml",
     "db:migrate": "cargo run --manifest-path server/Cargo.toml --bin migrate",
-    "start": "cargo run --release --manifest-path server/Cargo.toml"
+    "start": "node scripts/static-server.mjs",
+    "test:static-host": "node --test scripts/static-server.test.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

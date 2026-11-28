@@ -1562,6 +1562,29 @@ export default function App() {
         onSignOut={logout}
       />
       <div className="main-content">
+        {import.meta.env.VITE_CAMPUSFORGE_ENVIRONMENT === "preview" && (
+          <div
+            role="status"
+            style={{
+              alignItems: "center",
+              background: "#f3f4f6",
+              border: "1px solid #d1d5db",
+              borderRadius: 8,
+              color: "#374151",
+              display: "flex",
+              fontSize: 11,
+              fontWeight: 700,
+              justifyContent: "center",
+              letterSpacing: "0.06em",
+              margin: "8px 16px 0",
+              padding: "6px 10px",
+              textAlign: "center",
+              textTransform: "uppercase"
+            }}
+          >
+            Preview environment · Test data only
+          </div>
+        )}
         {demoMode && (
           <div className="demo-mode-banner" role="status">
             <span><Sparkles size={14} /> Interactive demo · Changes are saved only in this browser</span>

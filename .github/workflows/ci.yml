@@ -6,7 +6,7 @@ concurrency:
 
 on:
   push:
-    branches: [main, 'track-a/**', 'track-b/**', 'feature/**', 'release/**']
+    branches: [main, 'track-a/**', 'track-b/**', 'feature/**', 'release/**', 'fix/**']
   pull_request:
   workflow_dispatch:
 
@@ -24,6 +24,8 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: client/package.json
+      - name: Test Render static host
+        run: npm run test:static-host
       - name: Install frontend dependencies
         run: npm --prefix client install
       - name: Build frontend
