@@ -38,14 +38,21 @@ fn internal_error<E: std::fmt::Display>(
     fail(StatusCode::INTERNAL_SERVER_ERROR, "The proposal request could not be completed")
 }
 
-/// Keep proposal rate-limit buckets compatible with api_rate_limits.bucket_key (64 hex chars).
-/// The action, workspace, and user are included in the hash preimage to avoid collisions.
-fn proposal_rate_limit_key(action: &str, workspace_id: Uuid, user_id: Uuid) -> String {
-    let identity = format!("ai-proposal:{action}:{workspace_id}:{user_id}");
+/// Hash proposal rate-limit identities to the schema's fixed 64-character bucket key.
+/// Including action, workspace, scope and user prevents collisions between independent buckets.
+fn hash_proposal_rate_limit_key(identity: &str) -> String {
     Sha256::digest(identity.as_bytes())
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>()
+}
+
+fn proposal_rate_limit_key(action: &str, workspace_id: Uuid, user_id: Uuid) -> String {
+    hash_proposal_rate_limit_key(&format!("ai-proposal:user:{action}:{workspace_id}:{user_id}"))
+}
+
+fn proposal_workspace_rate_limit_key(action: &str, workspace_id: Uuid) -> String {
+    hash_proposal_rate_limit_key(&format!("ai-proposal:workspace:{action}:{workspace_id}"))
 }
 
 async fn check_proposal_rate_limit(
@@ -55,11 +62,30 @@ async fn check_proposal_rate_limit(
     action: &'static str,
     limit: i32,
 ) -> ApiResult<()> {
-    let key = proposal_rate_limit_key(action, workspace_id, user_id);
-    let allowed = state.check_rate_limit(&key, limit, 60).await
-        .map_err(|cause| internal_error(cause, "Could not enforce AI proposal rate limit"))?;
-    if !allowed {
-        return Err(fail(StatusCode::TOO_MANY_REQUESTS, "Too many proposal requests. Please wait and try again."));
+    let user_key = proposal_rate_limit_key(action, workspace_id, user_id);
+    let user_allowed = state.check_rate_limit(&user_key, limit, 60).await
+        .map_err(|cause| internal_error(cause, "Could not enforce AI proposal user rate limit"))?;
+    if !user_allowed {
+        return Err(fail(StatusCode::TOO_MANY_REQUESTS, "Your proposal request limit was reached. Please wait before trying again."));
+    }
+
+    // A shared workspace bucket prevents many individually throttled users from
+    // multiplying proposal traffic and creating excessive review/audit rows.
+    let (workspace_limit, workspace_window_seconds) = if action == "write" {
+        (120, 3600)
+    } else {
+        (600, 3600)
+    };
+    let workspace_key = proposal_workspace_rate_limit_key(action, workspace_id);
+    let workspace_allowed = state.check_rate_limit(
+        &workspace_key,
+        workspace_limit,
+        workspace_window_seconds,
+    ).await.map_err(|cause| {
+        internal_error(cause, "Could not enforce AI proposal workspace rate limit")
+    })?;
+    if !workspace_allowed {
+        return Err(fail(StatusCode::TOO_MANY_REQUESTS, "This workspace reached its proposal request limit. Please wait before trying again."));
     }
     Ok(())
 }
@@ -893,16 +919,186 @@ mod tests {
         assert!(validate_tasks(&mut invalid_estimate).is_err());
     }
     #[test]
-    fn proposal_rate_limit_keys_match_schema_and_separate_actions() {
+    fn proposal_rate_limit_keys_match_schema_and_separate_scope() {
         let workspace_id = Uuid::from_u128(1);
+        let other_workspace_id = Uuid::from_u128(3);
         let user_id = Uuid::from_u128(2);
+        let other_user_id = Uuid::from_u128(4);
         let read_key = proposal_rate_limit_key("read", workspace_id, user_id);
         let write_key = proposal_rate_limit_key("write", workspace_id, user_id);
+        let other_user_key = proposal_rate_limit_key("read", workspace_id, other_user_id);
+        let workspace_key = proposal_workspace_rate_limit_key("read", workspace_id);
+        let other_workspace_key = proposal_workspace_rate_limit_key("read", other_workspace_id);
 
-        assert_eq!(read_key.len(), 64);
-        assert!(read_key.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        for key in [&read_key, &write_key, &other_user_key, &workspace_key, &other_workspace_key] {
+            assert_eq!(key.len(), 64);
+            assert!(key.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        }
         assert_eq!(read_key, proposal_rate_limit_key("read", workspace_id, user_id));
         assert_ne!(read_key, write_key);
+        assert_ne!(read_key, other_user_key);
+        assert_ne!(workspace_key, other_workspace_key);
+        assert_ne!(read_key, workspace_key);
+    }
+    
+    #[sqlx::test(migrations = "./migrations")]
+    async fn proposal_write_access_and_assignees_follow_board_roles(
+        pool: sqlx::PgPool,
+    ) -> Result<(), sqlx::Error> {
+        let owner_id = Uuid::new_v4();
+        let member_id = Uuid::new_v4();
+        let viewer_id = Uuid::new_v4();
+        let outsider_id = Uuid::new_v4();
+        let workspace_id = Uuid::new_v4();
+        let board_id = Uuid::new_v4();
+        let list_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+
+        // The verified-provider identity trigger requires a matching OAuth row.
+        let mut users_tx = pool.begin().await?;
+        for (id, email, name) in [
+            (owner_id, "proposal-owner@example.test", "Proposal Owner"),
+            (member_id, "proposal-member@example.test", "Proposal Member"),
+            (viewer_id, "proposal-viewer@example.test", "Proposal Viewer"),
+            (outsider_id, "proposal-outsider@example.test", "Proposal Outsider"),
+        ] {
+            sqlx::query(
+                "INSERT INTO users (id, email, password_hash, full_name)
+                 VALUES ($1, $2, NULL, $3)",
+            )
+            .bind(id)
+            .bind(email)
+            .bind(name)
+            .execute(&mut *users_tx)
+            .await?;
+
+            sqlx::query(
+                "INSERT INTO oauth_accounts (provider, provider_user_id, user_id, email)
+                 VALUES ('google', $1, $2, $3)",
+            )
+            .bind(format!("campusforge-proposal-test-{id}"))
+            .bind(id)
+            .bind(email)
+            .execute(&mut *users_tx)
+            .await?;
+        }
+        users_tx.commit().await?;
+
+        sqlx::query("INSERT INTO workspaces (id, name, owner_id) VALUES ($1, 'Proposal Test', $2)")
+            .bind(workspace_id)
+            .bind(owner_id)
+            .execute(&pool)
+            .await?;
+
+        for (user_id, role) in [
+            (owner_id, "owner"),
+            (member_id, "member"),
+            (viewer_id, "member"),
+        ] {
+            sqlx::query(
+                "INSERT INTO workspace_members (workspace_id, user_id, role)
+                 VALUES ($1, $2, $3)",
+            )
+            .bind(workspace_id)
+            .bind(user_id)
+            .bind(role)
+            .execute(&pool)
+            .await?;
+        }
+
+        sqlx::query(
+            "INSERT INTO boards (id, workspace_id, name, created_by)
+             VALUES ($1, $2, 'Proposal Board', $3)",
+        )
+        .bind(board_id)
+        .bind(workspace_id)
+        .bind(owner_id)
+        .execute(&pool)
+        .await?;
+
+        for (user_id, role) in [(member_id, "member"), (viewer_id, "viewer")] {
+            sqlx::query(
+                "INSERT INTO board_members (board_id, user_id, role)
+                 VALUES ($1, $2, $3)",
+            )
+            .bind(board_id)
+            .bind(user_id)
+            .bind(role)
+            .execute(&pool)
+            .await?;
+        }
+
+        sqlx::query("INSERT INTO lists (id, board_id, name, position) VALUES ($1, $2, 'To do', 0)")
+            .bind(list_id)
+            .bind(board_id)
+            .execute(&pool)
+            .await?;
+
+        sqlx::query(
+            "INSERT INTO tasks (id, list_id, title, description, created_by, position)
+             VALUES ($1, $2, 'Initial task', 'Original description', $3, 0)",
+        )
+        .bind(task_id)
+        .bind(list_id)
+        .bind(owner_id)
+        .execute(&pool)
+        .await?;
+
+        let mut tx = pool.begin().await?;
+        assert!(can_write_board(&mut tx, owner_id, workspace_id, board_id).await?);
+        assert!(can_write_board(&mut tx, member_id, workspace_id, board_id).await?);
+        assert!(!can_write_board(&mut tx, viewer_id, workspace_id, board_id).await?);
+        assert!(!can_write_board(&mut tx, outsider_id, workspace_id, board_id).await?);
+
+        let valid_assignees = ProposedTask {
+            title: "Valid assignees".to_owned(),
+            description: None,
+            priority: "medium".to_owned(),
+            due_at: None,
+            estimated_minutes: Some(30),
+            assignee_ids: vec![owner_id, member_id],
+            source_refs: vec![],
+        };
+        assert!(validate_assignees(
+            &mut tx, workspace_id, board_id, &[valid_assignees]
+        ).await?);
+
+        let viewer_assignee = ProposedTask {
+            title: "Viewer assignee".to_owned(),
+            description: None,
+            priority: "medium".to_owned(),
+            due_at: None,
+            estimated_minutes: None,
+            assignee_ids: vec![viewer_id],
+            source_refs: vec![],
+        };
+        assert!(!validate_assignees(
+            &mut tx, workspace_id, board_id, &[viewer_assignee]
+        ).await?);
+
+        let outsider_assignee = ProposedTask {
+            title: "Outsider assignee".to_owned(),
+            description: None,
+            priority: "medium".to_owned(),
+            due_at: None,
+            estimated_minutes: None,
+            assignee_ids: vec![outsider_id],
+            source_refs: vec![],
+        };
+        assert!(!validate_assignees(
+            &mut tx, workspace_id, board_id, &[outsider_assignee]
+        ).await?);
+
+        let original_fingerprint = board_fingerprint(&mut tx, workspace_id, board_id).await?;
+        sqlx::query("UPDATE tasks SET description = 'Changed after proposal review' WHERE id = $1")
+            .bind(task_id)
+            .execute(&mut *tx)
+            .await?;
+        let changed_fingerprint = board_fingerprint(&mut tx, workspace_id, board_id).await?;
+        assert_ne!(original_fingerprint, changed_fingerprint);
+
+        tx.rollback().await?;
+        Ok(())
     }
 
 }
