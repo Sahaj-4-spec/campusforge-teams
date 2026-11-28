@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use sqlx::FromRow;
 use std::{collections::HashSet, net::{IpAddr, SocketAddr}};
 use std::path::PathBuf;
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream};
+use tokio::{io::{AsyncRead, AsyncReadExt, AsyncWriteExt}, net::TcpStream};
 use tokio::time::{interval, Duration as TokioDuration};
 use uuid::Uuid;
 
@@ -43,8 +43,36 @@ fn scanner_ip_is_private(ip: IpAddr) -> bool {
 }
 
 fn clamav_pong_received(response: &[u8]) -> bool {
-    let response = String::from_utf8_lossy(response);
-    response.contains("PONG") && !response.contains("ERROR")
+    response == b"zPONG\0"
+}
+
+async fn read_clamav_frame<R: AsyncRead + Unpin>(
+    stream: &mut R,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    let mut response = Vec::with_capacity(max_bytes.min(64));
+    let mut buffer = [0_u8; 64];
+
+    loop {
+        let remaining = max_bytes.saturating_sub(response.len());
+        if remaining == 0 {
+            return Err("ClamAV response exceeded the maximum frame size".to_string());
+        }
+
+        let read_len = remaining.min(buffer.len());
+        let read = stream.read(&mut buffer[..read_len]).await
+            .map_err(|error| format!("ClamAV response read failed: {error}"))?;
+        if read == 0 {
+            return Err("ClamAV connection closed before the response terminator".to_string());
+        }
+
+        if let Some(end) = buffer[..read].iter().position(|byte| *byte == 0) {
+            response.extend_from_slice(&buffer[..=end]);
+            return Ok(response);
+        }
+
+        response.extend_from_slice(&buffer[..read]);
+    }
 }
 
 /// Resolve and connect only to private or loopback scanner addresses.
@@ -95,16 +123,14 @@ pub async fn verify_clamav_from_env() -> Result<(), String> {
     .map_err(|_| "ClamAV health probe write timed out".to_string())?
     .map_err(|error| format!("ClamAV health probe write failed: {error}"))?;
 
-    let mut response = [0_u8; 64];
-    let read = tokio::time::timeout(
+    let response = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        stream.read(&mut response),
+        read_clamav_frame(&mut stream, 64),
     )
     .await
-    .map_err(|_| "ClamAV health probe response timed out".to_string())?
-    .map_err(|error| format!("ClamAV health probe response failed: {error}"))?;
+    .map_err(|_| "ClamAV health probe response timed out".to_string())??;
 
-    if !clamav_pong_received(&response[..read]) {
+    if !clamav_pong_received(&response) {
         return Err("ClamAV health probe returned an unexpected response".to_string());
     }
     Ok(())
@@ -135,11 +161,13 @@ async fn scan_upload(path: &PathBuf) -> Result<&'static str, String> {
         stream.write_all(&buffer[..read]).await.map_err(|error| error.to_string())?;
     }
     stream.write_all(&0_u32.to_be_bytes()).await.map_err(|error| error.to_string())?;
-    let mut response = [0_u8; 1024];
-    let read = tokio::time::timeout(std::time::Duration::from_secs(20), stream.read(&mut response))
-        .await.map_err(|_| "Malware scanner response timed out".to_string())?
-        .map_err(|error| format!("Could not read malware scanner response: {error}"))?;
-    let response = String::from_utf8_lossy(&response[..read]);
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        read_clamav_frame(&mut stream, 1024),
+    )
+    .await
+    .map_err(|_| "Malware scanner response timed out".to_string())??;
+    let response = String::from_utf8_lossy(&response);
     if response.contains(" FOUND") {
         return Err("The uploaded file was flagged as malware".to_string());
     }
@@ -2003,6 +2031,34 @@ mod clamav_health_probe_tests {
         assert!(!clamav_pong_received(b"zERROR\0"));
         assert!(!clamav_pong_received(b"READY"));
         assert!(!clamav_pong_received(b""));
+    }
+
+    #[tokio::test]
+    async fn reads_split_pong_frame_until_null_terminator() {
+        let (mut writer, mut reader) = tokio::io::duplex(16);
+        let writer_task = tokio::spawn(async move {
+            writer.write_all(b"zPO").await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            writer.write_all(b"NG\0").await.unwrap();
+        });
+
+        let response = read_clamav_frame(&mut reader, 64).await.unwrap();
+        writer_task.await.unwrap();
+        assert!(clamav_pong_received(&response));
+    }
+
+    #[tokio::test]
+    async fn rejects_eof_and_oversized_clamav_frames() {
+        let (writer, mut reader) = tokio::io::duplex(16);
+        drop(writer);
+        assert!(read_clamav_frame(&mut reader, 64).await.is_err());
+
+        let (mut writer, mut reader) = tokio::io::duplex(16);
+        let writer_task = tokio::spawn(async move {
+            writer.write_all(b"0123456789").await.unwrap();
+        });
+        assert!(read_clamav_frame(&mut reader, 8).await.is_err());
+        writer_task.await.unwrap();
     }
 
     #[test]
