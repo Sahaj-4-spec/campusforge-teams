@@ -163,6 +163,29 @@ export default function AuthScreen({ onAuthenticated, onTryDemo }) {
 
   return (
     <main className="auth-screen auth-screen-split">
+      {import.meta.env.VITE_CAMPUSFORGE_ENVIRONMENT === "preview" && (
+        <div
+          role="status"
+          style={{
+            background: "#f3f4f6",
+            border: "1px solid #d1d5db",
+            borderRadius: 8,
+            color: "#374151",
+            fontSize: 11,
+            fontWeight: 700,
+            left: "50%",
+            letterSpacing: "0.06em",
+            padding: "6px 10px",
+            position: "fixed",
+            top: 10,
+            transform: "translateX(-50%)",
+            zIndex: 1000,
+            whiteSpace: "nowrap"
+          }}
+        >
+          Preview environment · Test data only
+        </div>
+      )}
       <section className="auth-card">
         <a className="brand auth-brand" href="/" aria-label="CampusForge Teams home">
           <span className="brand-mark"><img src="/campusforge-mark.svg" alt="" /></span>
