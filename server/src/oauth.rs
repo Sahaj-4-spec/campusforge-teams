@@ -459,7 +459,13 @@ fn normalize_verified_email(email: &str) -> Result<String, &'static str> {
     };
     let valid_domain = domain.contains('.')
         && domain.split('.').all(|label| {
-            !label.is_empty() && !label.starts_with('-') && !label.ends_with('-')
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
         });
     if parts.next().is_some()
         || local.is_empty()
@@ -881,6 +887,15 @@ mod tests {
         assert!(normalize_verified_email("student@@gmail.com").is_err());
         assert!(normalize_verified_email("student@gmail..com").is_err());
         assert!(normalize_verified_email(".student@gmail.com").is_err());
+        assert!(normalize_verified_email("student@bad/domain.com").is_err());
+        assert!(normalize_verified_email("student@bad_domain.com").is_err());
+        assert!(normalize_verified_email("student@bad!domain.com").is_err());
+        assert!(normalize_verified_email("student@-bad.com").is_err());
+        assert!(normalize_verified_email("student@bad-.com").is_err());
+
+        let long_domain_label = format!("student@{}.com", "a".repeat(64));
+        assert!(normalize_verified_email(&long_domain_label).is_err());
+        assert!(normalize_verified_email("student@xn--bcher-kva.example").is_ok());
     }
 
     #[test]
