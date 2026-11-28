@@ -304,6 +304,26 @@ async fn can_write_board(
     Ok(matches!(board_role.as_deref(), Some("admin" | "member")))
 }
 
+/// Charge shared write capacity only after the caller's current board role has
+/// been revalidated under row locks. Forbidden viewers consume only their own
+/// small attempt bucket and cannot throttle authorized teammates.
+async fn authorize_proposal_write_and_rate_limit(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    workspace_id: Uuid,
+    board_id: Uuid,
+    forbidden_message: &'static str,
+) -> ApiResult<()> {
+    let allowed = can_write_board(tx, user_id, workspace_id, board_id)
+        .await
+        .map_err(|cause| internal_error(cause, "Could not recheck proposal write permissions"))?;
+    if !allowed {
+        return Err(fail(StatusCode::FORBIDDEN, forbidden_message));
+    }
+    check_proposal_workspace_rate_limit(state, workspace_id, "write").await
+}
+
 /// Hash only the current board/list/task state. Raw content is never written to the audit log.
 async fn board_fingerprint(
     tx: &mut Transaction<'_, Postgres>,
@@ -483,12 +503,10 @@ async fn create_proposal(
     let mut tx = state.db.begin().await
         .map_err(|cause| internal_error(cause, "Could not begin proposal creation"))?;
 
-    if !can_write_board(&mut tx, user_id, workspace_id, request.board_id).await
-        .map_err(|cause| internal_error(cause, "Could not verify proposal permissions"))?
-    {
-        return Err(fail(StatusCode::FORBIDDEN, "You cannot create proposals for this project"));
-    }
-    check_proposal_workspace_rate_limit(&state, workspace_id, "write").await?;
+    authorize_proposal_write_and_rate_limit(
+        &state, &mut tx, user_id, workspace_id, request.board_id,
+        "You cannot create proposals for this project",
+    ).await?;
 
     let list_exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM lists WHERE id = $1 AND board_id = $2)",
@@ -591,12 +609,10 @@ async fn apply_proposal(
     if row.status != "pending" {
         return Err(fail(StatusCode::CONFLICT, "This proposal has already been reviewed"));
     }
-    if !can_write_board(&mut tx, user_id, workspace_id, row.board_id).await
-        .map_err(|cause| internal_error(cause, "Could not recheck project permissions"))?
-    {
-        return Err(fail(StatusCode::FORBIDDEN, "You no longer have permission to approve this proposal"));
-    }
-    check_proposal_workspace_rate_limit(&state, workspace_id, "write").await?;
+    authorize_proposal_write_and_rate_limit(
+        &state, &mut tx, user_id, workspace_id, row.board_id,
+        "You no longer have permission to approve this proposal",
+    ).await?;
 
     if row.expires_at <= Utc::now() {
         sqlx::query(
@@ -804,12 +820,10 @@ async fn reject_proposal(
     if row.status != "pending" {
         return Err(fail(StatusCode::CONFLICT, "This proposal has already been reviewed"));
     }
-    if !can_write_board(&mut tx, user_id, workspace_id, row.board_id).await
-        .map_err(|cause| internal_error(cause, "Could not recheck project permissions"))?
-    {
-        return Err(fail(StatusCode::FORBIDDEN, "You no longer have permission to reject this proposal"));
-    }
-    check_proposal_workspace_rate_limit(&state, workspace_id, "write").await?;
+    authorize_proposal_write_and_rate_limit(
+        &state, &mut tx, user_id, workspace_id, row.board_id,
+        "You no longer have permission to reject this proposal",
+    ).await?;
 
     if row.expires_at <= Utc::now() {
         sqlx::query(
@@ -1121,6 +1135,57 @@ mod tests {
         assert_ne!(original_fingerprint, changed_fingerprint);
 
         tx.rollback().await?;
+
+        // An unauthorized viewer may spend their own attempt allowance, but
+        // must not increment the shared workspace write bucket.
+        let storage = crate::storage::StorageService::from_env()
+            .await
+            .expect("test storage should initialize");
+        let state = AppState::new(pool.clone(), "test-secret".to_owned(), storage);
+
+        check_proposal_user_rate_limit(&state, viewer_id, workspace_id, "write", 10)
+            .await
+            .expect("viewer attempt should be rate limited per user");
+
+        let mut viewer_tx = pool.begin().await?;
+        let denied = authorize_proposal_write_and_rate_limit(
+            &state,
+            &mut viewer_tx,
+            viewer_id,
+            workspace_id,
+            board_id,
+            "viewer cannot write",
+        ).await;
+        assert!(matches!(denied, Err((StatusCode::FORBIDDEN, _))));
+        viewer_tx.rollback().await?;
+
+        let workspace_key = proposal_workspace_rate_limit_key("write", workspace_id);
+        let viewer_workspace_count: Option<i64> = sqlx::query_scalar(
+            "SELECT request_count::bigint FROM api_rate_limits WHERE bucket_key = $1",
+        )
+        .bind(&workspace_key)
+        .fetch_optional(&pool)
+        .await?;
+        assert_eq!(viewer_workspace_count, None);
+
+        let mut member_tx = pool.begin().await?;
+        authorize_proposal_write_and_rate_limit(
+            &state,
+            &mut member_tx,
+            member_id,
+            workspace_id,
+            board_id,
+            "member write access changed",
+        ).await.expect("board member should consume shared write capacity");
+        member_tx.rollback().await?;
+
+        let member_workspace_count: Option<i64> = sqlx::query_scalar(
+            "SELECT request_count::bigint FROM api_rate_limits WHERE bucket_key = $1",
+        )
+        .bind(&workspace_key)
+        .fetch_optional(&pool)
+        .await?;
+        assert_eq!(member_workspace_count, Some(1));
         Ok(())
     }
 
