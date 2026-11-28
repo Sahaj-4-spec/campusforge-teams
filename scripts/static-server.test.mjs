@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
@@ -17,6 +17,7 @@ before(async () => {
   await writeFile(join(root, "index.html"), "<!doctype html><title>CampusForge</title>");
   await writeFile(join(root, "assets", "app.js"), "console.log('ok')");
   await writeFile(join(tempRoot, "secret.txt"), "outside-root-sentinel");
+  await symlink(join(tempRoot, "secret.txt"), join(root, "linked-secret.txt"));
   server = createStaticServer({ rootDir: root });
   await new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -55,6 +56,20 @@ test("serves static assets with the correct MIME type", async () => {
 test("does not return the SPA entry for missing asset paths", async () => {
   const response = await fetch(baseUrl + "/assets/missing.js");
   assert.equal(response.status, 404);
+});
+
+test("does not serve files through symlinks that escape the publish root", async () => {
+  const response = await fetch(baseUrl + "/linked-secret.txt");
+  const body = await response.text();
+  assert.equal(response.status, 404);
+  assert.equal(body.includes("outside-root-sentinel"), false);
+});
+
+test("does not route unavailable API paths to the SPA entry", async () => {
+  const response = await fetch(baseUrl + "/api/health");
+  assert.equal(response.status, 404);
+  assert.match(response.headers.get("content-type"), /application\\/json/);
+  assert.doesNotMatch(await response.text(), /CampusForge/);
 });
 
 test("rejects methods other than GET and HEAD", async () => {
