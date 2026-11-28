@@ -402,6 +402,16 @@ pub(crate) async fn run_session_cleanup(db: PgPool) {
         {
             tracing::warn!(%error, "Could not clean expired authentication sessions");
         }
+        if let Err(error) = sqlx::query(
+            "DELETE FROM password_reset_tokens
+             WHERE expires_at < NOW() - INTERVAL '1 day'
+                OR used_at < NOW() - INTERVAL '1 day'",
+        )
+        .execute(&db)
+        .await
+        {
+            tracing::warn!(%error, "Could not clean expired password reset tokens");
+        }
     }
 }
 
