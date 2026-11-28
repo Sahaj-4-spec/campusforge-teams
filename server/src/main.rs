@@ -96,6 +96,15 @@ async fn health(
     }))
 }
 
+fn should_run_migrations(configured: Option<&str>, production_mode: bool) -> Result<bool, &'static str> {
+    match configured.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+        Some("true" | "1" | "yes") => Ok(true),
+        Some("false" | "0" | "no") => Ok(false),
+        Some(_) => Err("CAMPUSFORGE_AUTO_MIGRATE must be true or false"),
+        None => Ok(!production_mode),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
@@ -144,7 +153,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .and_then(|value| value.host_str().map(str::to_owned))
         .unwrap_or_else(|| "unparsed-database-url".to_string());
-    let pool = db::connect_and_migrate(&database_url).await?;
+    // Keep DDL out of the long-running API process when a least-privilege runtime role is used.
+    // In production, migrations are a separate release operation unless explicitly overridden.
+    let auto_migrate = should_run_migrations(
+        std::env::var("CAMPUSFORGE_AUTO_MIGRATE").ok().as_deref(),
+        production_mode,
+    )?;
+    let pool = if auto_migrate {
+        tracing::warn!("Automatic SQLx migrations are enabled for this API process");
+        db::connect_and_migrate(&database_url).await?
+    } else {
+        tracing::info!("Automatic SQLx migrations disabled; connecting with runtime database privileges");
+        db::connect(&database_url).await?
+    };
     let database_identity = db::identify(&pool).await?;
     tracing::info!(
         database_host = %database_host,
@@ -153,7 +174,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         server_address = ?database_identity.server_address,
         server_port = ?database_identity.server_port,
         server_version = %database_identity.server_version,
-        "Verified active PostgreSQL connection target; migrations applied"
+        "Verified active PostgreSQL connection target"
     );
 
     let storage = storage::StorageService::from_env().await?;
@@ -270,5 +291,31 @@ mod cors_origin_tests {
     #[test]
     fn rejects_an_empty_origin_list() {
         assert!(parse_frontend_origins(" , , ", false).is_err());
+    }
+}
+
+#[cfg(test)]
+mod migration_configuration_tests {
+    use super::should_run_migrations;
+
+    #[test]
+    fn production_defaults_to_manual_migrations() {
+        assert!(!should_run_migrations(None, true).unwrap());
+    }
+
+    #[test]
+    fn non_production_keeps_local_auto_migrations_by_default() {
+        assert!(should_run_migrations(None, false).unwrap());
+    }
+
+    #[test]
+    fn explicit_configuration_overrides_default() {
+        assert!(should_run_migrations(Some(" true "), true).unwrap());
+        assert!(!should_run_migrations(Some("false"), false).unwrap());
+    }
+
+    #[test]
+    fn invalid_configuration_fails_closed() {
+        assert!(should_run_migrations(Some("sometimes"), true).is_err());
     }
 }
