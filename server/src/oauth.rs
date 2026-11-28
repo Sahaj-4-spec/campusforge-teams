@@ -7,7 +7,7 @@ use axum::{
 };
 use chrono::{Duration, Utc};
 use reqwest::header::{ACCEPT, USER_AGENT};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::FromRow;
 use url::Url;
@@ -727,8 +727,32 @@ async fn find_or_create_user(
     Ok(user)
 }
 
+
+#[derive(Serialize)]
+struct OAuthProviderAvailability {
+    google: bool,
+    github: bool,
+    discord: bool,
+}
+
+async fn provider_availability() -> Response {
+    // Expose only readiness booleans. OAuth client IDs and secrets stay server-side.
+    let availability = OAuthProviderAvailability {
+        google: Provider::Google.config().is_ok(),
+        github: Provider::Github.config().is_ok(),
+        discord: Provider::Discord.config().is_ok(),
+    };
+    let mut response = axum::Json(availability).into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    response
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/providers", get(provider_availability))
         .route("/{provider}/start", get(start))
         .route("/{provider}/callback", get(callback))
 }
