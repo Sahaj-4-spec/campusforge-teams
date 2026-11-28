@@ -21,6 +21,8 @@ services:
         value: https://campusforge-preview.onrender.com
       - key: OAUTH_REDIRECT_BASE_URL
         value: https://campusforge-api-test.onrender.com
+      - key: CAMPUSFORGE_AUTO_MIGRATE
+        value: "false"
       - key: CAMPUSFORGE_AI_ENABLED
         value: "false"
       - key: CAMPUSFORGE_PROJECT_PULSE_ENABLED
