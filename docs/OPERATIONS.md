@@ -143,7 +143,7 @@ Before public launch, test clean and infected samples, scanner unavailability, t
 
 ## 7. Authentication session revocation
 
-The integrated candidate keeps migration 0014 for AI proposal persistence and adds `0015_revocable_auth_sessions.sql` plus `0016_notification_board_scope.sql`. When the integrated session-aware release is approved:
+The merged Track A/Track B release keeps migration 0014 for AI proposal persistence and includes `0015_revocable_auth_sessions.sql` plus `0016_notification_board_scope.sql`. Migrations 0015–0017 are applied in both production and preview; migration 0018 (password-reset tokens) is applied only to the isolated preview. The production API has not been provisioned yet.
 
 - Password and OAuth sign-in issue a random session identifier in the JWT `jti` claim and insert the corresponding session ID, user ID, and expiry into PostgreSQL. The raw JWT is not stored.
 - Protected HTTP endpoints require a matching, unexpired, non-revoked row in `auth_sessions`.
@@ -152,7 +152,7 @@ The integrated candidate keeps migration 0014 for AI proposal persistence and ad
 - A scheduled cleanup removes expired/revoked session records after a seven-day retention buffer.
 - Tokens issued by the pre-0015 application do not carry a session ID and will require a fresh sign-in after rollout. Plan that re-authentication as part of the release notice.
 
-Do not apply migrations 0015 or 0016 to a production database until the matching integrated application release has passed CI and its migration rollout/rollback plan is approved. The Render services `campusforge-preview` and `campusforge-api-test` are preview/test services, not a production environment. The API environment was updated to use Neon `campusforge_app`; Render reported an automatic rollout and its status must be confirmed before assuming the new connection is active. Do not treat the database switch as production acceptance.
+Do not reapply migrations 0015–0017. Apply migration 0018 to production only through the protected one-off `MIGRATION_DATABASE_URL` release operation, after a current snapshot/restore point is confirmed and before deploying the production API build that includes password-reset endpoints. The Render services `campusforge-preview` and `campusforge-api-test` are preview/test services, not production. The Rust preview API is connected to the isolated Neon `campusforge_release_preview` database using the DML-only `campusforge_release_runtime` role; it is not connected to production `campusforge_app`. The dedicated production API service has not been created. Do not treat a preview database connection as production acceptance.
 
 
 ## Track B AI operations
