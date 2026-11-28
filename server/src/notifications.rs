@@ -12,6 +12,55 @@ pub fn email_delivery_available() -> bool {
         && env::var("EMAIL_FROM").is_ok_and(|value| !value.trim().is_empty())
 }
 
+#[derive(Debug, Serialize)]
+struct SecurityEmail<'a> {
+    from: &'a str,
+    to: [&'a str; 1],
+    subject: &'a str,
+    text: &'a str,
+}
+
+/// Deliver one-off account-security email through the same server-side Resend
+/// configuration as notifications. Callers must never log the message body:
+/// password-reset URLs contain a short-lived bearer token.
+pub async fn send_security_email(
+    recipient: &str,
+    subject: &str,
+    text: &str,
+    idempotency_key: &str,
+) -> Result<(), String> {
+    let api_key = env::var("RESEND_API_KEY")
+        .map_err(|_| "Email delivery is not configured".to_owned())?;
+    let sender = env::var("EMAIL_FROM")
+        .map_err(|_| "Email delivery is not configured".to_owned())?;
+    if api_key.trim().is_empty() || sender.trim().is_empty() {
+        return Err("Email delivery is not configured".to_owned());
+    }
+
+    let payload = SecurityEmail {
+        from: &sender,
+        to: [recipient],
+        subject,
+        text,
+    };
+    let client = Client::builder()
+        .timeout(StdDuration::from_secs(10))
+        .build()
+        .map_err(|_| "Could not initialize email delivery".to_owned())?;
+    let response = client
+        .post("https://api.resend.com/emails")
+        .bearer_auth(api_key)
+        .header("Idempotency-Key", idempotency_key)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|_| "Email provider request failed".to_owned())?;
+    if !response.status().is_success() {
+        return Err(format!("Email provider returned HTTP {}", response.status()));
+    }
+    Ok(())
+}
+
 #[derive(Debug, FromRow)]
 struct EmailJob {
     id: Uuid,
