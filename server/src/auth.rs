@@ -1,5 +1,5 @@
 use argon2::{
-    password_hash::{PasswordHash, PasswordVerifier},
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
 use axum::{
@@ -24,6 +24,32 @@ struct LoginRequest {
     email: String,
     #[validate(length(min = 1, max = 128))]
     password: String,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+struct PasswordResetRequest {
+    #[validate(email, length(max = 254))]
+    email: String,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+struct PasswordResetConfirmRequest {
+    #[validate(length(min = 65, max = 80))]
+    token: String,
+    #[validate(length(min = 12, max = 128))]
+    password: String,
+}
+
+#[derive(Debug, FromRow)]
+struct PasswordResetToken {
+    user_id: uuid::Uuid,
+    expires_at: chrono::DateTime<Utc>,
+    used_at: Option<chrono::DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize)]
+struct PasswordResetMessage {
+    message: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -627,11 +653,271 @@ async fn logout(
     Ok(response)
 }
 
+
+fn reset_token_hash(token: &str) -> Vec<u8> {
+    Sha256::digest(token.as_bytes()).to_vec()
+}
+
+fn digest_hex(digest: &[u8]) -> String {
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Build a reset link from a configured frontend origin only. Never trust a
+/// return URL supplied by the caller, and require HTTPS in production.
+fn password_reset_url(token: &str) -> Result<String, StatusCode> {
+    let origin = std::env::var("FRONTEND_REDIRECT_ORIGIN")
+        .ok()
+        .or_else(|| {
+            std::env::var("FRONTEND_ORIGIN").ok().and_then(|value| {
+                value.split(',').next().map(|entry| entry.trim().to_owned())
+            })
+        })
+        .filter(|value| !value.is_empty())
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+
+    let mut url = url::Url::parse(origin.trim_end_matches('/'))
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let production = std::env::var("CAMPUSFORGE_ENV")
+        .is_ok_and(|value| value.eq_ignore_ascii_case("production"));
+    if url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || !matches!(url.path(), "" | "/")
+        || (production && url.scheme() != "https")
+        || !matches!(url.scheme(), "http" | "https")
+    {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    url.set_path("/reset-password");
+    url.set_query(None);
+    url.set_fragment(None);
+    url.query_pairs_mut().append_pair("token", token);
+    Ok(url.to_string())
+}
+
+async fn request_password_reset(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<PasswordResetRequest>,
+) -> Result<(StatusCode, Json<PasswordResetMessage>), (StatusCode, Json<ApiError>)> {
+    request.validate().map_err(|_| invalid_request())?;
+
+    // Fail closed when email is not configured instead of pretending that a
+    // reset email was sent. This check is global and does not reveal whether
+    // the submitted address belongs to an account.
+    if !crate::notifications::email_delivery_available() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError { error: "Password recovery email is not configured" }),
+        ));
+    }
+
+    let email = request.email.trim().to_lowercase();
+    let ip_key = rate_limit_digest("password-reset-ip", &client_ip(&headers));
+    let email_key = rate_limit_digest("password-reset-email", &email);
+    let ip_allowed = state.check_rate_limit(&ip_key, 20, 900).await.map_err(|error| {
+        tracing::error!(%error, "Could not enforce password reset IP rate limit");
+        (StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: "Password recovery is temporarily unavailable" }))
+    })?;
+    let email_allowed = state.check_rate_limit(&email_key, 3, 900).await.map_err(|error| {
+        tracing::error!(%error, "Could not enforce password reset account rate limit");
+        (StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: "Password recovery is temporarily unavailable" }))
+    })?;
+    if !ip_allowed || !email_allowed {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ApiError { error: "Too many password reset requests. Please wait before trying again." }),
+        ));
+    }
+
+    let account = sqlx::query_as::<_, (uuid::Uuid, String)>(
+        "SELECT id, email FROM users WHERE lower(email)=$1",
+    )
+    .bind(&email)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "Password reset account lookup failed");
+        (StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: "Password recovery is temporarily unavailable" }))
+    })?;
+
+    if let Some((user_id, account_email)) = account {
+        let token = format!("{}.{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
+        let token_hash = reset_token_hash(&token);
+        let reset_url = password_reset_url(&token).map_err(|status| {
+            (status, Json(ApiError { error: "Password recovery is temporarily unavailable" }))
+        })?;
+
+        let mut transaction = state.db.begin().await.map_err(|error| {
+            tracing::error!(%error, "Could not begin password reset request");
+            (StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: "Password recovery is temporarily unavailable" }))
+        })?;
+        sqlx::query(
+            "UPDATE password_reset_tokens
+                SET used_at=COALESCE(used_at,NOW())
+              WHERE user_id=$1 AND used_at IS NULL",
+        )
+        .bind(user_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "Could not invalidate older password reset tokens");
+            (StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: "Password recovery is temporarily unavailable" }))
+        })?;
+        sqlx::query(
+            "INSERT INTO password_reset_tokens(user_id,token_hash,expires_at)
+             VALUES($1,$2,NOW()+INTERVAL '30 minutes')",
+        )
+        .bind(user_id)
+        .bind(&token_hash)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "Could not create password reset token");
+            (StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: "Password recovery is temporarily unavailable" }))
+        })?;
+        transaction.commit().await.map_err(|error| {
+            tracing::error!(%error, "Could not commit password reset token");
+            (StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: "Password recovery is temporarily unavailable" }))
+        })?;
+
+        let idempotency_key = format!("campusforge-password-reset-{}", digest_hex(&token_hash));
+        let email_body = format!(
+            "We received a request to reset your CampusForge Teams password.\n\nUse this one-time link within 30 minutes:\n{reset_url}\n\nIf you did not request this change, you can ignore this email. Your password will not change until the link is used."
+        );
+        if let Err(error) = crate::notifications::send_security_email(
+            &account_email,
+            "Reset your CampusForge Teams password",
+            &email_body,
+            &idempotency_key,
+        ).await {
+            tracing::warn!(%error, user_id=%user_id, "Could not deliver password reset email");
+            if let Err(cleanup_error) = sqlx::query(
+                "DELETE FROM password_reset_tokens WHERE token_hash=$1 AND used_at IS NULL",
+            )
+            .bind(&token_hash)
+            .execute(&state.db)
+            .await {
+                tracing::error!(%cleanup_error, user_id=%user_id, "Could not remove undelivered password reset token");
+            }
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ApiError { error: "Password recovery email could not be delivered" }),
+            ));
+        }
+    }
+
+    // The same response is returned for existing and unknown addresses.
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(PasswordResetMessage {
+            message: "If an account exists for that address, password reset instructions have been sent.",
+        }),
+    ))
+}
+
+async fn confirm_password_reset(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    Json(request): Json<PasswordResetConfirmRequest>,
+) -> Result<Json<PasswordResetMessage>, (StatusCode, Json<ApiError>)> {
+    request.validate().map_err(|_| invalid_request())?;
+    let token_hash = reset_token_hash(request.token.trim());
+
+    let mut transaction = state.db.begin().await.map_err(|error| {
+        tracing::error!(%error, "Could not begin password reset confirmation");
+        (StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: "Password recovery is temporarily unavailable" }))
+    })?;
+    let reset = sqlx::query_as::<_, PasswordResetToken>(
+        "SELECT user_id,expires_at,used_at
+           FROM password_reset_tokens
+          WHERE token_hash=$1
+          FOR UPDATE",
+    )
+    .bind(&token_hash)
+    .fetch_optional(&mut *transaction)
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "Could not look up password reset token");
+        (StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: "Password recovery is temporarily unavailable" }))
+    })?;
+
+    let Some(reset) = reset else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError { error: "This password reset link is invalid or expired" }),
+        ));
+    };
+    if reset.used_at.is_some() || reset.expires_at <= Utc::now() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError { error: "This password reset link is invalid or expired" }),
+        ));
+    }
+
+    let salt = SaltString::encode_b64(uuid::Uuid::new_v4().as_bytes()).map_err(|_| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: "Could not secure the new password" }))
+    })?;
+    let password_hash = Argon2::default()
+        .hash_password(request.password.as_bytes(), &salt)
+        .map_err(|_| {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiError { error: "Could not secure the new password" }))
+        })?
+        .to_string();
+
+    sqlx::query("UPDATE users SET password_hash=$2 WHERE id=$1")
+        .bind(reset.user_id)
+        .bind(password_hash)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, user_id=%reset.user_id, "Could not update password hash");
+            (StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: "Password recovery is temporarily unavailable" }))
+        })?;
+    sqlx::query(
+        "UPDATE password_reset_tokens
+            SET used_at=COALESCE(used_at,NOW())
+          WHERE user_id=$1 AND used_at IS NULL",
+    )
+    .bind(reset.user_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "Could not consume password reset tokens");
+        (StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: "Password recovery is temporarily unavailable" }))
+    })?;
+    sqlx::query(
+        "UPDATE auth_sessions
+            SET revoked_at=COALESCE(revoked_at,NOW())
+          WHERE user_id=$1 AND revoked_at IS NULL",
+    )
+    .bind(reset.user_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "Could not revoke sessions after password reset");
+        (StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: "Password recovery is temporarily unavailable" }))
+    })?;
+
+    transaction.commit().await.map_err(|error| {
+        tracing::error!(%error, "Could not commit password reset");
+        (StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error: "Password recovery is temporarily unavailable" }))
+    })?;
+
+    Ok(Json(PasswordResetMessage {
+        message: "Your password has been reset. Sign in again with your new password.",
+    }))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/register", post(register))
         .route("/login", post(login))
         .route("/logout", post(logout))
+        .route("/password-reset/request", post(request_password_reset))
+        .route("/password-reset/confirm", post(confirm_password_reset))
 }
 
 #[cfg(test)]
