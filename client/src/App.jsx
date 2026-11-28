@@ -45,6 +45,7 @@ import {
 } from "./lib/api.js";
 
 const projectPulseEnabled = import.meta.env.VITE_CAMPUSFORGE_PROJECT_PULSE_ENABLED === "true";
+const aiAssistantEnabled = import.meta.env.VITE_CAMPUSFORGE_AI_ENABLED === "true";
 import { buildOptimisticTaskMove } from "./lib/taskMove.js";
 import { createDemoData, createId, loadDemoData, STORAGE_KEY } from "./data/demoData.js";
 
@@ -1592,9 +1593,11 @@ export default function App() {
               <Activity size={15} /><span>Project Pulse</span>
             </button>
             )}
-            <button className="ai-assistant-trigger" type="button" onClick={() => setAiAssistantOpen(true)} aria-haspopup="dialog" aria-expanded={aiAssistantOpen} disabled={demoMode} title={demoMode ? "AI assistant is available for connected workspaces" : "Open AI project assistant"}>
-              <Sparkles size={15} /><span>AI assistant</span>
-            </button>
+            {aiAssistantEnabled && (
+              <button className="ai-assistant-trigger" type="button" onClick={() => setAiAssistantOpen(true)} aria-haspopup="dialog" aria-expanded={aiAssistantOpen} disabled={demoMode} title={demoMode ? "AI assistant is available for connected workspaces" : "Open AI project assistant"}>
+                <Sparkles size={15} /><span>AI assistant</span>
+              </button>
+            )}
             <button className="icon-button notification-button" type="button" aria-label={"Notifications" + (unreadNotifications ? ", " + unreadNotifications + " unread" : "")} onClick={() => navigate("Notifications")}><Bell size={18} />{unreadNotifications > 0 && <span className="notification-count-badge">{Math.min(unreadNotifications, 99)}</span>}</button>
             <button
               className="topbar-profile-button"
