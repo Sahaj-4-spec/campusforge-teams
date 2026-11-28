@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
@@ -20,7 +20,7 @@ before(async () => {
     server.listen(0, "127.0.0.1", resolve);
   });
   const address = server.address();
-  baseUrl = `http://127.0.0.1:${address.port}`;
+  baseUrl = \`http://127.0.0.1:\${address.port}\`;
 });
 
 after(async () => {
@@ -31,7 +31,7 @@ after(async () => {
 test("serves the SPA entry point with non-cacheable HTML", async () => {
   const response = await fetch(baseUrl + "/");
   assert.equal(response.status, 200);
-  assert.match(response.headers.get("content-type"), /text\\/html/);
+  assert.equal(response.headers.get("content-type"), "text/html; charset=utf-8");
   assert.equal(response.headers.get("cache-control"), "no-cache");
   assert.match(await response.text(), /CampusForge/);
 });
