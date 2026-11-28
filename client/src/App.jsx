@@ -1197,7 +1197,9 @@ export default function App() {
     const invitation = await invitationApi.create(values);
     const items = await invitationApi.list();
     setInvitations(items);
-    setNotice("Invitation link created");
+    setNotice(invitation.email_sent
+      ? "Invitation email sent"
+      : "Invitation link created — copy and share it manually");
     return window.location.origin + "/?invite=" + encodeURIComponent(invitation.token);
   }
 
